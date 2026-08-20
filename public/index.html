@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mini Coding Agent</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app">
+    <!-- ── 顶栏 ──────────────────────────────────────── -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="logo">
+          <span class="logo-mark">◆</span>
+          <span class="logo-text">Mini Agent</span>
+        </div>
+        <div class="workspace-info">
+          <span class="ws-label">WORKSPACE</span>
+          <span class="ws-path" id="wsPath">—</span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="status-indicator" id="statusIndicator">
+          <span class="status-dot idle"></span>
+          <span class="status-text">idle</span>
+        </div>
+        <button class="btn btn-ghost" id="configBtn" title="配置">⚙</button>
+      </div>
+    </header>
+
+    <!-- ── 主体 ──────────────────────────────────────── -->
+    <div class="main">
+      <!-- 左侧：文件树 -->
+      <aside class="sidebar left">
+        <div class="sidebar-header">
+          <span>Files</span>
+          <button class="btn-icon" id="refreshTree" title="刷新">↻</button>
+        </div>
+        <div class="file-tree" id="fileTree">
+          <div class="tree-empty">加载中…</div>
+        </div>
+      </aside>
+
+      <!-- 中间：对话区 -->
+      <section class="chat-panel">
+        <div class="chat-messages" id="chatMessages">
+          <div class="welcome">
+            <div class="welcome-logo">◆</div>
+            <h1>Mini Coding Agent</h1>
+            <p class="welcome-sub">输入任务，Agent 会自主读取文件、修改代码、运行验证。</p>
+            <div class="quick-starts">
+              <button class="quick-start" data-task="阅读项目，找到首页标题，并把它修改成 Hello Agent">示例：修改标题</button>
+              <button class="quick-start" data-task="检查这个项目目前为什么无法启动，找出问题并修复">示例：修复启动问题</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-input-wrap">
+          <textarea id="chatInput" placeholder="描述任务，例如：找到登录页的标题并修改…" rows="1"></textarea>
+          <button class="btn btn-primary" id="sendBtn">发送</button>
+          <button class="btn btn-ghost" id="stopBtn" disabled>停止</button>
+        </div>
+        <div class="input-hint">Enter 发送，Shift+Enter 换行</div>
+      </section>
+
+      <!-- 右侧：操作面板 -->
+      <aside class="sidebar right">
+        <div class="sidebar-header">
+          <span>Operations</span>
+        </div>
+        <div class="ops-panel" id="opsPanel">
+          <div class="ops-empty">暂无操作</div>
+        </div>
+
+        <div class="sidebar-header">
+          <span>Diff</span>
+          <button class="btn-icon" id="clearDiff" title="清除">✕</button>
+        </div>
+        <div class="diff-panel" id="diffPanel">
+          <div class="diff-empty">文件修改将在此显示</div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- ── 底部：终端 ──────────────────────────────────── -->
+    <footer class="terminal-panel" id="terminalPanel">
+      <div class="terminal-header">
+        <span class="terminal-title">Terminal</span>
+        <div class="terminal-controls">
+          <button class="btn-icon" id="clearTerminal" title="清除">✕</button>
+          <button class="btn-icon" id="toggleTerminal" title="折叠">─</button>
+        </div>
+      </div>
+      <div class="terminal-body" id="terminalBody"></div>
+    </footer>
+  </div>
+
+  <!-- ── 配置弹窗 ──────────────────────────────────────── -->
+  <div class="modal" id="configModal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>配置</h2>
+        <button class="btn-icon" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label>LLM Endpoint</label>
+          <input type="text" id="cfgEndpoint" placeholder="https://api.openai.com/v1">
+        </div>
+        <div class="field">
+          <label>API Key</label>
+          <input type="password" id="cfgApiKey" placeholder="sk-…">
+        </div>
+        <div class="field">
+          <label>Model</label>
+          <input type="text" id="cfgModel" placeholder="gpt-4o-mini">
+        </div>
+        <div class="field">
+          <label>Workspace</label>
+          <input type="text" id="cfgWorkspace" placeholder="/path/to/workspace">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" data-close>取消</button>
+        <button class="btn btn-primary" id="saveConfig">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 审批弹窗 ──────────────────────────────────────── -->
+  <div class="modal" id="approvalModal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-content approval">
+      <div class="modal-header">
+        <h2>⚠ 需要确认</h2>
+      </div>
+      <div class="modal-body">
+        <p>Agent 即将执行以下操作：</p>
+        <pre class="approval-command" id="approvalCommand"></pre>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="rejectApproval">拒绝</button>
+        <button class="btn btn-primary" id="approveApproval">允许执行</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

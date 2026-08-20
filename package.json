@@ -1,0 +1,24 @@
+{
+  "name": "mini-coding-agent",
+  "version": "0.1.0",
+  "description": "Mini Coding Agent / Mini DSH — 本地轻量级 Coding Agent Harness",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "coding-agent",
+    "llm",
+    "agent-loop",
+    "workspace"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

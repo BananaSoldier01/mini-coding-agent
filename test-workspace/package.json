@@ -1,0 +1,12 @@
+{
+  "name": "broken-app",
+  "version": "1.0.0",
+  "description": "A broken Node.js app for testing",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

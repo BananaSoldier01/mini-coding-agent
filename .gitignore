@@ -1,0 +1,14 @@
+# 敏感配置
+.env
+
+# 依赖
+node_modules/
+
+# 测试 workspace 依赖
+test-workspace/node_modules/
+
+# 日志
+*.log
+
+# OS
+.DS_Store
