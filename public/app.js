@@ -8,16 +8,15 @@ const state = {
   workspace: null,
   running: false,
   abortController: null,
-  currentAssistant: null,    // 当前 assistant 消息元素
-  currentThinking: null,     // 当前 thinking 指示
-  lastToolCallId: null,
-  changes: [],               // 所有文件变更
-  operations: [],            // 操作历史
+  currentAssistant: null,
+  currentThinking: null,
+  changes: [],
+  operations: [],
+  terminalRunning: false,
 };
 
 /* ── Init ──────────────────────────────────────────── */
 async function init() {
-  // 加载配置
   const cfg = await api('/api/config');
   state.workspace = cfg.workspace;
   $('#wsPath').textContent = state.workspace;
@@ -26,7 +25,6 @@ async function init() {
   $('#cfgModel').value = cfg.llm.model || '';
   $('#cfgWorkspace').value = cfg.workspace || '';
 
-  // 加载文件树
   loadFileTree();
 
   // 事件绑定
@@ -39,14 +37,11 @@ async function init() {
   $('#clearDiff').addEventListener('click', clearDiff);
   $('#saveConfig').addEventListener('click', saveConfig);
 
-  // 配置弹窗关闭
   $$('[data-close]').forEach((el) => el.addEventListener('click', closeConfig));
 
-  // 审批弹窗
   $('#approveApproval').addEventListener('click', () => respondApproval(true));
   $('#rejectApproval').addEventListener('click', () => respondApproval(false));
 
-  // 输入框自动高度
   const input = $('#chatInput');
   input.addEventListener('input', () => {
     input.style.height = 'auto';
@@ -59,19 +54,11 @@ async function init() {
     }
   });
 
-  // 快捷示例
   $$('.quick-start').forEach((btn) => {
     btn.addEventListener('click', () => {
       $('#chatInput').value = btn.dataset.task;
       sendMessage();
     });
-  });
-
-  // 回车聚焦到输入框（除非在终端）
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && document.activeElement !== $('#chatInput')) {
-      // ignore
-    }
   });
 }
 
@@ -130,7 +117,7 @@ function renderTree(node, depth = 0) {
     row.addEventListener('click', () => {
       $$('.tree-row').forEach((r) => r.classList.remove('selected'));
       row.classList.add('selected');
-      openFileInEditor(node.path);
+      openFileViewer(node.path);
     });
   } else if (node.children?.length) {
     toggle.addEventListener('click', (e) => {
@@ -142,7 +129,6 @@ function renderTree(node, depth = 0) {
         toggle.textContent = hidden ? '▾' : '▸';
       }
     });
-    // 默认展开根目录
     const children = document.createElement('div');
     children.className = 'tree-children';
     children.style.display = depth === 0 ? '' : 'none';
@@ -155,12 +141,12 @@ function renderTree(node, depth = 0) {
   return frag;
 }
 
-async function openFileInEditor(relPath) {
-  // 简单实现：在 chat 中显示文件内容
-  // 后续可扩展为独立编辑器
+async function openFileViewer(relPath) {
   try {
     const data = await api(`/api/files/read?path=${encodeURIComponent(relPath)}`);
-    appendSystemMessage(`已打开: ${relPath}\n\n${data.content}`);
+    $('#fvPath').textContent = relPath;
+    $('#fvContent').textContent = data.content;
+    $('#fileViewerModal').classList.add('open');
   } catch (err) {
     appendSystemMessage(`打开文件失败: ${err.message}`);
   }
@@ -169,7 +155,6 @@ async function openFileInEditor(relPath) {
 /* ── Chat ───────────────────────────────────────────── */
 function appendMessage(role, content) {
   const container = $('#chatMessages');
-  // 如果是 assistant 且已有正在进行的，复用
   const msg = document.createElement('div');
   msg.className = `msg ${role}`;
   msg.innerHTML = `
@@ -218,36 +203,67 @@ function startAssistantMessage() {
 function appendToken(text) {
   if (!state.currentAssistant) startAssistantMessage();
   const bubble = state.currentAssistant.querySelector('.bubble');
-  // 简单的 markdown 渲染
   bubble.innerHTML += escapeHtml(text);
   scrollToBottom();
 }
 
 function finalizeAssistant(content) {
   if (state.currentThinking) removeThinking();
-  if (state.currentAssistant) {
-    state.currentAssistant = null;
-  }
+  state.currentAssistant = null;
 }
 
-/* ── Tool Call UI ───────────────────────────────────── */
+/* ── Compact Tool Call ──────────────────────────────── */
 function addToolCall(toolCall) {
   const container = $('#chatMessages');
   const el = document.createElement('div');
   el.className = 'tool-call';
   el.id = 'tc-' + toolCall.id;
-  const argsStr = JSON.stringify(toolCall.args, null, 2);
+
+  // 生成紧凑摘要
+  const summary = compactSummary(toolCall.name, toolCall.args);
+
   el.innerHTML = `
     <div class="tc-head">
       <span class="tc-name">${escapeHtml(toolCall.name)}</span>
-      <span class="tc-status running">running</span>
+      <span class="tc-summary">${escapeHtml(summary)}</span>
+      <span class="tc-status running">●</span>
+      <span class="tc-expand">▾</span>
     </div>
-    <div class="tc-args">${escapeHtml(argsStr)}</div>
-    <div class="tc-result" style="display:none"></div>
+    <div class="tc-details">
+      <div class="tc-args">${escapeHtml(JSON.stringify(toolCall.args, null, 2))}</div>
+      <div class="tc-result"></div>
+    </div>
   `;
+
+  // 点击展开/折叠
+  el.querySelector('.tc-head').addEventListener('click', () => {
+    el.classList.toggle('expanded');
+    el.querySelector('.tc-expand').textContent = el.classList.contains('expanded') ? '▴' : '▾';
+  });
+
   container.appendChild(el);
-  addOperation(toolCall);
   scrollToBottom();
+}
+
+function compactSummary(toolName, args) {
+  switch (toolName) {
+    case 'list_directory':
+      return args.path || '.';
+    case 'read_file':
+      return args.path + (args.startLine ? `:${args.startLine}-${args.endLine || ''}` : '');
+    case 'write_file':
+      return (args.path || '') + (args.content ? ` (${Math.round(args.content.length / 1024)}KB)` : '');
+    case 'edit_file':
+      return (args.path || '') + ` +1 -1`;
+    case 'search_files':
+      return `"${args.pattern}"`;
+    case 'delete_file':
+      return (args.path || '');
+    case 'run_command':
+      return (args.command || '').slice(0, 60);
+    default:
+      return JSON.stringify(args).slice(0, 60);
+  }
 }
 
 function setToolCallResult(toolCallId, result, toolName) {
@@ -255,20 +271,19 @@ function setToolCallResult(toolCallId, result, toolName) {
   if (!el) return;
   const status = el.querySelector('.tc-status');
   const resultEl = el.querySelector('.tc-result');
+
   if (result.error) {
-    status.textContent = 'error';
+    status.textContent = '●';
     status.className = 'tc-status error';
     resultEl.innerHTML = `<pre>${escapeHtml(result.error)}</pre>`;
   } else {
-    status.textContent = 'done';
+    status.textContent = '✓';
     status.className = 'tc-status done';
-    const summary = summarizeResult(result);
+    const summary = compactResultSummary(toolName, result);
     resultEl.innerHTML = `<pre>${escapeHtml(summary)}</pre>`;
   }
-  resultEl.style.display = '';
-  updateOperation(toolCallId, result);
 
-  // 如果是文件修改操作，添加到 diff 面板
+  // 如果是文件修改，更新 diff 面板
   if (toolName === 'edit_file' || toolName === 'write_file' || toolName === 'delete_file') {
     if (result.path && !result.error) {
       addDiffFromResult(toolName, result);
@@ -276,9 +291,34 @@ function setToolCallResult(toolCallId, result, toolName) {
   }
 }
 
+function compactResultSummary(toolName, result) {
+  if (result.error) return result.error;
+  switch (toolName) {
+    case 'run_command':
+      const parts = [];
+      if (result.exitCode !== undefined) parts.push(`exit=${result.exitCode}`);
+      if (result.timedOut) parts.push('TIMEOUT');
+      if (result.stdout) parts.push(result.stdout.slice(0, 200));
+      if (result.stderr) parts.push('STDERR: ' + result.stderr.slice(0, 200));
+      return parts.join('\n') || '(no output)';
+    case 'read_file':
+      return `${result.lines || 0} lines${result.hasMore ? ' (more…)' : ''}`;
+    case 'search_files':
+      return `${result.count} matches`;
+    case 'list_directory':
+      return `${result.count} entries`;
+    default:
+      return result.action || JSON.stringify(result).slice(0, 100);
+  }
+}
+
+/* ── Diff ───────────────────────────────────────────── */
 function addDiffFromResult(toolName, result) {
   const panel = $('#diffPanel');
   if ($('.diff-empty')) panel.innerHTML = '';
+
+  // 更新摘要
+  updateDiffSummary();
 
   const file = document.createElement('div');
   file.className = 'diff-file';
@@ -287,128 +327,58 @@ function addDiffFromResult(toolName, result) {
                  toolName === 'delete_file' ? 'delete' : 'modify';
   const header = document.createElement('div');
   header.className = 'diff-file-header';
-  header.innerHTML = `<span class="badge ${badge}">${badge}</span><span>${escapeHtml(result.path)}</span>`;
+  const stats = result.diff ? `${result.diff.filter(d=>d.type==='add').length}+/${result.diff.filter(d=>d.type==='remove').length}-` : '';
+  header.innerHTML = `
+    <span class="badge ${badge}">${badge}</span>
+    <span>${escapeHtml(result.path)}</span>
+    <span class="stats">${stats}</span>
+  `;
   file.appendChild(header);
+
+  const body = document.createElement('div');
+  body.className = 'diff-file-body';
 
   if (result.diff && result.diff.length) {
     for (const line of result.diff) {
       const dl = document.createElement('div');
       dl.className = 'diff-line ' + line.type;
       dl.textContent = (line.type === 'add' ? '+' : '-') + ' ' + line.content;
-      file.appendChild(dl);
+      body.appendChild(dl);
     }
   } else if (toolName === 'write_file' && result.action === 'created') {
     const dl = document.createElement('div');
     dl.className = 'diff-line add';
-    dl.textContent = '+ (新建文件, ' + result.size + ' bytes)';
-    file.appendChild(dl);
+    dl.textContent = '+ (新建文件)';
+    body.appendChild(dl);
   } else if (toolName === 'delete_file') {
     const dl = document.createElement('div');
     dl.className = 'diff-line remove';
     dl.textContent = '- (删除)';
-    file.appendChild(dl);
-  } else if (toolName === 'edit_file') {
-    const dl = document.createElement('div');
-    dl.className = 'diff-line add';
-    dl.textContent = '+ (已修改)';
-    file.appendChild(dl);
+    body.appendChild(dl);
   }
+
+  file.appendChild(body);
+  header.addEventListener('click', () => {
+    file.classList.toggle('open');
+  });
+  file.classList.add('open');
 
   panel.appendChild(file);
   state.changes.push({ type: badge, path: result.path });
 }
 
-function summarizeResult(result) {
-  if (result.error) return result.error;
-  const keys = Object.keys(result);
-  if (keys.length === 0) return '(无返回)';
-  // 选取关键字段
-  const important = ['path', 'action', 'exitCode', 'stdout', 'stderr', 'content', 'count', 'entries', 'lines', 'size'];
-  const lines = [];
-  for (const k of important) {
-    if (k in result) {
-      let v = result[k];
-      if (typeof v === 'string' && v.length > 200) v = v.slice(0, 200) + '\n…';
-      lines.push(`${k}: ${v}`);
-    }
-  }
-  return lines.join('\n') || JSON.stringify(result).slice(0, 200);
-}
-
-/* ── Operations ─────────────────────────────────────── */
-function addOperation(toolCall) {
-  const panel = $('#opsPanel');
-  if ($('.ops-empty')) panel.innerHTML = '';
-  const el = document.createElement('div');
-  el.className = 'ops-item';
-  el.id = 'op-' + toolCall.id;
-  const icon = toolCall.name === 'run_command' ? '⚡' :
-               toolCall.name.startsWith('write') ? '✏️' :
-               toolCall.name.startsWith('read') ? '📄' :
-               toolCall.name === 'search_files' ? '🔍' :
-               toolCall.name === 'list_directory' ? '📁' :
-               toolCall.name === 'delete_file' ? '🗑' : '⚙';
-  el.innerHTML = `
-    <span class="oi-icon">${icon}</span>
-    <div style="flex:1">
-      <div class="oi-name">${escapeHtml(toolCall.name)}</div>
-      <div class="oi-detail">${escapeHtml(JSON.stringify(toolCall.args).slice(0, 80))}</div>
-    </div>
-    <span class="oi-time">—</span>
-  `;
-  panel.appendChild(el);
-}
-
-function updateOperation(toolCallId, result) {
-  const el = document.getElementById('op-' + toolCallId);
-  if (!el) return;
-  const time = el.querySelector('.oi-time');
-  time.textContent = 'just now';
-  const detail = el.querySelector('.oi-detail');
-  if (result.error) {
-    detail.textContent = '失败: ' + result.error.slice(0, 60);
-    detail.style.color = 'var(--red)';
+function updateDiffSummary() {
+  const existing = $('.diff-summary');
+  const total = state.changes.length;
+  const summary = `${total} files changed`;
+  if (existing) {
+    existing.textContent = summary;
   } else {
-    detail.textContent = summarizeResult(result).slice(0, 80);
-    detail.style.color = 'var(--text-dim)';
+    const el = document.createElement('div');
+    el.className = 'diff-summary';
+    el.textContent = summary;
+    $('#diffPanel').insertBefore(el, $('#diffPanel').firstChild);
   }
-}
-
-/* ── Diff ───────────────────────────────────────────── */
-function addDiff(change) {
-  const panel = $('#diffPanel');
-  if ($('.diff-empty')) panel.innerHTML = '';
-
-  const file = document.createElement('div');
-  file.className = 'diff-file';
-
-  const badge = change.type === 'create' ? 'create' : change.type === 'delete' ? 'delete' : 'modify';
-  const header = document.createElement('div');
-  header.className = 'diff-file-header';
-  header.innerHTML = `<span class="badge ${badge}">${badge}</span><span>${escapeHtml(change.path)}</span>`;
-  file.appendChild(header);
-
-  if (change.diff && change.diff.length) {
-    for (const line of change.diff) {
-      const dl = document.createElement('div');
-      dl.className = 'diff-line ' + line.type;
-      dl.textContent = (line.type === 'add' ? '+' : '-') + ' ' + line.content;
-      file.appendChild(dl);
-    }
-  } else if (change.type === 'create') {
-    const dl = document.createElement('div');
-    dl.className = 'diff-line add';
-    dl.textContent = '+ (新建文件)';
-    file.appendChild(dl);
-  } else if (change.type === 'delete') {
-    const dl = document.createElement('div');
-    dl.className = 'diff-line remove';
-    dl.textContent = '- (删除)';
-    file.appendChild(dl);
-  }
-
-  panel.appendChild(file);
-  state.changes.push(change);
 }
 
 function clearDiff() {
@@ -418,12 +388,12 @@ function clearDiff() {
 
 /* ── Terminal ───────────────────────────────────────── */
 function terminalWrite(cmd, result) {
-  // 自动展开终端
   const panel = $('#terminalPanel');
   if (panel.classList.contains('collapsed')) {
     panel.classList.remove('collapsed');
     $('#toggleTerminal').textContent = '─';
   }
+
   const body = $('#terminalBody');
   const line = document.createElement('div');
   line.innerHTML = `<span class="t-cmd">$ ${escapeHtml(cmd)}</span>`;
@@ -441,17 +411,25 @@ function terminalWrite(cmd, result) {
     err.textContent = result.stderr;
     body.appendChild(err);
   }
-  if (result.exitCode !== undefined && result.exitCode !== 0) {
-    const sys = document.createElement('div');
-    sys.className = 't-sys';
-    sys.textContent = `[exit: ${result.exitCode}]`;
-    body.appendChild(sys);
-  }
-  body.scrollTop = body.scrollHeight;
-}
 
-function clearTerminal() {
-  $('#terminalBody').innerHTML = '';
+  // 状态行
+  const status = document.createElement('div');
+  if (result.timedOut) {
+    status.className = 't-timeout';
+    status.textContent = `[timeout after ${result.duration || '?'}ms]`;
+  } else if (result.stopped) {
+    status.className = 't-killed';
+    status.textContent = `[killed]`;
+  } else if (result.exitCode !== undefined) {
+    status.className = result.exitCode === 0 ? 't-sys' : 't-sys';
+    status.textContent = `[exit: ${result.exitCode}]`;
+  }
+  if (result.duration) {
+    status.textContent += `  ${result.duration}ms`;
+  }
+  body.appendChild(status);
+
+  body.scrollTop = body.scrollHeight;
 }
 
 function toggleTerminal() {
@@ -477,18 +455,15 @@ async function sendMessage() {
   input.value = '';
   input.style.height = 'auto';
 
-  // 隐藏欢迎界面
   const welcome = $('.welcome');
   if (welcome) welcome.remove();
 
-  // 添加用户消息
   appendMessage('user', escapeHtml(task));
   state.running = true;
   $('#sendBtn').disabled = true;
   $('#stopBtn').disabled = false;
   setStatus('running', 'running');
 
-  // 创建或获取 session
   if (!state.sessionId) {
     try {
       const data = await api('/api/session', {
@@ -505,7 +480,6 @@ async function sendMessage() {
     }
   }
 
-  // 连接 SSE
   const controller = new AbortController();
   state.abortController = controller;
 
@@ -521,9 +495,7 @@ async function sendMessage() {
       signal: controller.signal,
     });
 
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -538,9 +510,9 @@ async function sendMessage() {
       buffer = lines.pop();
 
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data: ')) continue;
-        const data = trimmed.slice(6);
+        const t = line.trim();
+        if (!t || !t.startsWith('data: ')) continue;
+        const data = t.slice(6);
         if (data === '[DONE]') continue;
 
         let event;
@@ -566,6 +538,13 @@ async function sendMessage() {
 }
 
 function stopTask() {
+  if (state.sessionId) {
+    // 通知后端停止
+    api('/api/stop', {
+      method: 'POST',
+      body: { sessionId: state.sessionId },
+    }).catch(() => {});
+  }
   if (state.abortController) {
     state.abortController.abort();
   }
@@ -584,14 +563,12 @@ function handleEvent(event) {
       finalizeAssistant(event.content);
       break;
     case 'iteration':
-      // 可以显示迭代次数，这里简化
       break;
     case 'tool_call':
       addToolCall(event.toolCall);
       break;
     case 'tool_result':
       setToolCallResult(event.toolCall.id, event.result, event.toolCall.name);
-      // 如果是 run_command，写入终端
       if (event.toolCall.name === 'run_command') {
         terminalWrite(event.toolCall.args.command, event.result);
       }
@@ -600,16 +577,10 @@ function handleEvent(event) {
       showApproval(event);
       break;
     case 'done':
-      if (state.currentAssistant) {
-        // 已经在流式中
-      }
       appendSystemMessage(`✅ 任务完成（${event.iteration} 轮）`);
       setStatus('done', 'done');
       break;
     case 'agent_done':
-      if (event.result?.changes) {
-        // changes 已在工具执行时添加
-      }
       break;
     case 'error':
       appendSystemMessage('❌ ' + event.message);
@@ -624,13 +595,13 @@ let pendingApproval = null;
 function showApproval(event) {
   pendingApproval = event;
   $('#approvalCommand').textContent = event.toolCall.args.command || JSON.stringify(event.toolCall.args);
+  $('#approvalReason').textContent = event.reason || 'Agent 即将执行此操作';
   $('#approvalModal').classList.add('open');
 }
 
 function respondApproval(approved) {
   $('#approvalModal').classList.remove('open');
   if (pendingApproval) {
-    // 发送审批结果到后端
     api('/api/approve', {
       method: 'POST',
       body: { toolCallId: pendingApproval.toolCall.id, approved },
@@ -658,10 +629,7 @@ async function saveConfig() {
     workspace: $('#cfgWorkspace').value,
   };
   try {
-    await api('/api/config', {
-      method: 'POST',
-      body: cfg,
-    });
+    await api('/api/config', { method: 'POST', body: cfg });
     state.workspace = cfg.workspace;
     $('#wsPath').textContent = cfg.workspace;
     loadFileTree();

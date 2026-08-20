@@ -3,7 +3,10 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 引用了未定义的函数 —— 故意留下的 bug
+function getWelcomeTitle() {
+  return 'Welcome to the Demo App';
+}
+
 app.get('/', (req, res) => {
   const title = getWelcomeTitle();
   res.send(`<h1>${title}</h1>`);

@@ -3,24 +3,49 @@
  *
  * 提供 list_directory / read_file / write_file / edit_file / search_files / delete_file
  * 所有路径经 Sandbox 校验，只能操作 workspace 内文件。
+ *
+ * 隐藏文件策略：
+ *   - 工程忽略：node_modules / .git / dist / build 等（永远不列出）
+ *   - Dotfile：正常显示（.gitignore / .eslintrc 等工程文件很重要）
+ *   - Secret 防护：.env / 私钥等由 policy.js 拒绝读写
  */
 
 import fs from 'fs';
 import path from 'path';
-import { Sandbox } from '../sandbox.js';
+import { unifiedDiff } from '../tracker.js';
 
-/** 忽略的目录/文件（类似 .gitignore 简化版） */
-const IGNORE = new Set([
-  'node_modules', '.git', '.DS_Store', '__pycache__', '.venv',
-  'dist', 'build', '.next', '.nuxt', 'coverage',
+// ── 始终忽略的目录/文件（工程构建产物）────────────────
+const ALWAYS_IGNORE = new Set([
+  'node_modules', '.git', '__pycache__', '.venv', 'venv',
+  'dist', 'build', '.next', '.nuxt', 'coverage', '.nyc_output',
+  '.cache', '.turbo', '.output', '.pytest_cache', '.idea', '.vscode',
 ]);
 
-function shouldIgnore(name) {
-  return IGNORE.has(name) || name.startsWith('.');
+// ── 始终忽略的文件扩展名（二进制/大文件）──────────────
+const BINARY_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.svg',
+  '.pdf', '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
+  '.exe', '.dll', '.so', '.dylib', '.a', '.o', '.obj',
+  '.wasm', '.bin', '.dat', '.db', '.sqlite', '.sqlite3',
+  '.mp3', '.mp4', '.avi', '.mov', '.wav', '.ogg',
+  '.lock',
+]);
+
+function shouldAlwaysIgnore(name) {
+  return ALWAYS_IGNORE.has(name);
+}
+
+function isBinaryFile(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return BINARY_EXTENSIONS.has(ext);
+}
+
+function isHidden(name) {
+  return name.startsWith('.');
 }
 
 /**
- * list_directory — 列出目录内容（树状，仅一层）
+ * list_directory — 列出目录内容
  */
 async function listDirectory(input, ctx) {
   const { sandbox } = ctx;
@@ -33,11 +58,12 @@ async function listDirectory(input, ctx) {
     throw new Error(`不是目录: ${input.path}`);
   }
   const entries = fs.readdirSync(dirPath, { withFileTypes: true })
-    .filter((e) => !shouldIgnore(e.name))
+    .filter((e) => !shouldAlwaysIgnore(e.name))
     .map((e) => ({
       name: e.name,
       type: e.isDirectory() ? 'directory' : 'file',
       path: sandbox.relative(path.join(dirPath, e.name)),
+      hidden: isHidden(e.name),
     }))
     .sort((a, b) => {
       if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
@@ -51,7 +77,12 @@ async function listDirectory(input, ctx) {
 }
 
 /**
- * read_file — 读取文件内容
+ * read_file — 读取文件内容（支持范围读取）
+ *
+ * @param {object} input - { path, startLine?, endLine?, offset?, limit? }
+ *   - startLine/endLine: 按行范围读取（1-based）
+ *   - offset/limit: 按字符偏移读取
+ *   两者互斥，优先 startLine/endLine
  */
 async function readFile(input, ctx) {
   const { sandbox } = ctx;
@@ -63,23 +94,66 @@ async function readFile(input, ctx) {
   if (!stat.isFile()) {
     throw new Error(`不是文件: ${input.path}`);
   }
-  if (stat.size > 200 * 1024) {
-    throw new Error(`文件过大 (${stat.size} bytes)，请用 search_files 搜索内容`);
+
+  // 拒绝读取二进制文件
+  if (isBinaryFile(filePath)) {
+    throw new Error(`二进制文件不支持读取: ${input.path}`);
   }
+
+  const MAX_FILE_SIZE = 500 * 1024; // 500KB
+  if (stat.size > MAX_FILE_SIZE) {
+    throw new Error(
+      `文件过大 (${stat.size} bytes)。请使用 startLine/endLine 分段读取，或用 search_files 搜索。`
+    );
+  }
+
   const content = fs.readFileSync(filePath, 'utf-8');
-  return {
+  const allLines = content.split('\n');
+  const totalLines = allLines.length;
+
+  // 范围读取
+  let readLines = allLines;
+  let startLine = 1;
+  let endLine = totalLines;
+
+  if (input.startLine || input.endLine) {
+    startLine = Math.max(1, parseInt(input.startLine, 10) || 1);
+    endLine = input.endLine ? Math.min(totalLines, parseInt(input.endLine, 10)) : totalLines;
+    if (startLine > endLine) {
+      throw new Error(`startLine (${startLine}) > endLine (${endLine})`);
+    }
+    readLines = allLines.slice(startLine - 1, endLine);
+  } else if (input.offset !== undefined || input.limit !== undefined) {
+    const offset = Math.max(0, parseInt(input.offset, 10) || 0);
+    const limit = Math.min(200, parseInt(input.limit, 10) || 200);
+    readLines = allLines.slice(offset, offset + limit);
+    startLine = offset + 1;
+    endLine = Math.min(totalLines, offset + limit);
+  }
+
+  const result = {
     path: sandbox.relative(filePath),
     size: stat.size,
-    content,
-    lines: content.split('\n').length,
+    totalLines,
+    startLine,
+    endLine,
+    content: readLines.join('\n'),
+    lines: readLines.length,
+    hasMore: endLine < totalLines,
   };
+
+  if (endLine < totalLines) {
+    result.nextHint = `还有 ${totalLines - endLine} 行，可用 startLine: ${endLine + 1} 继续读取`;
+  }
+
+  return result;
 }
 
 /**
- * write_file — 创建或覆盖文件（自动创建父目录）
+ * write_file — 创建或覆盖文件
  */
 async function writeFile(input, ctx) {
-  const { sandbox, tracker } = ctx;
+  const { sandbox, tracker, run } = ctx;
   const { path: filePath, content } = input;
   if (!filePath) throw new Error('write_file 缺少 path 参数');
   if (content === undefined || content === null) throw new Error('write_file 缺少 content 参数');
@@ -108,6 +182,8 @@ async function writeFile(input, ctx) {
       path: sandbox.relative(absolute),
       oldContent,
       newContent: content,
+      taskId: run?.sessionId || null,
+      runId: run?.sessionId || null,
     });
   }
 
@@ -117,19 +193,19 @@ async function writeFile(input, ctx) {
     size: Buffer.byteLength(content, 'utf-8'),
   };
 
-  // 如果是覆盖已有文件，生成 diff 供前端展示
+  // 如果是覆盖已有文件，生成真实 diff
   if (existed && oldContent !== null) {
-    result.diff = makeDiff(oldContent, content);
+    result.diff = unifiedDiff(oldContent, content);
   }
 
   return result;
 }
 
 /**
- * edit_file — 搜索替换编辑（精确匹配 oldString，必须唯一）
+ * edit_file — 搜索替换编辑
  */
 async function editFile(input, ctx) {
-  const { sandbox, tracker } = ctx;
+  const { sandbox, tracker, run } = ctx;
   const { path: filePath, oldString, newString } = input;
   if (!filePath) throw new Error('edit_file 缺少 path 参数');
   if (oldString === undefined || newString === undefined) {
@@ -164,6 +240,8 @@ async function editFile(input, ctx) {
       path: sandbox.relative(absolute),
       oldContent: content,
       newContent,
+      taskId: run?.sessionId || null,
+      runId: run?.sessionId || null,
     });
   }
 
@@ -172,37 +250,47 @@ async function editFile(input, ctx) {
     action: 'modified',
     replaced: true,
     occurrences,
-    diff: makeDiff(content, newContent),
+    diff: unifiedDiff(content, newContent),
   };
 }
 
 /**
- * search_files — 在 workspace 内搜索文本（类似 grep）
+ * search_files — 在 workspace 内搜索文本
  */
 async function searchFiles(input, ctx) {
   const { sandbox } = ctx;
   const { pattern, path: searchPath, maxResults = 50 } = input;
   if (!pattern) throw new Error('search_files 缺少 pattern 参数');
 
-  const regex = new RegExp(pattern, 'g');
+  let regex;
+  try {
+    regex = new RegExp(pattern);
+  } catch (err) {
+    throw new Error(`非法正则表达式: ${pattern}。错误: ${err.message}`);
+  }
+
   const results = [];
   const root = sandbox.resolve(searchPath || '.');
+  const MAX_RESULTS = Math.min(maxResults, 200);
+  const MAX_LINE_LENGTH = 300;
+
   walk(root, sandbox, (filePath) => {
-    if (results.length >= maxResults) return false;
+    if (results.length >= MAX_RESULTS) return false;
+    // 跳过二进制文件
+    if (isBinaryFile(filePath)) return true;
     try {
       const stat = fs.statSync(filePath);
-      if (stat.size > 500 * 1024) return true; // skip big files
+      if (stat.size > 1024 * 1024) return true; // skip > 1MB
       const content = fs.readFileSync(filePath, 'utf-8');
       const lines = content.split('\n');
       for (let i = 0; i < lines.length; i++) {
         if (regex.test(lines[i])) {
-          regex.lastIndex = 0;
           results.push({
             path: sandbox.relative(filePath),
             line: i + 1,
-            content: lines[i].trim().slice(0, 200),
+            content: lines[i].trim().slice(0, MAX_LINE_LENGTH),
           });
-          if (results.length >= maxResults) return false;
+          if (results.length >= MAX_RESULTS) return false;
         }
       }
     } catch {
@@ -211,14 +299,14 @@ async function searchFiles(input, ctx) {
     return true;
   });
 
-  return { pattern, results, count: results.length };
+  return { pattern, results, count: results.length, truncated: results.length >= MAX_RESULTS };
 }
 
 /**
  * delete_file — 删除文件（危险操作，需确认）
  */
 async function deleteFile(input, ctx) {
-  const { sandbox, tracker } = ctx;
+  const { sandbox, tracker, run } = ctx;
   const { path: filePath } = input;
   if (!filePath) throw new Error('delete_file 缺少 path 参数');
 
@@ -240,6 +328,8 @@ async function deleteFile(input, ctx) {
       path: sandbox.relative(absolute),
       oldContent,
       newContent: null,
+      taskId: run?.sessionId || null,
+      runId: run?.sessionId || null,
     });
   }
 
@@ -255,7 +345,7 @@ function walk(dir, sandbox, cb) {
     return;
   }
   for (const entry of entries) {
-    if (shouldIgnore(entry.name)) continue;
+    if (shouldAlwaysIgnore(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (cb(full) !== false) walk(full, sandbox, cb);
@@ -263,21 +353,6 @@ function walk(dir, sandbox, cb) {
       cb(full);
     }
   }
-}
-
-/** 生成简单 diff */
-function makeDiff(old, newStr) {
-  const oldLines = old.split('\n');
-  const newLines = newStr.split('\n');
-  const diff = [];
-  const max = Math.max(oldLines.length, newLines.length);
-  for (let i = 0; i < max; i++) {
-    if (oldLines[i] !== newLines[i]) {
-      if (oldLines[i] !== undefined) diff.push({ type: 'remove', line: i + 1, content: oldLines[i] });
-      if (newLines[i] !== undefined) diff.push({ type: 'add', line: i + 1, content: newLines[i] });
-    }
-  }
-  return diff;
 }
 
 const fileTools = {
@@ -293,18 +368,24 @@ const fileTools = {
     execute: listDirectory,
   },
   read_file: {
-    description: '读取 workspace 中某个文件的完整内容。大文件（>200KB）会被拒绝，建议用 search_files 搜索。',
+    description:
+      '读取 workspace 中某个文件的内容。支持范围读取：startLine/endLine 按行读取，offset/limit 按偏移读取。' +
+      '大文件（>500KB）会拒绝，建议分段读取或用 search_files 搜索。',
     input_schema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: '文件路径，相对于 workspace 根目录' },
+        startLine: { type: 'number', description: '起始行号（1-based），与 endLine 配合使用' },
+        endLine: { type: 'number', description: '结束行号（1-based），与 startLine 配合使用' },
+        offset: { type: 'number', description: '字符偏移（与 limit 配合）' },
+        limit: { type: 'number', description: '读取行数，默认 200' },
       },
       required: ['path'],
     },
     execute: readFile,
   },
   write_file: {
-    description: '创建新文件或覆盖已有文件。自动创建父目录。这是非破坏性操作，覆盖前会记录原内容。',
+    description: '创建新文件或覆盖已有文件。自动创建父目录。',
     input_schema: {
       type: 'object',
       properties: {
@@ -316,11 +397,11 @@ const fileTools = {
     execute: writeFile,
   },
   edit_file: {
-    description: '修改文件中的一段内容。oldString 必须精确且唯一地出现在文件中，然后被替换为 newString。比 write_file 更安全，只改指定部分。',
+    description: '修改文件中的一段内容。oldString 必须精确且唯一地出现在文件中。',
     input_schema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: '文件路径，相对于 workspace 根目录' },
+        path: { type: 'string', description: '文件路径' },
         oldString: { type: 'string', description: '要替换的原文本，必须精确且唯一' },
         newString: { type: 'string', description: '替换后的新文本' },
       },

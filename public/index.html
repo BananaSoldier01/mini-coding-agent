@@ -50,14 +50,14 @@
             <h1>Mini Coding Agent</h1>
             <p class="welcome-sub">输入任务，Agent 会自主读取文件、修改代码、运行验证。</p>
             <div class="quick-starts">
-              <button class="quick-start" data-task="阅读项目，找到首页标题，并把它修改成 Hello Agent">示例：修改标题</button>
-              <button class="quick-start" data-task="检查这个项目目前为什么无法启动，找出问题并修复">示例：修复启动问题</button>
+              <button class="quick-start" data-task="阅读测试 workspace，把首页标题修改成 Hello Agent">示例：修改标题</button>
+              <button class="quick-start" data-task="检查这个项目目前为什么无法启动，找出问题并修复，修复后自行运行验证">示例：修复启动问题</button>
             </div>
           </div>
         </div>
 
         <div class="chat-input-wrap">
-          <textarea id="chatInput" placeholder="描述任务，例如：找到登录页的标题并修改…" rows="1"></textarea>
+          <textarea id="chatInput" placeholder="描述任务…" rows="1"></textarea>
           <button class="btn btn-primary" id="sendBtn">发送</button>
           <button class="btn btn-ghost" id="stopBtn" disabled>停止</button>
         </div>
@@ -67,14 +67,7 @@
       <!-- 右侧：操作面板 -->
       <aside class="sidebar right">
         <div class="sidebar-header">
-          <span>Operations</span>
-        </div>
-        <div class="ops-panel" id="opsPanel">
-          <div class="ops-empty">暂无操作</div>
-        </div>
-
-        <div class="sidebar-header">
-          <span>Diff</span>
+          <span>Changes</span>
           <button class="btn-icon" id="clearDiff" title="清除">✕</button>
         </div>
         <div class="diff-panel" id="diffPanel">
@@ -88,12 +81,27 @@
       <div class="terminal-header">
         <span class="terminal-title">Terminal</span>
         <div class="terminal-controls">
+          <span class="terminal-status" id="terminalStatus"></span>
           <button class="btn-icon" id="clearTerminal" title="清除">✕</button>
           <button class="btn-icon" id="toggleTerminal" title="折叠">─</button>
         </div>
       </div>
       <div class="terminal-body" id="terminalBody"></div>
     </footer>
+  </div>
+
+  <!-- ── 文件查看器 ──────────────────────────────────────── -->
+  <div class="modal file-viewer-modal" id="fileViewerModal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-content file-viewer">
+      <div class="modal-header">
+        <span class="fv-path" id="fvPath">file</span>
+        <button class="btn-icon" data-close>✕</button>
+      </div>
+      <div class="modal-body fv-body" id="fvBody">
+        <pre id="fvContent"></pre>
+      </div>
+    </div>
   </div>
 
   <!-- ── 配置弹窗 ──────────────────────────────────────── -->
@@ -139,6 +147,7 @@
       <div class="modal-body">
         <p>Agent 即将执行以下操作：</p>
         <pre class="approval-command" id="approvalCommand"></pre>
+        <p class="approval-reason" id="approvalReason"></p>
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="rejectApproval">拒绝</button>

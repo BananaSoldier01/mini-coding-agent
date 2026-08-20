@@ -6,6 +6,11 @@
  *   2. REST API：配置管理、workspace 浏览
  *   3. SSE 端点：运行 Agent Loop，流式推送事件
  *   4. 审批接口：用户确认/拒绝危险操作
+ *
+ * 安全边界：
+ *   - 默认监听 127.0.0.1（仅本机）
+ *   - 同源 CORS（不允许外部网页调用）
+ *   - workspace 参数统一验证
  */
 
 import http from 'http';
@@ -18,6 +23,7 @@ import { runAgent } from './agent/index.js';
 import { SessionManager } from './session.js';
 import { loadConfig, saveFileConfig, maskApiKey } from './config.js';
 import { Sandbox } from './sandbox.js';
+import { runManager } from './runmanager.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -28,16 +34,57 @@ const DEFAULT_WORKSPACE = config.workspace;
 
 const sessionManager = new SessionManager();
 
-// ── HTTP Server ──────────────────────────────────────────────
+// ── 允许的 workspace 白名单（默认仅本地项目）────────────
+const ALLOWED_WORKSPACES = new Set([
+  path.join(process.cwd(), 'test-workspace'),
+  // 用户通过 UI 添加的 workspace 也在此登记
+]);
+
+function isAllowedWorkspace(ws) {
+  if (!ws) return false;
+  const abs = path.resolve(ws);
+  // 必须是绝对路径
+  if (!path.isAbsolute(abs)) return false;
+  // 必须在允许列表中，或在当前项目目录下
+  if (ALLOWED_WORKSPACES.has(abs)) return true;
+  const projectRoot = path.resolve(process.cwd());
+  if (abs.startsWith(projectRoot + path.sep) || abs === projectRoot) return true;
+  return false;
+}
+
+function registerWorkspace(ws) {
+  ALLOWED_WORKSPACES.add(path.resolve(ws));
+}
+
+// ── CORS 配置（同源，不允许 wildcard）─────────────────
+function setSameOriginCORS(resp, req) {
+  const origin = req.headers.origin;
+  // 仅允许同源（无 origin 或与服务器同源）
+  // 由于是 127.0.0.1，同源即 127.0.0.1:PORT
+  if (!origin) {
+    // 无 origin（如 fetch from same origin）允许
+    resp.setHeader('Access-Control-Allow-Origin', 'null');
+  } else {
+    // 有 origin 的请求：仅允许同源
+    const url = new URL(origin);
+    if (url.hostname === '127.0.0.1' || url.hostname === 'localhost') {
+      resp.setHeader('Access-Control-Allow-Origin', origin);
+      resp.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+    // 其他 origin 不设置 CORS 头，浏览器会拦截
+  }
+  resp.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  resp.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
+
+// ── HTTP Server ──────────────────────────────────────
 const server = http.createServer(async (req, resp) => {
   const parsedUrl = url.parse(req.url, true);
   const pathname = parsedUrl.pathname;
   const method = req.method;
 
-  // 设置 CORS
-  resp.setHeader('Access-Control-Allow-Origin', '*');
-  resp.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  resp.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // 设置 CORS（同源）
+  setSameOriginCORS(resp, req);
 
   if (method === 'OPTIONS') {
     resp.writeHead(200);
@@ -46,7 +93,7 @@ const server = http.createServer(async (req, resp) => {
   }
 
   try {
-    // ── API 路由 ────────────────────────────────────────────
+    // ── API: 配置 ────────────────────────────────────
     if (pathname === '/api/config' && method === 'GET') {
       return sendJson(resp, {
         llm: {
@@ -62,7 +109,6 @@ const server = http.createServer(async (req, resp) => {
     if (pathname === '/api/config' && method === 'POST') {
       const body = await readBody(req);
       const newConfig = JSON.parse(body);
-      // 合并保存
       const current = loadConfig();
       const merged = {
         llm: {
@@ -74,20 +120,32 @@ const server = http.createServer(async (req, resp) => {
       };
       saveFileConfig(merged);
       Object.assign(config, { llm: merged.llm, workspace: merged.workspace });
-      return sendJson(resp, { ok: true, config: { llm: { ...merged.llm, apiKey: maskApiKey(merged.llm.apiKey) } } });
+      registerWorkspace(merged.workspace);
+      return sendJson(resp, {
+        ok: true,
+        config: { llm: { ...merged.llm, apiKey: maskApiKey(merged.llm.apiKey) } }
+      });
     }
 
+    // ── API: 文件列表 ────────────────────────────────
     if (pathname === '/api/files' && method === 'GET') {
       const ws = parsedUrl.query.workspace || config.workspace;
+      if (!isAllowedWorkspace(ws)) {
+        return sendError(resp, 403, `不允许访问 workspace: ${ws}`);
+      }
       const sandbox = new Sandbox(ws);
       const tree = await buildFileTree(sandbox, '.');
       return sendJson(resp, { workspace: ws, tree });
     }
 
+    // ── API: 文件读取 ────────────────────────────────
     if (pathname === '/api/files/read' && method === 'GET') {
       const ws = parsedUrl.query.workspace || config.workspace;
       const filePath = parsedUrl.query.path;
       if (!filePath) return sendError(resp, 400, '缺少 path 参数');
+      if (!isAllowedWorkspace(ws)) {
+        return sendError(resp, 403, `不允许访问 workspace: ${ws}`);
+      }
       const sandbox = new Sandbox(ws);
       const absolute = sandbox.resolve(filePath);
       if (!fs.existsSync(absolute)) return sendError(resp, 404, '文件不存在');
@@ -95,9 +153,13 @@ const server = http.createServer(async (req, resp) => {
       return sendJson(resp, { path: filePath, content });
     }
 
+    // ── API: Session ─────────────────────────────────
     if (pathname === '/api/session' && method === 'POST') {
       const body = JSON.parse(await readBody(req));
       const ws = body.workspace || config.workspace;
+      if (!isAllowedWorkspace(ws)) {
+        return sendError(resp, 403, `不允许访问 workspace: ${ws}`);
+      }
       const session = sessionManager.create(ws);
       return sendJson(resp, { sessionId: session.id, workspace: ws });
     }
@@ -106,17 +168,34 @@ const server = http.createServer(async (req, resp) => {
       const sessionId = parsedUrl.query.sessionId;
       const session = sessionManager.get(sessionId);
       if (!session) return sendError(resp, 404, '会话不存在');
-      return sendJson(resp, { id: session.id, workspace: session.workspace, messageCount: session.messages.length });
+      return sendJson(resp, {
+        id: session.id,
+        workspace: session.workspace,
+        messageCount: session.messages.length,
+        active: session.active,
+      });
     }
 
-    // ── SSE: 运行 Agent ─────────────────────────────────────
+    // ── API: 停止当前运行 ────────────────────────────
+    if (pathname === '/api/stop' && method === 'POST') {
+      const body = JSON.parse(await readBody(req));
+      const { sessionId } = body;
+      const ok = runManager.stop(sessionId);
+      return sendJson(resp, { ok, stopped: ok });
+    }
+
+    // ── SSE: 运行 Agent ──────────────────────────────
     if (pathname === '/api/run' && method === 'POST') {
       const body = JSON.parse(await readBody(req));
       const { task, workspace, sessionId, config: clientConfig } = body;
       const ws = workspace || config.workspace;
-      const llmConfig = clientConfig?.llm || config.llm;
 
-      // 合并客户端配置（API Key 可能是遮盖值，不覆盖）
+      // workspace 验证
+      if (!isAllowedWorkspace(ws)) {
+        return sendError(resp, 403, `不允许访问 workspace: ${ws}`);
+      }
+
+      const llmConfig = clientConfig?.llm || config.llm;
       const finalConfig = {
         endpoint: llmConfig.endpoint || config.llm.endpoint,
         apiKey: llmConfig.apiKey && llmConfig.apiKey.length > 8 ? llmConfig.apiKey : config.llm.apiKey,
@@ -143,16 +222,18 @@ const server = http.createServer(async (req, resp) => {
         session = sessionManager.create(ws);
       }
 
-      const controller = new AbortController();
+      // 创建 ActiveRun（管理生命周期）
+      const activeRun = runManager.create(session.id);
 
-      // 记录用户任务到 session
-      session.addMessage({ role: 'user', content: task });
+      const controller = activeRun.controller;
 
       try {
         const result = await runAgent({
           task,
           workspace: ws,
           config: finalConfig,
+          session,        // ← 传入 session，Agent 使用历史上下文
+          run: activeRun, // ← 传入 run，Agent 可检查停止状态
           onEvent: (event) => {
             sendEvent(event);
             // 同步到 session 上下文
@@ -182,16 +263,28 @@ const server = http.createServer(async (req, resp) => {
           session.addMessage({ role: 'assistant', content: result.finalContent });
         }
 
-        sendEvent({ type: 'agent_done', result: { changes: result.changes, iteration: result.iteration } });
+        sendEvent({
+          type: 'agent_done',
+          result: {
+            changes: result.changes,
+            iteration: result.iteration,
+            stopped: result.stopped,
+          },
+        });
       } catch (err) {
-        sendEvent({ type: 'error', message: err.message });
+        if (activeRun.isStopped()) {
+          sendEvent({ type: 'error', message: '任务被用户取消' });
+        } else {
+          sendEvent({ type: 'error', message: err.message });
+        }
       } finally {
+        runManager.remove(session.id);
         resp.end();
       }
       return;
     }
 
-    // ── SSE: 审批响应 ───────────────────────────────────────
+    // ── API: 审批响应 ────────────────────────────────
     if (pathname === '/api/approve' && method === 'POST') {
       const body = JSON.parse(await readBody(req));
       const { toolCallId, approved } = body;
@@ -200,7 +293,7 @@ const server = http.createServer(async (req, resp) => {
       return sendJson(resp, { ok: true, resolved: ok });
     }
 
-    // ── 静态文件服务 ────────────────────────────────────────
+    // ── 静态文件服务 ────────────────────────────────
     if (method === 'GET') {
       let filePath;
       if (pathname === '/') {
@@ -208,10 +301,8 @@ const server = http.createServer(async (req, resp) => {
       } else {
         filePath = path.join(PUBLIC_DIR, pathname);
       }
-      // 安全：防止路径穿越
       if (!filePath.startsWith(PUBLIC_DIR)) return sendError(resp, 403, '禁止访问');
       if (!fs.existsSync(filePath)) {
-        // SPA 路由：返回 index.html
         filePath = path.join(PUBLIC_DIR, 'index.html');
       }
       const ext = path.extname(filePath).toLowerCase();
@@ -238,7 +329,7 @@ const server = http.createServer(async (req, resp) => {
   }
 });
 
-// ── 工具函数 ──────────────────────────────────────────────────
+// ── 工具函数 ────────────────────────────────────────
 function sendJson(resp, data, status = 200) {
   resp.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   resp.end(JSON.stringify(data));
@@ -257,12 +348,12 @@ function readBody(req) {
   });
 }
 
-/** 构建文件树（递归，仅一层深度用于展示） */
+/** 构建文件树 */
 async function buildFileTree(sandbox, relPath, maxDepth = 4) {
   const absolute = sandbox.resolve(relPath);
   if (!fs.existsSync(absolute)) return null;
   const stat = fs.statSync(absolute);
-  if (!stat.isDirectory()) {
+  if (!stat.isFile()) {
     return { name: path.basename(absolute), type: 'file', path: relPath };
   }
 
@@ -279,7 +370,7 @@ async function buildFileTree(sandbox, relPath, maxDepth = 4) {
   }
 
   const entries = fs.readdirSync(absolute, { withFileTypes: true })
-    .filter((e) => !e.name.startsWith('.') && e.name !== 'node_modules')
+    .filter((e) => e.name !== 'node_modules' && e.name !== '.git')
     .sort((a, b) => {
       if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
       return a.name.localeCompare(b.name);
@@ -294,12 +385,14 @@ async function buildFileTree(sandbox, relPath, maxDepth = 4) {
   return node;
 }
 
-server.listen(PORT, () => {
+// ── 启动 ────────────────────────────────────────────
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`
 ╔══════════════════════════════════════════════╗
 ║         Mini Coding Agent / Mini DSH         ║
 ╠══════════════════════════════════════════════╣
-║  服务器:  http://localhost:${PORT}               ║
+║  服务器:  http://127.0.0.1:${PORT}              ║
+║  仅限本机访问                                  ║
 ║  Workspace: ${DEFAULT_WORKSPACE.slice(0, 40).padEnd(40)}║
 ║  模型:    ${config.llm.model.slice(0, 40).padEnd(40)}║
 ╚══════════════════════════════════════════════╝

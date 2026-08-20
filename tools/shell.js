@@ -2,84 +2,46 @@
  * tools/shell.js — Shell 命令执行工具
  *
  * 在 workspace 内执行命令，返回 stdout/stderr/exitCode。
- * 限制：timeout、输出大小、工作目录为 workspace。
- * 危险命令列表需要用户确认。
+ *
+ * 安全模型（诚实且可靠）：
+ *   - 文件 Tool：严格 workspace scoped，经 Sandbox 路径校验
+ *   - Shell：默认高权限工具，使用：
+ *     - Secret scrubbing：不继承 LLM_API_KEY 等敏感环境变量
+ *     - Risk classification：由 policy.js 统一评估
+ *     - Approval：高风险命令需用户确认
+ *     - Timeout：合理上下限
+ *     - Process tree kill：Stop 时终止整个进程树
+ *
+ * 注意：cwd 在 workspace 内不代表命令只能访问 workspace。
+ * 这是 OS 级限制，当前不做 filesystem-level sandbox。
  */
 
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { safeEnv, clampTimeout } from '../policy.js';
 
-/** 危险命令模式 — 命中即需用户确认 */
-const DANGEROUS_PATTERNS = [
-  /^\s*rm\s+-rf?\s+\//,           // rm -rf /
-  /^\s*rm\s+-rf?\s+\*/,           // rm -rf *
-  /^\s*dd\s+/,                   // dd
-  /^\s*mkfs/,                    // mkfs
-  /^\s*:>\s*\*/,                 // :> *  清空
-  /^\s*shutdown/,                // shutdown
-  /^\s*reboot/,                  // reboot
-  /^\s*halt/,                    // halt
-  /^\s*init\s+0/,                // init 0
-  /;\s*rm\s+-rf/,                // ; rm -rf
-  /&&\s*rm\s+-rf/,               // && rm -rf
-  /^\s*curl.*\|\s*sh/,           // curl | sh
-  /^\s*wget.*\|\s*sh/,           // wget | sh
-  /^\s*chmod\s+777/,             // chmod 777
-  /^\s*chown\s+/,                // chown
-];
-
-/** 允许的命令白名单前缀（宽松模式下限制） */
-const ALLOWED_COMMANDS = new Set([
-  'ls', 'cat', 'head', 'tail', 'wc', 'grep', 'find', 'pwd', 'echo',
-  'mkdir', 'cp', 'mv', 'touch', 'rm', 'rmdir',
-  'node', 'npm', 'pnpm', 'python', 'python3', 'pip', 'pip3',
-  'git', 'go', 'rustc', 'cargo', 'java', 'javac', 'make', 'cmake',
-  'gcc', 'g++', 'clang', 'clang++',
-  'date', 'whoami', 'id', 'uname', 'df', 'du', 'env', 'printenv',
-  'sort', 'uniq', 'tr', 'sed', 'awk', 'cut', 'diff', 'patch',
-  'tar', 'gzip', 'gunzip', 'zip', 'unzip',
-  'curl', 'wget',
-  'stat', 'file', 'test', 'true', 'false',
-  'npm', 'npx', 'yarn', 'bun',
-]);
-
-function isDangerous(cmd) {
-  for (const pat of DANGEROUS_PATTERNS) {
-    if (pat.test(cmd)) return true;
-  }
-  return false;
-}
-
-function isAllowed(cmd) {
-  const first = cmd.trim().split(/\s+/)[0];
-  // 处理完整路径，如 /bin/ls
-  const base = first.split('/').pop();
-  return ALLOWED_COMMANDS.has(base);
-}
+// ── 风险分类（由 policy.js 统一管理，此处保留兼容）────
+// 实际评估由 policy.js 的 evaluate() 完成
 
 /**
  * run_command — 执行 shell 命令
+ *
+ * @param {object} input - { command, timeout, cwd }
+ * @param {object} ctx - { sandbox, tracker, workspace, run, config }
  */
 async function runCommand(input, ctx) {
-  const { sandbox, workspace } = ctx;
-  const { command, timeout = 30000, cwd } = input;
+  const { sandbox, workspace, run } = ctx;
+  const { command, cwd } = input;
   if (!command) throw new Error('run_command 缺少 command 参数');
+
+  // timeout 合理化
+  const timeout = clampTimeout(input.timeout);
 
   const workdir = cwd ? sandbox.resolve(cwd) : workspace;
 
-  // 安全检查
-  if (isDangerous(command)) {
-    const err = new Error(`危险命令，需要用户确认: ${command}`);
-    err.requiresApproval = true;
-    err.command = command;
-    throw err;
-  }
-
-  // 宽松白名单检查（仅在明确模式下启用，此处作为提示）
-  if (!isAllowed(command)) {
-    console.warn(`[shell] 命令未在白名单中: ${command}`);
-  }
+  // 构建安全环境变量：剔除敏感 key
+  const env = safeEnv();
 
   // 限制输出大小
   const MAX_OUTPUT = 200 * 1024; // 200KB
@@ -88,23 +50,38 @@ async function runCommand(input, ctx) {
     let stdout = '';
     let stderr = '';
     let killed = false;
+    let startTime = Date.now();
 
     const child = spawn(command, [], {
       cwd: workdir,
       shell: true,
-      env: { ...process.env },
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
+
+    // 注册到 run manager（用于 Stop 时 kill）
+    if (run) run.registerChild(child);
 
     const timer = setTimeout(() => {
       killed = true;
-      child.kill('SIGTERM');
+      killProcessTree(child, 'SIGTERM');
+      // 2 秒后强杀
+      const forceTimer = setTimeout(() => {
+        killProcessTree(child, 'SIGKILL');
+      }, 2000);
+      // 确保定时器不会阻止进程退出
+      forceTimer.unref();
     }, timeout);
+    timer.unref();
 
     child.stdout.on('data', (data) => {
       stdout += data.toString();
       if (stdout.length > MAX_OUTPUT) {
         stdout = stdout.slice(0, MAX_OUTPUT) + '\n...[输出已截断]';
-        child.kill('SIGTERM');
+        if (!killed) {
+          killed = true;
+          killProcessTree(child, 'SIGTERM');
+        }
       }
     });
 
@@ -112,12 +89,16 @@ async function runCommand(input, ctx) {
       stderr += data.toString();
       if (stderr.length > MAX_OUTPUT) {
         stderr = stderr.slice(0, MAX_OUTPUT) + '\n...[输出已截断]';
-        child.kill('SIGTERM');
+        if (!killed) {
+          killed = true;
+          killProcessTree(child, 'SIGTERM');
+        }
       }
     });
 
     child.on('close', (code, signal) => {
       clearTimeout(timer);
+      const duration = Date.now() - startTime;
       resolve({
         command,
         cwd: sandbox.relative(workdir),
@@ -126,6 +107,8 @@ async function runCommand(input, ctx) {
         stdout: stdout.slice(0, MAX_OUTPUT),
         stderr: stderr.slice(0, MAX_OUTPUT),
         timedOut: killed,
+        duration,
+        stopped: signal === 'SIGTERM' || signal === 'SIGKILL',
       });
     });
 
@@ -138,27 +121,52 @@ async function runCommand(input, ctx) {
         stdout: '',
         stderr: err.message,
         error: err.message,
+        duration: Date.now() - startTime,
       });
     });
   });
 }
 
+/**
+ * 终止进程树（含子进程）
+ */
+function killProcessTree(child, signal) {
+  if (!child || !child.pid) return;
+  try {
+    // 先尝试 kill 进程组
+    if (process.platform === 'win32') {
+      // Windows: taskkill
+      const { execSync } = require('child_process');
+      try { execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' }); } catch {}
+    } else {
+      // Unix: kill 进程组
+      try { process.kill(-child.pid, signal); } catch {}
+      // 兜底：直接 kill
+      try { process.kill(child.pid, signal); } catch {}
+    }
+  } catch (err) {
+    // 忽略
+  }
+}
+
 const shellTools = {
   run_command: {
     description:
-      '在 workspace 内执行 shell 命令。用于运行测试、安装依赖、构建项目、检查环境等。命令在 workspace 目录下执行，有超时和输出大小限制。危险命令（如 rm -rf /）需要用户确认。',
+      '在 workspace 内执行 shell 命令。用于运行测试、安装依赖、构建项目、检查环境等。' +
+      '命令在 workspace 目录下执行，有超时和输出大小限制。' +
+      '高风险命令（破坏性、网络、系统级）需要用户确认。',
     input_schema: {
       type: 'object',
       properties: {
         command: { type: 'string', description: '要执行的 shell 命令' },
-        timeout: { type: 'number', description: '超时毫秒数，默认 30000' },
+        timeout: { type: 'number', description: '超时毫秒数，默认 30000（范围 1000-120000）' },
         cwd: { type: 'string', description: '工作目录，默认为 workspace 根目录' },
       },
       required: ['command'],
     },
     execute: runCommand,
-    dangerous: false, // 部分命令可能危险，运行时检查
+    dangerous: false, // 风险由 policy.js 统一评估
   },
 };
 
-export { shellTools, isDangerous, isAllowed };
+export { shellTools, killProcessTree };
