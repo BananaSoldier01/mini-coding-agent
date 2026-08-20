@@ -7,26 +7,23 @@
 - **完整 Agent Loop** — LLM 分析 → 调用工具 → 获取结果 → 继续推理 → 修改项目 → 运行验证 → 完成任务
 - **多轮会话上下文** — 同一 session 内后续任务理解前文，自动 prune 超长上下文
 - **基础工具能力** — 浏览目录、读取文件（支持范围读取）、搜索代码、创建/修改文件、执行 shell 命令、展示 diff
-- **统一 Tool Policy** — 所有 tool call 经 policy.evaluate() 评估：allow / deny / requireApproval
-- **安全沙箱** — 文件操作严格 workspace scoped；Shell 使用 secret scrubbing + risk classification
-- **审批机制** — delete_file / 危险 Shell / 网络命令需用户确认，timeout 自动拒绝
-- **Stop / Cancel** — 真正中止 LLM request、Agent Loop、child process tree，cancel pending approval
-- **可替换 Provider** — 抽象 LLM 层，支持任意 OpenAI-compatible API
+- **统一 Tool Policy** — `policy.js` 评估每个 tool call → allow / deny / requireApproval
+- **Shell Capability Policy** — `shellpolicy.js` 从 denylist 改为 allowlist/capability 思维：SAFE / APPROVAL / DENY 三级
+- **ActiveRun 生命周期** — `runmanager.js` 管理 sessionId → ActiveRun，Stop 中止 LLM + kill process tree + cancel approval
+- **Run-scoped Approval** — 每个 Run 独立 approval scope，Stop A 不影响 B
+- **Session Transcript** — LLM Transcript 是唯一真相源，UI Event 只是观察者
+- **Run Net Diff** — 由 baseline → current 计算净变更，A → B → A 显示 No net change
+- **安全沙箱** — 文件操作严格 workspace scoped；Shell 使用 secret scrubbing + capability classification
+- **统一文件访问** — `WorkspaceFileService` 由 Agent Tool / Web API 共同复用
+- **可替换 Provider** — 抽象 LLM 层，支持任何 OpenAI-compatible API
 - **流式输出** — Token 级流式展示，Tool Call 实时可见
 - **Web UI** — 开发者工具风格：文件树、对话、Changes、Terminal
 
 ## 快速启动
 
 ```bash
-# 1. 配置（通过界面右上角 ⚙ 或 .env 文件）
-cp .env.example .env
-# 编辑 .env，填入 LLM_ENDPOINT / LLM_API_KEY / LLM_MODEL
-
-# 2. 启动
 npm start
-
-# 3. 浏览器访问
-open http://localhost:38212
+# 浏览器访问 http://localhost:38212
 ```
 
 ## 环境变量
@@ -46,29 +43,27 @@ open http://localhost:38212
 ```
 Harness/
 ├── server.js              # 主服务器 (HTTP + SSE, 仅监听 127.0.0.1)
-├── config.js              # 配置管理 (env > file > defaults)
+├── config.js              # 配置管理
 ├── sandbox.js              # Workspace 沙箱 (路径穿越 + symlink 检测)
 ├── session.js              # 会话状态管理 (上下文裁剪)
-├── tracker.js              # 文件变更追踪 (LCS-based unified diff)
-├── approval.js             # 审批注册表 (timeout / cancel / 重复 resolve 防护)
+├── tracker.js              # 文件变更追踪 (Run Net Diff)
+├── approval.js             # 审批注册表 (Run-scoped)
 ├── policy.js               # 统一 Tool Execution Policy
-├── runmanager.js           # Active Run 生命周期 (abort / kill / cancel)
+├── runmanager.js           # Active Run 生命周期
+├── shellpolicy.js          # Shell Capability Policy (SAFE / APPROVAL / DENY)
+├── fileservice.js          # 统一 Workspace 文件访问层
 ├── agent/
 │   ├── index.js            # Agent Loop 核心编排
 │   └── LLM.js              # LLM Provider 抽象
 ├── tools/
-│   ├── file.js             # 文件工具 (read/write/edit/search/list/delete)
-│   └── shell.js            # Shell 工具 (secret scrubbing / process tree kill)
-├── public/
-│   ├── index.html          # 前端页面
-│   ├── styles.css          # 样式
-│   └── app.js              # 前端逻辑 (SSE + UI)
-├── test/                   # 自动测试 (58 tests)
-├── test-workspace/         # 测试 workspace
-└── README.md
+│   ├── file.js             # 文件工具
+│   └── shell.js            # Shell 工具
+├── public/                 # 前端
+├── test/                   # 自动测试 (59 unit + 47 integration)
+└── test-workspace/         # 测试 workspace
 ```
 
-## Agent Loop 设计
+## Agent Loop
 
 ```
 用户任务 → Session 上下文 + System Prompt → LLM (streaming)
@@ -96,37 +91,48 @@ Harness/
 | `delete_file` | 删除文件/目录 | **需审批** |
 | `run_command` | 执行 shell 命令 | 视命令而定 |
 
+## Shell Capability Policy
+
+V0.3 从 denylist 正则改为 allowlist / capability 思维：
+
+- **SAFE** — 明确低风险命令（ls, git, npm, python 等），自动执行
+- **APPROVAL** — 无法明确判断安全的命令 → 需要用户确认
+- **DENY** — 读取 Secret / 攻击安全边界（printenv API_KEY, cat ~/.ssh/id_rsa, sudo, chmod 777 等）
+
+原则：**Unknown shell command ≠ SAFE**
+
 ## 安全模型
 
 ### 文件 Tool
 - 严格 workspace scoped，经 Sandbox 路径校验
 - 拒绝路径穿越 (`../`)、绝对路径、symlink 逃逸
-- 拒绝读写敏感文件 (`.env`、密钥等)
+- 拒绝读写敏感文件（`.env`、密钥、`.pem`、`.key` 等）
 
 ### Shell Tool
 - **Secret scrubbing**：不继承 `LLM_API_KEY` 等敏感环境变量
-- **Risk classification**：safe / destructive / network / system / secret
+- **Capability classification**：SAFE / APPROVAL / DENY
 - **Approval**：高风险命令需用户确认
 - **Timeout**：合理范围 1s-2min
 - **Process tree kill**：Stop 时终止整个进程树
 
 ### HTTP Server
 - 仅监听 `127.0.0.1`（本机访问）
-- 同源 CORS（不允许外部网页调用）
-- workspace 参数白名单验证
+- 同源 CORS（不开放 localhost-wide）
+- Workspace trust 需明确用户操作（TrustedWorkspaceRegistry）
 
 > ⚠️ **诚实说明**：Shell 命令在 OS 层面不受 workspace 限制。
-> cwd 在 workspace 内不代表命令只能访问 workspace。
-> 当前安全模型依赖：secret scrubbing + risk classification + approval + 用户监督。
-> 后续可考虑 container / OS-level sandbox。
+> 当前安全模型依赖：secret scrubbing + capability classification + approval + 用户监督。
+> Full OS isolation 未来应依赖 container / OS sandbox。
 
 ## 测试
 
 ```bash
-npm test
+npm test                    # 单元测试
+npm run test:integration    # 集成测试
+npm run test:all            # 全部测试
 ```
 
-覆盖：Sandbox（路径穿越/symlink）、Policy（allow/deny/approval）、Session（上下文/prune）、Tracker（diff/create/modify/delete）、Config（优先级/持久化）。
+覆盖：Sandbox / Policy / Session / Tracker / Config / Integration（Agent Transcript / File API / Cancel / Large File / Security）。
 
 ## License
 

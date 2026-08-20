@@ -74,33 +74,36 @@ test('unifiedDiff: 大量插入不误判', () => {
 test('ChangeTracker: 记录 create', () => {
   const ct = new ChangeTracker();
   ct.record({ type: 'create', path: 'new.txt', oldContent: null, newContent: 'hello' });
-  const summary = ct.getSummary();
-  assert.strictEqual(summary.totalChanges, 1);
-  assert.strictEqual(summary.files[0].type, 'create');
-  assert.strictEqual(summary.files[0].added, 1); // 'hello' = 1 line
+  const net = ct.getNetDiff();
+  assert.strictEqual(net.totalChanges, 1);
+  assert.strictEqual(net.files[0].type, 'create');
+  assert.strictEqual(net.files[0].added, 1); // 'hello' = 1 line
 });
 
 test('ChangeTracker: 记录 modify', () => {
   const ct = new ChangeTracker();
+  ct.baselineSnapshot.set('app.js', 'const a = 1;');
   ct.record({
     type: 'modify',
     path: 'app.js',
     oldContent: 'const a = 1;',
     newContent: 'const a = 2;',
   });
-  const diff = ct.getDiff();
-  assert.strictEqual(diff.length, 1);
-  assert.strictEqual(diff[0].type, 'modify');
-  assert.ok(diff[0].added > 0);
-  assert.ok(diff[0].removed > 0);
+  const net = ct.getNetDiff();
+  assert.strictEqual(net.files.length, 1);
+  assert.strictEqual(net.files[0].type, 'modify');
+  assert.ok(net.files[0].added > 0);
+  assert.ok(net.files[0].removed > 0);
 });
 
 test('ChangeTracker: 记录 delete', () => {
   const ct = new ChangeTracker();
+  // Set baseline so delete is a net change
+  ct.baselineSnapshot.set('old.txt', 'content');
   ct.record({ type: 'delete', path: 'old.txt', oldContent: 'content', newContent: null });
-  const summary = ct.getSummary();
-  assert.strictEqual(summary.files[0].type, 'delete');
-  assert.strictEqual(summary.files[0].removed, 1);
+  const net = ct.getNetDiff();
+  assert.strictEqual(net.files[0].type, 'delete');
+  assert.strictEqual(net.files[0].removed, 1);
 });
 
 test('ChangeTracker: byFile 分组', () => {
@@ -114,11 +117,11 @@ test('ChangeTracker: byFile 分组', () => {
   assert.strictEqual(byFile['b.txt'].length, 1);
 });
 
-test('ChangeTracker: recent 和 clear', () => {
+test('ChangeTracker: clear 清空', () => {
   const ct = new ChangeTracker();
   ct.record({ type: 'create', path: 'a.txt', oldContent: null, newContent: 'a' });
   ct.record({ type: 'create', path: 'b.txt', oldContent: null, newContent: 'b' });
-  assert.strictEqual(ct.recent(1).length, 1);
+  assert.strictEqual(ct.changes.length, 2);
   ct.clear();
-  assert.strictEqual(ct.recent().length, 0);
+  assert.strictEqual(ct.changes.length, 0);
 });

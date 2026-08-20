@@ -1,180 +1,146 @@
 /**
- * tracker.js — 文件变更追踪
+ * tracker.js — 文件变更追踪（Run Net Diff）
  *
- * 记录 Agent 对 workspace 文件的所有修改。
- * 提供准确的 create / modify / delete 记录和 unified diff。
+ * V0.3 升级：从 event diff 升级为 run net diff。
  *
- * 注意：V0.2 不提供 rollback 功能。此模块仅用于 diff 展示和变更统计。
+ * 每个 Run 维护：
+ *   baselineSnapshot[path] → 上一个 Run 结束时的状态
+ *   currentSnapshot[path] → 当前 Run 的当前状态
+ *
+ * Run 结束时由 baseline → current 计算净变更。
+ * A → B → A 最终显示 No net change。
  */
 
 /**
- * 生成 unified diff（简化版，非完整算法）
- * 基于 LCS 的最小 diff，保证准确性。
+ * 生成 unified diff（基于 LCS）
  */
-function unifiedDiff(oldStr, newStr, path = '') {
+function unifiedDiff(oldStr, newStr) {
   const oldLines = oldStr ? oldStr.split('\n') : [];
   const newLines = newStr ? newStr.split('\n') : [];
-
-  // 构建 diff 片段
   const diff = [];
-  const maxLen = Math.max(oldLines.length, newLines.length);
-
-  // 简化策略：逐行比较，标记变更
-  // 对于插入/删除导致的行号偏移，使用 LCS 对齐
   const lcs = computeLCS(oldLines, newLines);
 
   let i = 0, j = 0;
-  let oldLineNo = 1, newLineNo = 1;
-
   for (const match of lcs) {
-    // 输出 old 中非匹配的行（删除）
-    while (i < match.oldIdx) {
-      diff.push({ type: 'remove', oldLine: oldLineNo++, content: oldLines[i++] });
-    }
-    // 输出 new 中非匹配的行（添加）
-    while (j < match.newIdx) {
-      diff.push({ type: 'add', newLine: newLineNo++, content: newLines[j++] });
-    }
-    // 匹配的行
+    while (i < match.oldIdx) diff.push({ type: 'remove', content: oldLines[i++] });
+    while (j < match.newIdx) diff.push({ type: 'add', content: newLines[j++] });
     i++; j++;
-    oldLineNo++; newLineNo++;
   }
-
-  // 剩余行
-  while (i < oldLines.length) {
-    diff.push({ type: 'remove', oldLine: oldLineNo++, content: oldLines[i++] });
-  }
-  while (j < newLines.length) {
-    diff.push({ type: 'add', newLine: newLineNo++, content: newLines[j++] });
-  }
+  while (i < oldLines.length) diff.push({ type: 'remove', content: oldLines[i++] });
+  while (j < newLines.length) diff.push({ type: 'add', content: newLines[j++] });
 
   return diff;
 }
 
-/**
- * 计算最长公共子序列（LCS），返回匹配位置
- */
 function computeLCS(a, b) {
   const m = a.length, n = b.length;
-  // DP table
   const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
   for (let i = m - 1; i >= 0; i--) {
     for (let j = n - 1; j >= 0; j--) {
-      if (a[i] === b[j]) {
-        dp[i][j] = dp[i + 1][j + 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
-      }
+      if (a[i] === b[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
+      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
     }
   }
-  // 回溯
   const matches = [];
   let i = 0, j = 0;
   while (i < m && j < n) {
-    if (a[i] === b[j]) {
-      matches.push({ oldIdx: i, newIdx: j });
-      i++; j++;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      i++;
-    } else {
-      j++;
-    }
+    if (a[i] === b[j]) { matches.push({ oldIdx: i, newIdx: j }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+    else j++;
   }
   return matches;
 }
 
-/**
- * 统计 diff 的增删行数
- */
 function diffStats(diff) {
   let added = 0, removed = 0;
-  for (const line of diff) {
-    if (line.type === 'add') added++;
-    else if (line.type === 'remove') removed++;
+  for (const d of diff) {
+    if (d.type === 'add') added++;
+    else if (d.type === 'remove') removed++;
   }
   return { added, removed };
 }
 
 class ChangeTracker {
   constructor() {
-    this.changes = [];
+    this.changes = [];              // 事件级记录
+    this.baselineSnapshot = new Map(); // path → content (上一个 Run 结束时)
+    this.currentSnapshot = new Map();  // path → content (当前 Run)
   }
 
+  /** 记录文件变更（运行时调用） */
   record(change) {
-    const entry = {
-      type: change.type,          // 'create' | 'modify' | 'delete'
-      path: change.path,
-      oldContent: change.oldContent || null,
-      newContent: change.newContent || null,
+    const { type, path: filePath, oldContent, newContent } = change;
+
+    if (type === 'delete') {
+      this.currentSnapshot.delete(filePath);
+    } else {
+      this.currentSnapshot.set(filePath, newContent);
+    }
+
+    this.changes.push({
+      type,
+      path: filePath,
+      oldContent,
+      newContent,
       timestamp: Date.now(),
-      taskId: change.taskId || null,
-      runId: change.runId || null,
-    };
-
-    // 生成真实 diff
-    if (entry.type === 'modify' && entry.oldContent !== null && entry.newContent !== null) {
-      entry.diff = unifiedDiff(entry.oldContent, entry.newContent, entry.path);
-      const stats = diffStats(entry.diff);
-      entry.added = stats.added;
-      entry.removed = stats.removed;
-    } else if (entry.type === 'create') {
-      entry.diff = null;
-      entry.added = entry.newContent ? entry.newContent.split('\n').length : 0;
-      entry.removed = 0;
-    } else if (entry.type === 'delete') {
-      entry.diff = null;
-      entry.added = 0;
-      entry.removed = entry.oldContent ? entry.oldContent.split('\n').length : 0;
-    }
-
-    this.changes.push(entry);
+    });
   }
 
-  /** 获取所有变更摘要 */
-  getSummary() {
-    const byFile = this.byFile();
+  /** Run 结束时计算净变更（baseline → current） */
+  getNetDiff() {
+    const allPaths = new Set([
+      ...this.baselineSnapshot.keys(),
+      ...this.currentSnapshot.keys(),
+    ]);
+
     const files = [];
-    for (const [path, changes] of Object.entries(byFile)) {
-      const last = changes[changes.length - 1];
-      let added = 0, removed = 0;
-      for (const c of changes) {
-        added += c.added || 0;
-        removed += c.removed || 0;
+    for (const filePath of allPaths) {
+      const oldContent = this.baselineSnapshot.get(filePath);
+      const newContent = this.currentSnapshot.get(filePath);
+
+      if (oldContent === undefined && newContent === undefined) continue;
+
+      let type, diff, added = 0, removed = 0;
+
+      if (oldContent === undefined && newContent !== undefined) {
+        type = 'create';
+        added = newContent ? newContent.split('\n').length : 0;
+      } else if (oldContent !== undefined && newContent === undefined) {
+        type = 'delete';
+        removed = oldContent ? oldContent.split('\n').length : 0;
+      } else if (oldContent !== newContent) {
+        type = 'modify';
+        diff = unifiedDiff(oldContent, newContent);
+        const stats = diffStats(diff);
+        added = stats.added;
+        removed = stats.removed;
+      } else {
+        // A → B → A: 无净变化
+        continue;
       }
-      files.push({
-        path,
-        type: last.type,
-        added,
-        removed,
-        changeCount: changes.length,
-      });
+
+      files.push({ path: filePath, type, diff, added, removed });
     }
-    return { files, totalChanges: this.changes.length };
+
+    return { files, totalChanges: files.length };
   }
 
-  /** 获取所有变更的 diff 视图 */
+  /** Run 结束，将 current 升级为 baseline */
+  commitRun() {
+    this.baselineSnapshot = new Map(this.currentSnapshot);
+    this.currentSnapshot.clear();
+  }
+
+  /** 获取所有变更的 diff 视图（兼容旧接口） */
   getDiff() {
     return this.changes.map((c) => ({
       type: c.type,
       path: c.path,
       timestamp: c.timestamp,
       diff: c.diff || null,
-      added: c.added || 0,
-      removed: c.removed || 0,
     }));
   }
 
-  /** 获取最后 N 条变更 */
-  recent(n = 10) {
-    return this.changes.slice(-n);
-  }
-
-  /** 清空 */
-  clear() {
-    this.changes = [];
-  }
-
-  /** 按文件分组 */
   byFile() {
     const map = {};
     for (const c of this.changes) {
@@ -182,6 +148,12 @@ class ChangeTracker {
       map[c.path].push(c);
     }
     return map;
+  }
+
+  clear() {
+    this.changes = [];
+    this.baselineSnapshot.clear();
+    this.currentSnapshot.clear();
   }
 }
 

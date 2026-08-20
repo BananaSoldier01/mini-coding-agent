@@ -1,16 +1,12 @@
 /**
  * server.js — Mini Coding Agent 主服务器
  *
- * 职责：
- *   1. 静态文件服务（public/）
- *   2. REST API：配置管理、workspace 浏览
- *   3. SSE 端点：运行 Agent Loop，流式推送事件
- *   4. 审批接口：用户确认/拒绝危险操作
- *
- * 安全边界：
- *   - 默认监听 127.0.0.1（仅本机）
- *   - 同源 CORS（不允许外部网页调用）
- *   - workspace 参数统一验证
+ * V0.3 重构：
+ * - 同源 CORS（不开放 localhost-wide）
+ * - TrustedWorkspaceRegistry（workspace 授权需明确用户操作）
+ * - WorkspaceFileService 统一文件访问
+ * - Session Transcript 由 Agent Runner 提交（不从 UI Event 拼）
+ * - Run-scoped Approval
  */
 
 import http from 'http';
@@ -22,8 +18,9 @@ import { dirname } from 'path';
 import { runAgent } from './agent/index.js';
 import { SessionManager } from './session.js';
 import { loadConfig, saveFileConfig, maskApiKey } from './config.js';
-import { Sandbox } from './sandbox.js';
+import { WorkspaceFileService } from './fileservice.js';
 import { runManager } from './runmanager.js';
+import { registry as approvalRegistry } from './approval.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -34,47 +31,57 @@ const DEFAULT_WORKSPACE = config.workspace;
 
 const sessionManager = new SessionManager();
 
-// ── 允许的 workspace 白名单（默认仅本地项目）────────────
-const ALLOWED_WORKSPACES = new Set([
-  path.join(process.cwd(), 'test-workspace'),
-  // 用户通过 UI 添加的 workspace 也在此登记
-]);
+// ── Trusted Workspace Registry ────────────────────────
+class TrustedWorkspaceRegistry {
+  constructor() {
+    this.workspaces = new Map(); // path → { addedAt, source }
+  }
 
-function isAllowedWorkspace(ws) {
-  if (!ws) return false;
-  const abs = path.resolve(ws);
-  // 必须是绝对路径
-  if (!path.isAbsolute(abs)) return false;
-  // 必须在允许列表中，或在当前项目目录下
-  if (ALLOWED_WORKSPACES.has(abs)) return true;
-  const projectRoot = path.resolve(process.cwd());
-  if (abs.startsWith(projectRoot + path.sep) || abs === projectRoot) return true;
-  return false;
+  add(ws, source = 'user') {
+    const abs = path.resolve(ws);
+    this.workspaces.set(abs, { addedAt: Date.now(), source });
+    return abs;
+  }
+
+  isTrusted(ws) {
+    if (!ws) return false;
+    const abs = path.resolve(ws);
+    if (!path.isAbsolute(abs)) return false;
+    if (this.workspaces.has(abs)) return true;
+    // 仅当前项目目录下的 workspace 自动可信
+    const projectRoot = path.resolve(process.cwd());
+    if (abs === projectRoot || abs.startsWith(projectRoot + path.sep)) return true;
+    return false;
+  }
+
+  remove(ws) {
+    const abs = path.resolve(ws);
+    this.workspaces.delete(abs);
+  }
+
+  list() {
+    return Array.from(this.workspaces.entries()).map(([p, info]) => ({ path: p, ...info }));
+  }
 }
 
-function registerWorkspace(ws) {
-  ALLOWED_WORKSPACES.add(path.resolve(ws));
-}
+const workspaceRegistry = new TrustedWorkspaceRegistry();
+// 初始化默认 workspace
+workspaceRegistry.add(DEFAULT_WORKSPACE, 'default');
 
-// ── CORS 配置（同源，不允许 wildcard）─────────────────
+// ── CORS：严格同源，不开放 localhost-wide ──────────────
 function setSameOriginCORS(resp, req) {
   const origin = req.headers.origin;
-  // 仅允许同源（无 origin 或与服务器同源）
-  // 由于是 127.0.0.1，同源即 127.0.0.1:PORT
   if (!origin) {
-    // 无 origin（如 fetch from same origin）允许
-    resp.setHeader('Access-Control-Allow-Origin', 'null');
-  } else {
-    // 有 origin 的请求：仅允许同源
-    const url = new URL(origin);
-    if (url.hostname === '127.0.0.1' || url.hostname === 'localhost') {
-      resp.setHeader('Access-Control-Allow-Origin', origin);
-      resp.setHeader('Access-Control-Allow-Credentials', 'true');
-    }
-    // 其他 origin 不设置 CORS 头，浏览器会拦截
+    // 无 Origin（curl、CLI、同源 fetch）— 允许
+    return;
   }
-  resp.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  resp.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // 有 Origin：必须与服务器同源
+  const serverOrigin = `http://127.0.0.1:${PORT}`;
+  if (origin === serverOrigin) {
+    resp.setHeader('Access-Control-Allow-Origin', origin);
+    resp.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+  // 其他 Origin：不设置 CORS 头，浏览器拦截
 }
 
 // ── HTTP Server ──────────────────────────────────────
@@ -83,7 +90,6 @@ const server = http.createServer(async (req, resp) => {
   const pathname = parsedUrl.pathname;
   const method = req.method;
 
-  // 设置 CORS（同源）
   setSameOriginCORS(resp, req);
 
   if (method === 'OPTIONS') {
@@ -103,11 +109,12 @@ const server = http.createServer(async (req, resp) => {
         },
         workspace: config.workspace,
         port: config.port,
+        trustedWorkspaces: workspaceRegistry.list(),
       });
     }
 
     if (pathname === '/api/config' && method === 'POST') {
-      const body = await readBody(req);
+      const body = JSON.parse(await readBody(req));
       const newConfig = JSON.parse(body);
       const current = loadConfig();
       const merged = {
@@ -120,21 +127,38 @@ const server = http.createServer(async (req, resp) => {
       };
       saveFileConfig(merged);
       Object.assign(config, { llm: merged.llm, workspace: merged.workspace });
-      registerWorkspace(merged.workspace);
-      return sendJson(resp, {
-        ok: true,
-        config: { llm: { ...merged.llm, apiKey: maskApiKey(merged.llm.apiKey) } }
-      });
+      // workspace 变更需显式注册
+      workspaceRegistry.add(merged.workspace, 'user');
+      return sendJson(resp, { ok: true });
+    }
+
+    // ── API: 受信 workspace 管理 ──────────────────────
+    if (pathname === '/api/workspaces' && method === 'GET') {
+      return sendJson(resp, { workspaces: workspaceRegistry.list() });
+    }
+
+    if (pathname === '/api/workspaces' && method === 'POST') {
+      const body = JSON.parse(await readBody(req));
+      const { path: wsPath, action } = body;
+      if (action === 'add') {
+        workspaceRegistry.add(wsPath, 'user');
+        return sendJson(resp, { ok: true, path: path.resolve(wsPath) });
+      }
+      if (action === 'remove') {
+        workspaceRegistry.remove(wsPath);
+        return sendJson(resp, { ok: true });
+      }
+      return sendError(resp, 400, '未知操作');
     }
 
     // ── API: 文件列表 ────────────────────────────────
     if (pathname === '/api/files' && method === 'GET') {
       const ws = parsedUrl.query.workspace || config.workspace;
-      if (!isAllowedWorkspace(ws)) {
+      if (!workspaceRegistry.isTrusted(ws)) {
         return sendError(resp, 403, `不允许访问 workspace: ${ws}`);
       }
-      const sandbox = new Sandbox(ws);
-      const tree = await buildFileTree(sandbox, '.');
+      const svc = new WorkspaceFileService(ws);
+      const tree = svc.buildTree('.');
       return sendJson(resp, { workspace: ws, tree });
     }
 
@@ -143,21 +167,23 @@ const server = http.createServer(async (req, resp) => {
       const ws = parsedUrl.query.workspace || config.workspace;
       const filePath = parsedUrl.query.path;
       if (!filePath) return sendError(resp, 400, '缺少 path 参数');
-      if (!isAllowedWorkspace(ws)) {
+      if (!workspaceRegistry.isTrusted(ws)) {
         return sendError(resp, 403, `不允许访问 workspace: ${ws}`);
       }
-      const sandbox = new Sandbox(ws);
-      const absolute = sandbox.resolve(filePath);
-      if (!fs.existsSync(absolute)) return sendError(resp, 404, '文件不存在');
-      const content = fs.readFileSync(absolute, 'utf-8');
-      return sendJson(resp, { path: filePath, content });
+      const svc = new WorkspaceFileService(ws);
+      try {
+        const data = svc.readFile(filePath);
+        return sendJson(resp, data);
+      } catch (err) {
+        return sendError(resp, 400, err.message);
+      }
     }
 
     // ── API: Session ─────────────────────────────────
     if (pathname === '/api/session' && method === 'POST') {
       const body = JSON.parse(await readBody(req));
       const ws = body.workspace || config.workspace;
-      if (!isAllowedWorkspace(ws)) {
+      if (!workspaceRegistry.isTrusted(ws)) {
         return sendError(resp, 403, `不允许访问 workspace: ${ws}`);
       }
       const session = sessionManager.create(ws);
@@ -190,8 +216,7 @@ const server = http.createServer(async (req, resp) => {
       const { task, workspace, sessionId, config: clientConfig } = body;
       const ws = workspace || config.workspace;
 
-      // workspace 验证
-      if (!isAllowedWorkspace(ws)) {
+      if (!workspaceRegistry.isTrusted(ws)) {
         return sendError(resp, 403, `不允许访问 workspace: ${ws}`);
       }
 
@@ -224,7 +249,6 @@ const server = http.createServer(async (req, resp) => {
 
       // 创建 ActiveRun（管理生命周期）
       const activeRun = runManager.create(session.id);
-
       const controller = activeRun.controller;
 
       try {
@@ -232,36 +256,19 @@ const server = http.createServer(async (req, resp) => {
           task,
           workspace: ws,
           config: finalConfig,
-          session,        // ← 传入 session，Agent 使用历史上下文
-          run: activeRun, // ← 传入 run，Agent 可检查停止状态
-          onEvent: (event) => {
-            sendEvent(event);
-            // 同步到 session 上下文
-            if (event.type === 'tool_call') {
-              session.addMessage({
-                role: 'assistant',
-                content: null,
-                tool_calls: [{
-                  id: event.toolCall.id,
-                  type: 'function',
-                  function: { name: event.toolCall.name, arguments: JSON.stringify(event.toolCall.args) },
-                }],
-              });
-            } else if (event.type === 'tool_result') {
-              session.addMessage({
-                role: 'tool',
-                tool_call_id: event.toolCall.id,
-                content: JSON.stringify(event.result),
-              });
-            }
-          },
+          session,
+          run: activeRun,
+          onEvent: sendEvent,
           signals: { signal: controller.signal },
         });
 
-        // 记录 assistant 最终回复
-        if (result.finalContent) {
-          session.addMessage({ role: 'assistant', content: result.finalContent });
+        // ── 由 Agent Runner 提交真实 Transcript ──────
+        // result.messages 是 canonical transcript（仅新增的 user + assistant + tool）
+        for (const msg of result.messages) {
+          session.addMessage(msg);
         }
+        // 上下文裁剪
+        session.prune();
 
         sendEvent({
           type: 'agent_done',
@@ -287,9 +294,8 @@ const server = http.createServer(async (req, resp) => {
     // ── API: 审批响应 ────────────────────────────────
     if (pathname === '/api/approve' && method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      const { toolCallId, approved } = body;
-      const { registry } = await import('./approval.js');
-      const ok = registry.resolve(toolCallId, approved);
+      const { runId, toolCallId, approved } = body;
+      const ok = approvalRegistry.resolve(runId, toolCallId, approved);
       return sendJson(resp, { ok: true, resolved: ok });
     }
 
@@ -346,43 +352,6 @@ function readBody(req) {
     req.on('end', () => resolve(data));
     req.on('error', reject);
   });
-}
-
-/** 构建文件树 */
-async function buildFileTree(sandbox, relPath, maxDepth = 4) {
-  const absolute = sandbox.resolve(relPath);
-  if (!fs.existsSync(absolute)) return null;
-  const stat = fs.statSync(absolute);
-  if (!stat.isFile()) {
-    return { name: path.basename(absolute), type: 'file', path: relPath };
-  }
-
-  const node = {
-    name: relPath === '.' ? 'workspace' : path.basename(absolute),
-    type: 'directory',
-    path: relPath,
-    children: [],
-  };
-
-  if (maxDepth <= 0) {
-    node.expanded = false;
-    return node;
-  }
-
-  const entries = fs.readdirSync(absolute, { withFileTypes: true })
-    .filter((e) => e.name !== 'node_modules' && e.name !== '.git')
-    .sort((a, b) => {
-      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
-
-  for (const entry of entries) {
-    const childPath = path.join(relPath, entry.name);
-    const child = await buildFileTree(sandbox, childPath, maxDepth - 1);
-    if (child) node.children.push(child);
-  }
-
-  return node;
 }
 
 // ── 启动 ────────────────────────────────────────────

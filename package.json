@@ -1,13 +1,15 @@
 {
   "name": "mini-coding-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Mini Coding Agent / Mini DSH — 本地轻量级 Coding Agent Harness",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
-    "test:watch": "node --test --watch"
+    "test:integration": "node --test test/integration/",
+    "test:unit": "node --test test/*.test.js",
+    "test:all": "npm run test:unit && npm run test:integration"
   },
   "engines": {
     "node": ">=20"
@@ -19,8 +21,6 @@
     "workspace"
   ],
   "license": "MIT",
-  "dependencies": {
-    "express": "^4.19.2"
-  },
+  "dependencies": {},
   "devDependencies": {}
 }

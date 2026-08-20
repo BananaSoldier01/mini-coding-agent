@@ -11,6 +11,8 @@
  *   - 风险分类：file_destructive / shell_destructive / shell_network / shell_secret
  */
 
+import path from 'path';
+
 // ── 风险等级 ──────────────────────────────────────────
 const RISK = {
   SAFE: 'safe',                  // 直接执行
@@ -216,17 +218,56 @@ function evaluate(toolDef, args, ctx) {
 /**
  * 判断路径是否敏感（.env、密钥文件等）
  */
+/**
+ * 判断路径是否敏感（.env、密钥文件等）
+ * 使用 basename / extension / path component 精确匹配，而非简单的 includes。
+ */
 function isSensitiveFilePath(p) {
   if (!p) return false;
-  const normalized = p.toLowerCase();
-  const sensitivePatterns = [
-    '.env', '.env.', '.npmrc', '.ssh/', '.git-credentials',
-    'id_rsa', 'id_ed25519', '*.pem', '*.key', '*.p12', '*.pfx',
-    'credentials', 'secrets', '.aws/credentials', '.gcp/',
+  const normalized = p.replace(/\\/g, '/').toLowerCase();
+  const parts = normalized.split('/').filter(Boolean);
+  const basename = parts.length > 0 ? parts[parts.length - 1] : '';
+  const ext = path.extname(basename).toLowerCase();
+
+  // 精确 basename 匹配
+  const sensitiveBasenames = new Set([
+    '.env', '.env.local', '.env.development', '.env.production',
+    '.env.staging', '.env.test', '.npmrc', '.git-credentials',
+    '.dockerenv', '.netrc',
+  ]);
+  if (sensitiveBasenames.has(basename)) return true;
+
+  // .env 前缀变体
+  if (basename.startsWith('.env')) return true;
+
+  // 密钥/证书扩展名
+  const sensitiveExtensions = new Set([
+    '.pem', '.key', '.p12', '.pfx', '.jks', '.keystore',
+    '.crt', '.cer', '.der', '.csr', '.srl',
+  ]);
+  if (sensitiveExtensions.has(ext)) return true;
+
+  // 密钥文件名模式
+  const keyNamePatterns = [
+    /^id_(rsa|ed25519|ec|dsa)$/i,
+    /^.*_(private|secret|credentials)$/i,
   ];
-  for (const pat of sensitivePatterns) {
-    if (normalized.includes(pat.toLowerCase())) return true;
+  for (const pat of keyNamePatterns) {
+    if (pat.test(basename)) return true;
   }
+
+  // 敏感目录 component
+  const sensitiveDirs = new Set(['.ssh', '.aws', '.gcp', '.azure', '.kube']);
+  for (const part of parts) {
+    if (sensitiveDirs.has(part)) return true;
+  }
+
+  // 特殊文件名
+  if (basename === 'credentials' || basename === 'secrets' ||
+      basename === 'service-account.json' || basename === 'authorized_keys') {
+    return true;
+  }
+
   return false;
 }
 

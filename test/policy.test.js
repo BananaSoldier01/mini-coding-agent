@@ -1,12 +1,8 @@
 import { test } from 'node:test';
 
-/**
- * test/policy.test.js — Tool Policy & Approval 测试
- */
-
 import assert from 'assert';
 import { evaluate, RISK, RISK_CATEGORY, safeEnv, clampTimeout, isSensitiveFilePath } from '../policy.js';
-import { registry, ApprovalRegistry } from '../approval.js';
+import { ApprovalRegistry } from '../approval.js';
 
 // ── Policy evaluate ──────────────────────────────────
 
@@ -89,7 +85,6 @@ test('Policy: 未知工具拒绝', () => {
 // ── safeEnv ──────────────────────────────────────────
 
 test('safeEnv: 不包含 LLM_API_KEY', () => {
-  // 保存原始值
   const orig = process.env.LLM_API_KEY;
   process.env.LLM_API_KEY = 'sk-test-12345';
   const env = safeEnv();
@@ -138,18 +133,16 @@ test('isSensitiveFilePath: 普通文件不被识别', () => {
 
 test('ApprovalRegistry: 注册和解析', async () => {
   const reg = new ApprovalRegistry();
-  const promise = reg.register('test-id', 5000);
-  // resolve 之前
+  const promise = reg.register('run-1', 'tc-1', 100);
   assert.strictEqual(reg.size, 1);
   const result = await promise;
-  // 超时自动拒绝
   assert.strictEqual(result, false);
 });
 
 test('ApprovalRegistry: 手动 resolve', async () => {
   const reg = new ApprovalRegistry();
-  const promise = reg.register('test-id-2', 5000);
-  const ok = reg.resolve('test-id-2', true);
+  const promise = reg.register('run-2', 'tc-2', 5000);
+  const ok = reg.resolve('run-2', 'tc-2', true);
   assert.strictEqual(ok, true);
   const result = await promise;
   assert.strictEqual(result, true);
@@ -157,27 +150,38 @@ test('ApprovalRegistry: 手动 resolve', async () => {
 
 test('ApprovalRegistry: 拒绝后不执行', async () => {
   const reg = new ApprovalRegistry();
-  const promise = reg.register('test-id-3', 5000);
-  reg.resolve('test-id-3', false);
+  const promise = reg.register('run-3', 'tc-3', 5000);
+  reg.resolve('run-3', 'tc-3', false);
   const result = await promise;
   assert.strictEqual(result, false);
 });
 
 test('ApprovalRegistry: 重复 resolve 无效', async () => {
   const reg = new ApprovalRegistry();
-  const promise = reg.register('test-id-4', 5000);
-  const ok1 = reg.resolve('test-id-4', true);
-  const ok2 = reg.resolve('test-id-4', true);
+  const promise = reg.register('run-4', 'tc-4', 5000);
+  const ok1 = reg.resolve('run-4', 'tc-4', true);
+  const ok2 = reg.resolve('run-4', 'tc-4', true);
   assert.strictEqual(ok1, true);
-  assert.strictEqual(ok2, false); // 第二次 resolve 失败
+  assert.strictEqual(ok2, false);
   const result = await promise;
   assert.strictEqual(result, true);
 });
 
+test('ApprovalRegistry: cancelRun 只影响指定 run', async () => {
+  const reg = new ApprovalRegistry();
+  reg.register('run-a', 'tc-a', 5000);
+  reg.register('run-b', 'tc-b', 5000);
+  assert.strictEqual(reg.size, 2);
+  reg.cancelRun('run-a');
+  assert.strictEqual(reg.size, 1);
+  reg.cancelRun('run-b');
+  assert.strictEqual(reg.size, 0);
+});
+
 test('ApprovalRegistry: cancelAll 清理所有', async () => {
   const reg = new ApprovalRegistry();
-  reg.register('a', 5000);
-  reg.register('b', 5000);
+  reg.register('run-x', 'tc-x', 5000);
+  reg.register('run-y', 'tc-y', 5000);
   assert.strictEqual(reg.size, 2);
   reg.cancelAll();
   assert.strictEqual(reg.size, 0);
