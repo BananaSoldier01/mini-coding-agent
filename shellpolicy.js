@@ -39,17 +39,57 @@ const SAFE_OPERATIONS = [
     return true;
   }},
 
-  { op: 'head', match: (c) => /^\s*head\b/.test(c) },
-  { op: 'tail', match: (c) => /^\s*tail\b/.test(c) },
-  { op: 'wc', match: (c) => /^\s*wc\b/.test(c) },
-  { op: 'sort', match: (c) => /^\s*sort\b/.test(c) },
-  { op: 'uniq', match: (c) => /^\s*uniq\b/.test(c) },
-  { op: 'tr', match: (c) => /^\s*tr\b/.test(c) },
-  { op: 'cut', match: (c) => /^\s*cut\b/.test(c) },
-  { op: 'diff_files', match: (c) => /^\s*diff\b/.test(c) },
-  { op: 'cmp', match: (c) => /^\s*cmp\b/.test(c) },
-  { op: 'md5sum', match: (c) => /^\s*md5sum\b/.test(c) },
-  { op: 'sha256sum', match: (c) => /^\s*sha256sum\b/.test(c) },
+  // head/tail/sort/cut/diff/cmp/md5sum/sha256sum — 仅当不涉及敏感路径时 SAFE
+  { op: 'head', match: (c) => {
+    if (!/^\s*head\b/.test(c)) return false;
+    if (/\.env|\.npmrc|\.pem|\.key|\.p12|\.ssh\/|\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519/i.test(c)) return false;
+    return true;
+  }},
+  { op: 'tail', match: (c) => {
+    if (!/^\s*tail\b/.test(c)) return false;
+    if (/\.env|\.npmrc|\.pem|\.key|\.p12|\.ssh\/|\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519/i.test(c)) return false;
+    return true;
+  }},
+  { op: 'sort', match: (c) => {
+    if (!/^\s*sort\b/.test(c)) return false;
+    if (/\.env|\.npmrc|\.pem|\.key|\.p12|\.ssh\/|\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519/i.test(c)) return false;
+    return true;
+  }},
+  { op: 'uniq', match: (c) => {
+    if (!/^\s*uniq\b/.test(c)) return false;
+    if (/\.env|\.npmrc|\.pem|\.key|\.p12|\.ssh\/|\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519/i.test(c)) return false;
+    return true;
+  }},
+  { op: 'tr', match: (c) => {
+    if (!/^\s*tr\b/.test(c)) return false;
+    if (/\.env|\.npmrc|\.pem|\.key|\.p12|\.ssh\/|\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519/i.test(c)) return false;
+    return true;
+  }},
+  { op: 'cut', match: (c) => {
+    if (!/^\s*cut\b/.test(c)) return false;
+    if (/\.env|\.npmrc|\.pem|\.key|\.p12|\.ssh\/|\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519/i.test(c)) return false;
+    return true;
+  }},
+  { op: 'diff_files', match: (c) => {
+    if (!/^\s*diff\b/.test(c)) return false;
+    if (/\.env|\.npmrc|\.pem|\.key|\.p12|\.ssh\/|\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519/i.test(c)) return false;
+    return true;
+  }},
+  { op: 'cmp', match: (c) => {
+    if (!/^\s*cmp\b/.test(c)) return false;
+    if (/\.env|\.npmrc|\.pem|\.key|\.p12|\.ssh\/|\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519/i.test(c)) return false;
+    return true;
+  }},
+  { op: 'md5sum', match: (c) => {
+    if (!/^\s*md5sum\b/.test(c)) return false;
+    if (/\.env|\.npmrc|\.pem|\.key|\.p12|\.ssh\/|\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519/i.test(c)) return false;
+    return true;
+  }},
+  { op: 'sha256sum', match: (c) => {
+    if (!/^\s*sha256sum\b/.test(c)) return false;
+    if (/\.env|\.npmrc|\.pem|\.key|\.p12|\.ssh\/|\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519/i.test(c)) return false;
+    return true;
+  }},
 
   // 构建/测试（项目定义的 script — 默认 REQUIRE_APPROVAL，见 APPROVAL_PATTERNS）
   // V0.3.3: Agent 可修改 package.json 后执行 npm script = 间接执行任意代码
@@ -228,6 +268,21 @@ function evaluateShell(command) {
       category: 'shell_composite',
       reason: `命令包含 shell 组合符 (; && || | > < $() \`)，不是单一安全操作，需要确认。`,
     };
+  }
+
+  // ── Git mutation 预检（在 SAFE 之前，防止过宽 SAFE 规则吞掉 mutation）──
+  const GIT_MUTATION_PATTERNS = [
+    { pat: /^\s*git\s+branch\s+-[a-zA-Z]*[dD]\b/i, reason: 'git branch -d/-D 是删除操作，需要确认。' },
+    { pat: /^\s*git\s+remote\s+(add|remove|set-url)\b/i, reason: 'git remote add/remove/set-url 是 mutation 操作，需要确认。' },
+  ];
+  for (const { pat, reason } of GIT_MUTATION_PATTERNS) {
+    if (pat.test(trimmed)) {
+      return {
+        decision: 'requireApproval',
+        category: 'shell_git_mutation',
+        reason,
+      };
+    }
   }
 
   // ── SAFE 检查（operation-based）─────────────────────

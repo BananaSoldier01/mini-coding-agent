@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.3.3 — Delivery Integrity**（当前）
+**V0.3.3 — Delivery Integrity**（已完成）
 
 核心目标：Git 仓库、测试结果、文档和 Builder 报告四者描述的是同一个现实。
 
@@ -45,7 +45,7 @@
 - /api/run 验证顺序修复
 - 状态：已完成
 
-#### V0.3.3 — Delivery Integrity（当前）
+#### V0.3.3 — Delivery Integrity
 - 修复报告与 Git 状态不一致
 - CSRF token 落地或删除
 - Shell SAFE 边界收紧
@@ -56,7 +56,14 @@
 - GitHub Actions CI
 - Regression tests
 - Version consistency
-- 状态：进行中
+- 状态：已完成
+
+#### V0.3.3.1 — Hotfix
+- Shell SAFE / Approval precedence（git mutation 预检）
+- Shell sensitive-file bypass（head/tail/sort 敏感路径检测）
+- 目录删除 baseline 修复
+- Regression tests
+- 状态：已完成
 
 ### V0.2 — Core Overhaul
 - Session 接入 Agent（真实多轮上下文）
