@@ -539,3 +539,11 @@ html, body {
   font-size: 11px; background: var(--bg-elev2); color: var(--warn);
   margin-top: 4px;
 }
+
+.completion-summary .cs-section { margin-top: 8px; }
+.completion-summary .cs-cmd {
+  font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+  padding: 2px 0; border-bottom: 1px solid var(--border);
+}
+.completion-summary .cs-cmd .cs-cmd-ok { color: var(--ok); }
+.completion-summary .cs-cmd .cs-cmd-fail { color: var(--err); }

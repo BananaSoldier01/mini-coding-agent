@@ -140,15 +140,16 @@ async function runAgent(opts) {
         let args;
         try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
 
-        // ── Policy 评估（Permission Mode → Policy Layer）───────
+        // ── Policy 评估（Base Policy 始终执行 → Permission Mode 合并）──
         const mode = session?.permissionMode || 'standard';
 
-        // 将 tool 映射到 category 和 risk
-        let category, risk;
+        // ── Step 1: Base Policy 始终执行 ─────────────────
+        let baseDecision, baseCategory, baseReason;
         if (toolName === 'run_command') {
           const shellResult = evaluateShell(args.command || '');
-          category = shellResult.category;
-          risk = shellResult.decision === 'deny' ? 'high' : shellResult.decision === 'allow' ? 'low' : 'medium';
+          baseDecision = shellResult.decision;
+          baseCategory = shellResult.category;
+          baseReason = shellResult.reason;
         } else {
           const toolDef = toolMap.get(toolName);
           if (!toolDef) {
@@ -161,47 +162,33 @@ async function runAgent(opts) {
             turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: `未知工具: ${toolName}` }) });
             continue;
           }
-          // 映射 tool 到 category
-          const TOOL_CATEGORY_MAP = {
-            list_directory: 'file_list',
-            read_file: 'file_read',
-            search_files: 'file_search',
-            write_file: 'file_write',
-            edit_file: 'file_edit',
-            delete_file: 'file_delete',
-          };
-          category = TOOL_CATEGORY_MAP[toolName] || 'unknown';
-          risk = ['delete_file'].includes(toolName) ? 'high' : 'medium';
+          const policyResult = evaluate(toolDef, args, { sandbox, tracker, workspace, run });
+          baseDecision = policyResult.decision;
+          baseCategory = policyResult.category;
+          baseReason = policyResult.reason;
         }
 
-        // Permission Mode 决策
-        const modeDecision = evaluatePermission(mode, toolName, category, risk);
+        // ── Step 2: Permission Mode 合并 Base Policy ────
+        const finalDecision = mergePermission(mode, baseDecision);
 
-        // 如果 Permission Mode 决定 deny，直接拒绝
-        if (modeDecision === 'deny') {
+        // Hard Deny 不可被 Mode 覆盖
+        if (finalDecision === 'deny') {
           emit(onEvent, {
             type: 'tool_result',
             toolCall: { id: tc.id, name: toolName, args },
-            result: { error: `Permission Mode "${mode}" 拒绝执行此操作。`, denied: true },
+            result: { error: baseReason || `拒绝执行: ${baseCategory}`, denied: true },
           });
-          messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: `Permission Mode "${mode}" 拒绝执行此操作。` }) });
-          turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: `Permission Mode "${mode}" 拒绝执行此操作。` }) });
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: baseReason || `拒绝执行: ${baseCategory}` }) });
+          turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: baseReason || `拒绝执行: ${baseCategory}` }) });
           continue;
         }
 
-        // 如果 Permission Mode 决定 allow，直接执行（跳过底层 Policy 详细检查）
-        let policyResult;
-        if (modeDecision === 'allow') {
-          policyResult = { decision: 'allow', category, reason: '' };
-        } else {
-          // requireApproval：使用底层 Policy 做最终判断
-          if (toolName === 'run_command') {
-            policyResult = evaluateShell(args.command || '');
-          } else {
-            const toolDef = toolMap.get(toolName);
-            policyResult = evaluate(toolDef, args, { sandbox, tracker, workspace, run });
-          }
-        }
+        // 构造最终 policyResult
+        const policyResult = {
+          decision: finalDecision,
+          category: baseCategory,
+          reason: finalDecision === 'requireApproval' ? (baseReason || '需要用户确认') : '',
+        };
 
         emit(onEvent, {
           type: 'tool_call',
@@ -315,6 +302,19 @@ async function runAgent(opts) {
           toolCall: { id: tc.id, name: toolName, args },
           result: finalResult,
         });
+
+        // 记录 command 结果（用于 Completion Summary verification evidence）
+        if (toolName === 'run_command' && finalResult) {
+          emit(onEvent, {
+            type: 'command_result',
+            command: finalResult.command,
+            exitCode: finalResult.exitCode,
+            duration: finalResult.duration,
+            stopped: finalResult.stopped,
+            timedOut: finalResult.timedOut,
+            terminationReason: finalResult.terminationReason,
+          });
+        }
 
         const toolContent = truncated
           ? resultStr.slice(0, MAX_TOOL_OUTPUT_CHARS) + '\n...[输出已截断]'

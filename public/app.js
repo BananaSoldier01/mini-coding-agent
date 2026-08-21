@@ -44,17 +44,28 @@ async function init() {
   $('#clearDiff').addEventListener('click', clearDiff);
   $('#saveConfig').addEventListener('click', saveConfig);
 
-  // Permission Mode selector
-  $('#modeSelect').addEventListener('change', (e) => {
+  // Permission Mode selector — 仅在 PATCH 成功后更新 UI
+  $('#modeSelect').addEventListener('change', async (e) => {
+    const newMode = e.target.value;
     if (state.sessionId) {
-      api('/api/session', {
-        method: 'PATCH',
-        body: { sessionId: state.sessionId, permissionMode: e.target.value },
-      }).catch(() => {});
+      try {
+        const result = await api('/api/session', {
+          method: 'PATCH',
+          body: { sessionId: state.sessionId, permissionMode: newMode },
+        });
+        // Server 真值：只在成功后更新
+        state.permissionMode = result.permissionMode;
+        $('#modeSelect').value = result.permissionMode;
+        updateModeLabel(result.permissionMode);
+      } catch (err) {
+        // 失败时恢复 UI 到 Server 真值
+        $('#modeSelect').value = state.permissionMode;
+        appendSystemMessage('❌ 切换权限模式失败: ' + err.message);
+      }
+    } else {
+      state.permissionMode = newMode;
+      updateModeLabel(newMode);
     }
-    state.permissionMode = e.target.value;
-    $('#modeSelect').value = e.target.value;
-    updateModeLabel(e.target.value);
   });
 
   $$('[data-close]').forEach((el) => el.addEventListener('click', closeConfig));
@@ -576,6 +587,12 @@ async function sendMessage() {
         body: { workspace: state.workspace },
       });
       state.sessionId = data.sessionId;
+      // 使用 Server 返回的 permissionMode 真值
+      if (data.permissionMode) {
+        state.permissionMode = data.permissionMode;
+        $('#modeSelect').value = data.permissionMode;
+        updateModeLabel(data.permissionMode);
+      }
     } catch (err) {
       appendSystemMessage('创建会话失败: ' + err.message);
       state.running = false;
@@ -686,6 +703,16 @@ function handleEvent(event) {
       if (event.toolCall.name === 'run_command') {
         terminalWrite(event.toolCall.args.command, event.result);
       }
+      break;
+    case 'command_result':
+      state.commands.push({
+        command: event.command,
+        exitCode: event.exitCode,
+        duration: event.duration,
+        stopped: event.stopped,
+        timedOut: event.timedOut,
+        terminationReason: event.terminationReason,
+      });
       break;
     case 'approval_needed':
       addTimelineApproval(event);
@@ -946,6 +973,16 @@ function renderCompletionSummary(result) {
   html += '<span class="cs-label">审批</span>';
   html += `<span class="cs-value">${state.approvals.approved} approved · ${state.approvals.rejected} rejected</span>`;
   html += '</div>';
+
+  // Verification evidence: 实际执行过的 command + exit status
+  if (state.commands.length > 0) {
+    html += '<div class="cs-section"><span class="cs-label">验证</span>';
+    for (const cmd of state.commands) {
+      const status = cmd.stopped ? '■ 停止' : cmd.timedOut ? '⏱ 超时' : cmd.exitCode === 0 ? '✓' : '✕';
+      html += `<div class="cs-cmd">${status} ${escapeHtml(cmd.command)} ${cmd.exitCode !== null ? '(exit ' + cmd.exitCode + ')' : ''} ${cmd.duration ? (cmd.duration/1000).toFixed(1)+'s' : ''}</div>`;
+    }
+    html += '</div>';
+  }
 
   if (result.finalContent) {
     html += '<div class="cs-summary">' + escapeHtml(result.finalContent).slice(0, 200) + '</div>';

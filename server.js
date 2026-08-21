@@ -236,7 +236,14 @@ const server = http.createServer(async (req, resp) => {
         return sendError(resp, 403, `不允许访问 workspace: ${ws}`);
       }
       const session = sessionManager.create(ws);
-      return sendJson(resp, { sessionId: session.id, workspace: ws });
+      // 接受客户端传入的 permissionMode（默认 Standard）
+      if (body.permissionMode) {
+        const { isValidMode } = await import('./permission.js');
+        if (isValidMode(body.permissionMode)) {
+          session.permissionMode = body.permissionMode;
+        }
+      }
+      return sendJson(resp, { sessionId: session.id, workspace: ws, permissionMode: session.permissionMode });
     }
 
     // ── API: 更新 Session Permission Mode ──────────────
@@ -247,7 +254,12 @@ const server = http.createServer(async (req, resp) => {
       const { sessionId, permissionMode } = body;
       const session = sessionManager.get(sessionId);
       if (!session) return sendError(resp, 404, '会话不存在');
-      session.permissionMode = permissionMode || 'standard';
+      // 校验合法 mode
+      const { isValidMode } = await import('./permission.js');
+      if (!isValidMode(permissionMode)) {
+        return sendError(resp, 400, `非法的 Permission Mode: ${permissionMode}。合法值: safe, standard, full_access`);
+      }
+      session.permissionMode = permissionMode;
       return sendJson(resp, { ok: true, permissionMode: session.permissionMode });
     }
 
