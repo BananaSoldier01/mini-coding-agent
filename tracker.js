@@ -1,22 +1,21 @@
 /**
  * tracker.js — 文件变更追踪（Run Net Diff）
  *
- * V0.3 升级：从 event diff 升级为 run net diff。
- *
- * 每个 Run 维护：
- *   baselineSnapshot[path] → 上一个 Run 结束时的状态
- *   currentSnapshot[path] → 当前 Run 的当前状态
- *
- * Run 结束时由 baseline → current 计算净变更。
- * A → B → A 最终显示 No net change。
+ * V0.3.2 修复：
+ * - 使用 NON_EXISTENT sentinel 区分"文件不存在"与"空文件"
+ * - record() 使用 oldContent 初始化 baseline
+ * - getNetDiff() 由 baseline → current 计算净变更
  */
+
+// ── Sentinel: 区分"文件不存在"与"空文件" ──────────────
+const NON_EXISTENT = Symbol('NON_EXISTENT');
 
 /**
  * 生成 unified diff（基于 LCS）
  */
 function unifiedDiff(oldStr, newStr) {
-  const oldLines = oldStr ? oldStr.split('\n') : [];
-  const newLines = newStr ? newStr.split('\n') : [];
+  const oldLines = oldStr === '' ? [] : oldStr.split('\n');
+  const newLines = newStr === '' ? [] : newStr.split('\n');
   const diff = [];
   const lcs = computeLCS(oldLines, newLines);
 
@@ -34,7 +33,7 @@ function unifiedDiff(oldStr, newStr) {
 
 function computeLCS(a, b) {
   const m = a.length, n = b.length;
-  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
   for (let i = m - 1; i >= 0; i--) {
     for (let j = n - 1; j >= 0; j--) {
       if (a[i] === b[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
@@ -60,21 +59,45 @@ function diffStats(diff) {
   return { added, removed };
 }
 
+/**
+ * 将内容转为可比较的字符串表示
+ * NON_EXISTENT → null (表示文件不存在)
+ * "" → "" (表示空文件)
+ * "content" → "content"
+ */
+function contentKey(content) {
+  if (content === NON_EXISTENT) return null;
+  return content;
+}
+
 class ChangeTracker {
   constructor() {
     this.changes = [];              // 事件级记录
-    this.baselineSnapshot = new Map(); // path → content (上一个 Run 结束时)
-    this.currentSnapshot = new Map();  // path → content (当前 Run)
+    this.baselineSnapshot = new Map(); // path → content | null (NON_EXISTENT)
+    this.currentSnapshot = new Map();  // path → content | null (NON_EXISTENT)
   }
 
-  /** 记录文件变更（运行时调用） */
+  /**
+   * 记录文件变更
+   * @param {object} change
+   * @param {string} change.type - 'create' | 'modify' | 'delete'
+   * @param {string} change.path
+   * @param {string|symbol} change.oldContent - 修改前内容，NON_EXISTENT 表示不存在
+   * @param {string|symbol} change.newContent - 修改后内容，NON_EXISTENT 表示已删除
+   */
   record(change) {
     const { type, path: filePath, oldContent, newContent } = change;
 
+    // 第一次修改此 path 时，用 oldContent 初始化 baseline
+    if (!this.baselineSnapshot.has(filePath)) {
+      this.baselineSnapshot.set(filePath, oldContent !== undefined ? oldContent : NON_EXISTENT);
+    }
+
+    // 更新 current
     if (type === 'delete') {
-      this.currentSnapshot.delete(filePath);
+      this.currentSnapshot.set(filePath, NON_EXISTENT);
     } else {
-      this.currentSnapshot.set(filePath, newContent);
+      this.currentSnapshot.set(filePath, newContent !== undefined ? newContent : '');
     }
 
     this.changes.push({
@@ -86,7 +109,9 @@ class ChangeTracker {
     });
   }
 
-  /** Run 结束时计算净变更（baseline → current） */
+  /**
+   * Run 结束时计算净变更（baseline → current）
+   */
   getNetDiff() {
     const allPaths = new Set([
       ...this.baselineSnapshot.keys(),
@@ -95,27 +120,41 @@ class ChangeTracker {
 
     const files = [];
     for (const filePath of allPaths) {
-      const oldContent = this.baselineSnapshot.get(filePath);
-      const newContent = this.currentSnapshot.get(filePath);
+      const oldVal = this.baselineSnapshot.get(filePath);
+      const newVal = this.currentSnapshot.get(filePath);
 
-      if (oldContent === undefined && newContent === undefined) continue;
+      // oldVal === null → 文件在 baseline 时不存在
+      // oldVal === '' → 文件在 baseline 时是空文件
+      // newVal === null → 文件在 current 时不存在
+      // newVal === '' → 文件在 current 时是空文件
+
+      const oldExists = oldVal !== null && oldVal !== NON_EXISTENT;
+      const newExists = newVal !== null && newVal !== NON_EXISTENT;
+
+      // 两者都不存在 → 不应该发生，但跳过
+      if (!oldExists && !newExists) continue;
 
       let type, diff, added = 0, removed = 0;
 
-      if (oldContent === undefined && newContent !== undefined) {
+      if (!oldExists && newExists) {
+        // 不存在 → 存在 = create
         type = 'create';
-        added = newContent ? newContent.split('\n').length : 0;
-      } else if (oldContent !== undefined && newContent === undefined) {
+        added = newVal ? newVal.split('\n').length : 0;
+      } else if (oldExists && !newExists) {
+        // 存在 → 不存在 = delete
         type = 'delete';
-        removed = oldContent ? oldContent.split('\n').length : 0;
-      } else if (oldContent !== newContent) {
+        removed = oldVal ? oldVal.split('\n').length : 0;
+      } else if (oldVal !== newVal) {
+        // 存在 → 存在但内容不同 = modify
         type = 'modify';
-        diff = unifiedDiff(oldContent, newContent);
+        const oldStr = oldExists ? (oldVal || '') : '';
+        const newStr = newExists ? (newVal || '') : '';
+        diff = unifiedDiff(oldStr, newStr);
         const stats = diffStats(diff);
         added = stats.added;
         removed = stats.removed;
       } else {
-        // A → B → A: 无净变化
+        // 内容相同（包括 A→B→A 场景）→ 无净变化
         continue;
       }
 
@@ -131,7 +170,7 @@ class ChangeTracker {
     this.currentSnapshot.clear();
   }
 
-  /** 获取所有变更的 diff 视图（兼容旧接口） */
+  /** 获取所有变更的 diff 视图 */
   getDiff() {
     return this.changes.map((c) => ({
       type: c.type,
@@ -157,4 +196,4 @@ class ChangeTracker {
   }
 }
 
-export { ChangeTracker, unifiedDiff, diffStats };
+export { ChangeTracker, unifiedDiff, diffStats, NON_EXISTENT };

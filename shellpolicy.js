@@ -189,6 +189,10 @@ const APPROVAL_PATTERNS = [
   />\/dev\//i,
 ];
 
+// ── Shell composition 检测 ────────────────────────────
+// 如果命令包含 shell composition，不能视为单一 SAFE operation
+const SHELL_COMPOSITION = /(;|&&|\|\||\||>|<|\$\(|`)/;
+
 /**
  * 评估 Shell 命令风险等级
  *
@@ -211,6 +215,16 @@ function evaluateShell(command) {
         reason: `拒绝执行: 命令可能读取敏感信息或攻击 Harness 安全边界。`,
       };
     }
+  }
+
+  // ── Shell composition 检测 ──────────────────────────
+  // 包含 ; && || | > < $() `` 的命令不是单一 operation，默认 REQUIRE_APPROVAL
+  if (SHELL_COMPOSITION.test(trimmed)) {
+    return {
+      decision: 'requireApproval',
+      category: 'shell_composite',
+      reason: `命令包含 shell 组合符 (; && || | > < $() \`)，不是单一安全操作，需要确认。`,
+    };
   }
 
   // ── SAFE 检查（operation-based）─────────────────────

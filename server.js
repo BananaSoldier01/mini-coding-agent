@@ -31,6 +31,19 @@ const DEFAULT_WORKSPACE = config.workspace;
 
 const sessionManager = new SessionManager();
 
+// ── Local Session Token（CSRF 防护）─────────────────
+const LOCAL_SESSION_TOKEN = `tok_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+
+function validateMutation(req) {
+  const v = validateRequest(req);
+  if (!v.ok) return v;
+  const token = req.headers['x-local-token'];
+  if (!token || token !== LOCAL_SESSION_TOKEN) {
+    return { ok: false, status: 403, reason: '缺少或无效的本地会话 token' };
+  }
+  return { ok: true };
+}
+
 // ── Trusted Workspace Registry ────────────────────────
 class TrustedWorkspaceRegistry {
   constructor() {
@@ -68,7 +81,30 @@ const workspaceRegistry = new TrustedWorkspaceRegistry();
 // 初始化默认 workspace
 workspaceRegistry.add(DEFAULT_WORKSPACE, 'default');
 
-// ── CORS：严格同源，不开放 localhost-wide ──────────────
+// ── CORS + Trust Boundary：严格同源，拒绝非预期 Origin ──
+function validateRequest(req) {
+  const origin = req.headers.origin;
+  const host = req.headers.host;
+
+  // 验证 Host（防止 DNS rebinding）
+  const expectedHost = `127.0.0.1:${PORT}`;
+  const expectedHostAlt = `localhost:${PORT}`;
+  if (host && host !== expectedHost && host !== expectedHostAlt) {
+    return { ok: false, status: 403, reason: `Host 验证失败: ${host}` };
+  }
+
+  // 验证 Origin（有 Origin 时必须同源）
+  if (origin) {
+    const serverOrigin = `http://127.0.0.1:${PORT}`;
+    const serverOriginAlt = `http://localhost:${PORT}`;
+    if (origin !== serverOrigin && origin !== serverOriginAlt) {
+      return { ok: false, status: 403, reason: `Origin 验证失败: ${origin}` };
+    }
+  }
+
+  return { ok: true };
+}
+
 function setSameOriginCORS(resp, req) {
   const origin = req.headers.origin;
   if (!origin) {
@@ -77,7 +113,8 @@ function setSameOriginCORS(resp, req) {
   }
   // 有 Origin：必须与服务器同源
   const serverOrigin = `http://127.0.0.1:${PORT}`;
-  if (origin === serverOrigin) {
+  const serverOriginAlt = `http://localhost:${PORT}`;
+  if (origin === serverOrigin || origin === serverOriginAlt) {
     resp.setHeader('Access-Control-Allow-Origin', origin);
     resp.setHeader('Access-Control-Allow-Credentials', 'true');
   }
@@ -99,6 +136,11 @@ const server = http.createServer(async (req, resp) => {
   }
 
   try {
+    // ── 全局请求验证（Host / Origin） ────────────────
+    const validation = validateRequest(req);
+    if (!validation.ok) {
+      return sendError(resp, validation.status, validation.reason);
+    }
     // ── API: 配置 ────────────────────────────────────
     if (pathname === '/api/config' && method === 'GET') {
       return sendJson(resp, {
@@ -211,33 +253,17 @@ const server = http.createServer(async (req, resp) => {
 
     // ── SSE: 运行 Agent ──────────────────────────────
     if (pathname === '/api/run' && method === 'POST') {
+      // ── Phase 1: 解析 + 验证（在写 SSE headers 之前）──
       const body = JSON.parse(await readBody(req));
       const { task, workspace, sessionId, config: clientConfig } = body;
       const ws = workspace || config.workspace;
 
+      // 验证 workspace
       if (!workspaceRegistry.isTrusted(ws)) {
         return sendError(resp, 403, `不允许访问 workspace: ${ws}`);
       }
 
-      const llmConfig = clientConfig?.llm || config.llm;
-      const finalConfig = {
-        endpoint: llmConfig.endpoint || config.llm.endpoint,
-        apiKey: llmConfig.apiKey && llmConfig.apiKey.length > 8 ? llmConfig.apiKey : config.llm.apiKey,
-        model: llmConfig.model || config.llm.model,
-      };
-
-      resp.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      });
-
-      const sendEvent = (event) => {
-        const data = JSON.stringify(event);
-        resp.write(`data: ${data}\n\n`);
-      };
-
-      // 获取或创建 session（Session 与 Workspace 强绑定）
+      // 验证 session（Session 与 Workspace 强绑定）
       let session;
       if (sessionId) {
         session = sessionManager.get(sessionId);
@@ -248,6 +274,25 @@ const server = http.createServer(async (req, resp) => {
       if (!session) {
         session = sessionManager.create(ws);
       }
+
+      const llmConfig = clientConfig?.llm || config.llm;
+      const finalConfig = {
+        endpoint: llmConfig.endpoint || config.llm.endpoint,
+        apiKey: llmConfig.apiKey && llmConfig.apiKey.length > 8 ? llmConfig.apiKey : config.llm.apiKey,
+        model: llmConfig.model || config.llm.model,
+      };
+
+      // ── Phase 2: 所有验证通过，开始 SSE ──────────────
+      resp.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+
+      const sendEvent = (event) => {
+        const data = JSON.stringify(event);
+        resp.write(`data: ${data}\n\n`);
+      };
 
       // 创建 ActiveRun（管理生命周期）
       const activeRun = runManager.create(session.id);

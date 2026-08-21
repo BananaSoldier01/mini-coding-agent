@@ -217,8 +217,8 @@ async function runAgent(opts) {
               type: toolName === 'write_file' ? (result.action === 'created' ? 'create' : 'modify')
                 : toolName === 'delete_file' ? 'delete' : 'modify',
               path: result.path,
-              oldContent: result.before || null,
-              newContent: result.after || null,
+              oldContent: result.before,
+              newContent: result.after,
             });
           }
         } catch (err) {
@@ -248,6 +248,10 @@ async function runAgent(opts) {
       if (stopped) break;
     } else {
       finalContent = assistantMsg.content || '';
+      // 将最终 assistant 消息加入 canonical transcript
+      const finalAssistantMsg = { role: 'assistant', content: finalContent };
+      messages.push(finalAssistantMsg);
+      turnMessages.push(finalAssistantMsg);
       emit(onEvent, { type: 'done', content: finalContent, iteration });
       break;
     }

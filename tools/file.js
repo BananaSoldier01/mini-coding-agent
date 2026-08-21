@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { WorkspaceFileService } from '../fileservice.js';
+import { NON_EXISTENT } from '../tracker.js';
 
 class FileTools {
   constructor(workspace) {
@@ -40,10 +41,10 @@ class FileTools {
     const dir = path.dirname(absolute);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-    let before = null, existed = false;
+    let before = NON_EXISTENT, existed = false;
     if (fs.existsSync(absolute)) {
       existed = true;
-      try { before = fs.readFileSync(absolute, 'utf-8'); } catch {}
+      try { before = fs.readFileSync(absolute, 'utf-8'); } catch { before = NON_EXISTENT; }
     }
 
     fs.writeFileSync(absolute, content, 'utf-8');
@@ -139,8 +140,8 @@ class FileTools {
     if (!fs.existsSync(absolute)) throw new Error(`文件不存在: ${filePath}`);
     const stat = fs.statSync(absolute);
 
-    let before = null;
-    try { before = fs.readFileSync(absolute, 'utf-8'); } catch {}
+    let before = NON_EXISTENT;
+    try { before = fs.readFileSync(absolute, 'utf-8'); } catch { before = NON_EXISTENT; }
 
     fs.rmSync(absolute, { recursive: stat.isDirectory() });
 
@@ -149,7 +150,7 @@ class FileTools {
       action: 'deleted',
       wasDirectory: stat.isDirectory(),
       before,
-      after: null,
+      after: NON_EXISTENT,
     };
   }
 
