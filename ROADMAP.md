@@ -1,11 +1,11 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.4.0.2 — Control Integrity Closure**（当前）
+**V0.4.0.3 — Final Hotfix**（已完成）
 
-核心目标：Git 仓库、测试结果、文档和 Builder 报告四者描述的是同一个现实。
+**Next: V0.4.1 — Workspace Experience**
 
-## 版本路线
+核心目标：让用户看得懂 Agent 在做什么、控制得住权限、审得清结果。
 
 ## 版本路线
 
@@ -87,7 +87,7 @@
 - Completion Summary: 真实 command evidence
 - 状态：已完成
 
-#### V0.4.0.2 — Control Integrity Closure（当前）
+#### V0.4.0.2 — Control Integrity Closure
 - Agent import/symbol 一致性修复 + ESM import gate
 - Safe 模式真正区别于 Standard（write/edit/delete/shell → requireApproval）
 - 首次 Session 创建携带 permissionMode
@@ -95,37 +95,20 @@
 - Approval 计数：Server 确认后才增加
 - Run Status: approval recovery + 移除伪造 Verifying
 - npm start 启动级验收通过
-- 状态：进行中
-
-### V0.2 — Core Overhaul
-- Session 接入 Agent（真实多轮上下文）
-- 统一 Tool Execution Policy
-- Approval 机制
-- ActiveRun / Cancel 生命周期
-- Shell secret scrubming
-- symlink escape 防护
-- ranged read
-- LCS-based diff
-- 自动测试（58 tests）
 - 状态：已完成
 
-### V0.3 — Harness Reliability
-- buildFileTree 回归修复
-- WorkspaceFileService 统一文件访问
-- Shell Policy 改为 capability-based（SAFE/APPROVAL/DENY）
-- Sensitive file policy 精确匹配
-- Session Transcript 重构（canonical messages）
-- Run Net Diff（baseline → current）
-- Run-scoped Approval 隔离
-- 跨平台 process tree kill + terminationReason
-- 大文件流式 range read
-- TrustedWorkspaceRegistry
-- 同源 CORS 收紧
-- 106 tests（59 unit + 47 integration）
+#### V0.4.0.3 — Final Hotfix
+- NON_EXISTENT import 修复（agent/index.js）
+- _collectFiles: isBinary buffer 零填充 bug 修复
+- Approval evidence: resolved=true 才计数
+- test/permission.test.js: 14 tests 永久化
+- test/integration/directory-delete.test.js: 2 tests 永久化
+- V0.4.0 Control & Visibility 阶段正式关闭
 - 状态：已完成
 
-### V0.4 — 下一步方向（待 Reviewer 确认）
-_待定，根据下一轮 Review 结果确定。_
+### V0.4.1 — Workspace Experience（下一步）
+- 让用户看得懂 Agent 在做什么、控制得住权限、审得清结果
+- 具体方向待 Reviewer 确认
 
 ## 长期方向
 
