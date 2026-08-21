@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.4.0.1 — Control Integrity Hotfix**（当前）
+**V0.4.0.2 — Control Integrity Closure**（当前）
 
 核心目标：Git 仓库、测试结果、文档和 Builder 报告四者描述的是同一个现实。
 
@@ -77,7 +77,7 @@
 - Directory delete: real before content snapshot
 - 状态：已完成
 
-#### V0.4.0.1 — Control Integrity Hotfix（当前）
+#### V0.4.0.1 — Control Integrity Hotfix
 - Permission decision merge 重构（Base Policy 始终执行）
 - Hard Deny 永远不可被 Mode 覆盖
 - Safe 的 Approval 不可被 base allow 降级
@@ -85,7 +85,16 @@
 - Permission UI ↔ Session 一致性（PATCH 成功后才更新 UI）
 - Directory delete: NON_EXISTENT import + integration regression
 - Completion Summary: 真实 command evidence
-- Permission merge matrix: 9/9 tests
+- 状态：已完成
+
+#### V0.4.0.2 — Control Integrity Closure（当前）
+- Agent import/symbol 一致性修复 + ESM import gate
+- Safe 模式真正区别于 Standard（write/edit/delete/shell → requireApproval）
+- 首次 Session 创建携带 permissionMode
+- Completion Summary: Run-scoped evidence reset
+- Approval 计数：Server 确认后才增加
+- Run Status: approval recovery + 移除伪造 Verifying
+- npm start 启动级验收通过
 - 状态：进行中
 
 ### V0.2 — Core Overhaul
