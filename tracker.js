@@ -164,7 +164,15 @@ class ChangeTracker {
         continue;
       }
 
-      files.push({ path: filePath, type, diff, added, removed });
+      files.push({
+    path: filePath,
+    type,
+    diff,
+    added,
+    removed,
+    before: oldExists ? (oldVal || '') : '',
+    after: newExists ? (newVal || '') : '',
+  });
     }
 
     return { files, totalChanges: files.length };

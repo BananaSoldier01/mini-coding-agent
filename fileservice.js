@@ -131,8 +131,8 @@ class WorkspaceFileService {
       throw new Error(`不是文件: ${relPath}`);
     }
 
-    // 二进制文件检查
-    if (isBinaryExtension(absolute)) {
+    // 二进制文件检查 — 使用统一 Binary Detection（唯一事实源）
+    if (this.isBinary(relPath)) {
       throw new Error(`二进制文件不支持读取: ${relPath}`);
     }
 

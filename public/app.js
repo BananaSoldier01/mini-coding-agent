@@ -96,10 +96,10 @@ function openFileDiff(relPath) {
     return;
   }
 
-  let before = diff.before || '';
-  let after = diff.after || '';
+  const before = diff.before || '';
+  const after = diff.after || '';
 
-  if (diff.type === 'deleted') {
+  if (diff.type === 'delete') {
     $('#fvBody').innerHTML = `
       <div class="fv-empty">
         File deleted in this run<br>
@@ -257,16 +257,17 @@ function renderTreeNode(node, depth) {
 function getChangeBadge(relPath) {
   const diff = state.changes.find(c => c.path === relPath);
   if (!diff) return null;
-  if (diff.type === 'added') return { text: 'A', cls: 'tree-badge-add' };
-  if (diff.type === 'deleted') return { text: 'D', cls: 'tree-badge-delete' };
-  if (diff.type === 'modified') return { text: 'M', cls: 'tree-badge-modify' };
+  if (diff.type === 'create') return { text: 'A', cls: 'tree-badge-add' };
+  if (diff.type === 'delete') return { text: 'D', cls: 'tree-badge-delete' };
+  if (diff.type === 'modify') return { text: 'M', cls: 'tree-badge-modify' };
   return null;
 }
 
 /* ── New Session ───────────────────────────────────── */
 async function newSession() {
   if (state.running) {
-    if (!confirm('Agent 正在运行中，确定要创建新 Session 吗？')) return;
+    $('#newSessionBtn').disabled = true;
+    return;
   }
   try {
     const data = await api('/api/session', {
@@ -340,10 +341,18 @@ async function init() {
   });
 
   // File tree delegation
-  $('#fileTree').addEventListener('click', (e) => {
+  $('#fileTree').addEventListener('click', async (e) => {
     const toggle = e.target.closest('[data-toggle]');
     if (toggle) {
-      toggleDir(toggle.dataset.toggle);
+      const path = toggle.dataset.toggle;
+      toggleDir(path);
+      // Lazy load if expanding a directory that hasn't been loaded
+      if (state.expandedDirs.has(path) && path !== '.') {
+        const node = findNode(state.fileTreeData, path);
+        if (node && (!node.children || node.children.length === 0)) {
+          await loadDirEntries(path);
+        }
+      }
       return;
     }
     const row = e.target.closest('.tree-row');
@@ -351,9 +360,32 @@ async function init() {
       selectFile(row.dataset.path);
       if (row.dataset.type === 'file') {
         openFileCurrent(row.dataset.path);
+      } else if (row.dataset.type === 'directory') {
+        const path = row.dataset.toggle || row.dataset.path;
+        if (path) {
+          toggleDir(path);
+          if (state.expandedDirs.has(path)) {
+            const node = findNode(state.fileTreeData, path);
+            if (node && (!node.children || node.children.length === 0)) {
+              await loadDirEntries(path);
+            }
+          }
+        }
       }
     }
   });
+
+function findNode(node, path) {
+  if (!node) return null;
+  if (node.path === path) return node;
+  if (node.children) {
+    for (const child of node.children) {
+      const found = findNode(child, path);
+      if (found) return found;
+    }
+  }
+  return null;
+}
 
   // Permission Mode selector — 仅在 PATCH 成功后更新 UI
   $('#modeSelect').addEventListener('change', async (e) => {
@@ -437,77 +469,63 @@ async function loadFileTree() {
     const data = await api('/api/files');
     state.workspace = data.workspace;
     $('#wsPath').textContent = data.workspace;
-    $('#fileTree').innerHTML = '';
-    $('#fileTree').appendChild(renderTree(data.tree));
+    state.expandedDirs.clear();
+    state.expandedDirs.add('.');
+    state.fileTreeData = null;
+    $('#fileTree').innerHTML = '<div class="tree-empty">加载中…</div>';
+    // Lazy load root
+    await loadDirEntries('.');
   } catch (err) {
     $('#fileTree').innerHTML = `<div class="tree-empty">加载失败: ${err.message}</div>`;
   }
 }
 
-function renderTree(node, depth = 0) {
-  if (!node) return document.createDocumentFragment();
-  const frag = document.createDocumentFragment();
-  const el = document.createElement('div');
-  el.className = 'tree-node';
-
-  const row = document.createElement('div');
-  row.className = 'tree-row';
-  row.style.paddingLeft = (8 + depth * 14) + 'px';
-
-  const toggle = document.createElement('span');
-  toggle.className = 'toggle' + (node.children?.length ? '' : ' empty');
-  toggle.textContent = node.children?.length ? '▸' : '';
-
-  const icon = document.createElement('span');
-  icon.className = 'icon';
-  icon.textContent = node.type === 'directory' ? '📁' : '📄';
-
-  const name = document.createElement('span');
-  name.className = 'name';
-  name.textContent = node.name;
-
-  row.appendChild(toggle);
-  row.appendChild(icon);
-  row.appendChild(name);
-  el.appendChild(row);
-
-  if (node.type === 'file') {
-    row.addEventListener('click', () => {
-      $$('.tree-row').forEach((r) => r.classList.remove('selected'));
-      row.classList.add('selected');
-      openFileViewer(node.path);
-    });
-  } else if (node.children?.length) {
-    toggle.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const children = el.querySelector('.tree-children');
-      if (children) {
-        const hidden = children.style.display === 'none';
-        children.style.display = hidden ? '' : 'none';
-        toggle.textContent = hidden ? '▾' : '▸';
-      }
-    });
-    const children = document.createElement('div');
-    children.className = 'tree-children';
-    children.style.display = depth === 0 ? '' : 'none';
-    if (depth === 0) toggle.textContent = '▾';
-    node.children.forEach((c) => children.appendChild(renderTree(c, depth + 1)));
-    el.appendChild(children);
+async function loadDirEntries(relPath) {
+  try {
+    const data = await api(`/api/files/list?path=${encodeURIComponent(relPath)}`);
+    if (!state.fileTreeData) {
+      state.fileTreeData = { name: '', path: '.', type: 'directory', children: [] };
+    }
+    // Merge entries into the tree at the right level
+    mergeEntries(state.fileTreeData, relPath, data.entries);
+    state.expandedDirs.add(relPath);
+    renderFileTree();
+  } catch (err) {
+    console.error('loadDirEntries failed:', relPath, err);
   }
-
-  frag.appendChild(el);
-  return frag;
 }
 
-async function openFileViewer(relPath) {
-  try {
-    const data = await api(`/api/files/read?path=${encodeURIComponent(relPath)}`);
-    $('#fvPath').textContent = relPath;
-    $('#fvContent').textContent = data.content;
-    $('#fileViewerModal').classList.add('open');
-  } catch (err) {
-    appendSystemMessage(`打开文件失败: ${err.message}`);
+function mergeEntries(root, relPath, entries) {
+  // Navigate to the target directory node
+  const parts = relPath === '.' ? [] : relPath.split('/');
+  let node = root;
+  for (const part of parts) {
+    if (!node.children) node.children = [];
+    let child = node.children.find(c => c.name === part && c.type === 'directory');
+    if (!child) {
+      child = { name: part, path: relPath, type: 'directory', children: [] };
+      node.children.push(child);
+    }
+    node = child;
   }
+  if (!node.children) node.children = [];
+  // Merge new entries (avoid duplicates)
+  for (const entry of entries) {
+    const existing = node.children.find(c => c.name === entry.name);
+    if (!existing) {
+      node.children.push({
+        name: entry.name,
+        path: entry.path,
+        type: entry.type,
+        children: entry.type === 'directory' ? [] : undefined,
+      });
+    }
+  }
+  // Sort: directories first, then files
+  node.children.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
 }
 
 /* ── Chat ───────────────────────────────────────────── */
@@ -624,52 +642,6 @@ function compactSummary(toolName, args) {
   }
 }
 
-function setToolCallResult(toolCallId, result, toolName) {
-  const el = document.getElementById('tc-' + toolCallId);
-  if (!el) return;
-  const status = el.querySelector('.tc-status');
-  const resultEl = el.querySelector('.tc-result');
-
-  if (result.error) {
-    status.textContent = '●';
-    status.className = 'tc-status error';
-    resultEl.innerHTML = `<pre>${escapeHtml(result.error)}</pre>`;
-  } else {
-    status.textContent = '✓';
-    status.className = 'tc-status done';
-    const summary = compactResultSummary(toolName, result);
-    resultEl.innerHTML = `<pre>${escapeHtml(summary)}</pre>`;
-  }
-
-  // 如果是文件修改，更新 diff 面板
-  if (toolName === 'edit_file' || toolName === 'write_file' || toolName === 'delete_file') {
-    if (result.path && !result.error) {
-      addDiffFromResult(toolName, result);
-    }
-  }
-}
-
-function compactResultSummary(toolName, result) {
-  if (result.error) return result.error;
-  switch (toolName) {
-    case 'run_command':
-      const parts = [];
-      if (result.exitCode !== undefined) parts.push(`exit=${result.exitCode}`);
-      if (result.timedOut) parts.push('TIMEOUT');
-      if (result.stdout) parts.push(result.stdout.slice(0, 200));
-      if (result.stderr) parts.push('STDERR: ' + result.stderr.slice(0, 200));
-      return parts.join('\n') || '(no output)';
-    case 'read_file':
-      return `${result.lines || 0} lines${result.hasMore ? ' (more…)' : ''}`;
-    case 'search_files':
-      return `${result.count} matches`;
-    case 'list_directory':
-      return `${result.count} entries`;
-    default:
-      return result.action || JSON.stringify(result).slice(0, 100);
-  }
-}
-
 /* ── Diff ───────────────────────────────────────────── */
 function addDiffFromResult(toolName, result) {
   const panel = $('#diffPanel');
@@ -763,6 +735,7 @@ function renderNetDiff(netDiff) {
 
   if (!netDiff || netDiff.totalChanges === 0) {
     panel.innerHTML = '<div class="diff-empty">本轮无净变更</div>';
+    state.changes = [];
     return;
   }
 
@@ -771,6 +744,17 @@ function renderNetDiff(netDiff) {
   summary.className = 'diff-summary';
   summary.textContent = `${netDiff.totalChanges} files changed`;
   panel.appendChild(summary);
+
+  // 统一 Change View Model: 填充 state.changes
+  state.changes = netDiff.files.map(f => ({
+    path: f.path,
+    type: f.type, // create | delete | modify
+    added: f.added || 0,
+    removed: f.removed || 0,
+    diff: f.diff || [],
+    before: f.before || '',
+    after: f.after || '',
+  }));
 
   // 每个文件
   for (const file of netDiff.files) {
@@ -786,7 +770,7 @@ function renderNetDiff(netDiff) {
 
     header.innerHTML = `
       <span class="badge ${badgeClass}">${badge}</span>
-      <span>${escapeHtml(file.path)}</span>
+      <span class="diff-file-name">${escapeHtml(file.path)}</span>
       <span class="stats">${stats}</span>
     `;
 
@@ -814,8 +798,14 @@ function renderNetDiff(netDiff) {
 
     fileEl.appendChild(header);
     fileEl.appendChild(body);
-    header.addEventListener('click', () => {
-      fileEl.classList.toggle('open');
+    header.addEventListener('click', (e) => {
+      if (e.target.closest('.stats')) {
+        fileEl.classList.toggle('open');
+        return;
+      }
+      // 点击文件名 → Inspector Diff
+      openFileDiff(file.path);
+      switchInspectorTab('file');
     });
     fileEl.classList.add('open');
     panel.appendChild(fileEl);
@@ -949,6 +939,7 @@ async function sendMessage() {
   state.approvals = { approved: 0, rejected: 0 };
   $('#sendBtn').disabled = true;
   $('#stopBtn').disabled = false;
+  $('#newSessionBtn').disabled = true;
   setStatus('running', 'running');
 
   if (!state.sessionId) {
@@ -969,6 +960,7 @@ async function sendMessage() {
       state.running = false;
       $('#sendBtn').disabled = false;
       $('#stopBtn').disabled = true;
+      $('#newSessionBtn').disabled = false;
       return;
     }
   }
@@ -1027,6 +1019,7 @@ async function sendMessage() {
     state.running = false;
     $('#sendBtn').disabled = false;
     $('#stopBtn').disabled = true;
+    $('#newSessionBtn').disabled = false;
     setStatus('idle', 'idle');
     state.currentAssistant = null;
     state.currentThinking = null;

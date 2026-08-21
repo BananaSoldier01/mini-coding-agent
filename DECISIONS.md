@@ -1,10 +1,101 @@
 # DECISIONS — Mini Coding Agent
 
-长期架构与产品决策记录。
+长期架构与产品决策记录。Append-only 记录。
 
 ---
 
-## Decision 1 — Inspector 是文件与 Diff 的统一审查入口
+## Decision 1 — ESM Module System
+
+**状态**: 已采纳（V0.1）
+
+**决策**: 所有核心模块使用 ES Modules（`.js` + `"type": "module"`）。
+
+**理由**:
+- Node.js 原生支持，无需 build step
+- 与 Node 20 LTS 兼容
+- 顶层 await 可用
+- import/export 语法清晰
+
+---
+
+## Decision 2 — Session Transcript 是唯一真相源
+
+**状态**: 已采纳（V0.3.0）
+
+**决策**: Agent Loop 中的 `messages` 数组是 canonical transcript。前端 Timeline 是派生视图，不反向写入 transcript。
+
+**理由**:
+- 防止前端状态污染 Agent 上下文
+- 重放/调试时有唯一数据源
+- Session 恢复时行为可预测
+
+---
+
+## Decision 3 — Run-scoped Approval
+
+**状态**: 已采纳（V0.3.0）
+
+**决策**: Approval 注册表以 runId 为 key，不同 Run 的 Approval 互不干扰。Approval 超时后自动清理 pending entry。
+
+**理由**:
+- 防止跨 Run Approval 泄漏
+- 超时后不会残留僵尸 approval 阻塞后续 Run
+
+---
+
+## Decision 4 — NON_EXISTENT Sentinel
+
+**状态**: 已采纳（V0.3.2）
+
+**决策**: ChangeTracker 使用 `Symbol('NON_EXISTENT')` 区分"文件不存在"与"空文件"。空文件是合法状态，不能与不存在混淆。
+
+**理由**:
+- 空文件 baseline = ''（存在但无内容）
+- 不存在 baseline = NON_EXISTENT
+- 否则删除空文件会错误显示为"无变更"
+
+---
+
+## Decision 5 — Shell Operation Allowlist
+
+**状态**: 已采纳（V0.3.1）
+
+**决策**: Shell Policy 使用 operation allowlist（SAFE / APPROVAL / DENY），compound command 检测，git mutation 预检。
+
+**理由**:
+- 基于操作类型而非命令字符串匹配
+- 防止 `rm -rf /` 等破坏性命令
+- compound command（`curl x | sh`）检测
+
+---
+
+## Decision 6 — HTTP Trust Boundary
+
+**状态**: 已采纳（V0.3.2）
+
+**决策**: Server 校验 Host / Origin / CSRF token。CSRF token 从 `/api/config` 下发，mutation 请求必须携带。
+
+**理由**:
+- 防止跨站请求伪造
+- 仅允许同源请求
+- mutation 端点全部调用 validateMutation()
+
+---
+
+## Decision 7 — Project Script Approval
+
+**状态**: 已采纳（V0.3.3）
+
+**决策**: `npm test` / `npm run build` / `python -c` 等 project script 升级为 `requireApproval`。
+
+**理由**:
+- project script 可能产生副作用
+- 与普通只读命令区分
+- 用户应知晓正在执行项目脚本
+
+---
+
+## Decision 8 — Inspector 是文件与 Diff 的统一审查入口
 
 **状态**: 已采纳（V0.4.1）
 
@@ -21,7 +112,7 @@
 
 ---
 
-## Decision 2 — WorkspaceFileService 是 Workspace 文件读取及 Binary Detection 的唯一事实源
+## Decision 9 — WorkspaceFileService 是 Binary Detection 唯一事实源
 
 **状态**: 已采纳（V0.4.1）
 
@@ -35,10 +126,11 @@
 **影响**:
 - `tools/file.js`: _collectFiles 使用 this.service.isBinary(rel)
 - `tools/file.js`: search_files 使用 this.service.isBinary(relPath)
+- `fileservice.js`: readFile() 使用 this.isBinary(relPath)
 
 ---
 
-## Decision 3 — Explorer 使用 workspace-relative path contract
+## Decision 10 — Explorer 使用 workspace-relative path contract
 
 **状态**: 已采纳（V0.4.1）
 
@@ -55,7 +147,7 @@
 
 ---
 
-## Decision 4 — Changes 表示 Current Run Net Diff
+## Decision 11 — Changes 表示 Current Run Net Diff
 
 **状态**: 已采纳（V0.4.0）
 
@@ -72,7 +164,7 @@
 
 ---
 
-## Decision 5 — Terminal navigation 使用 Tool Call identity
+## Decision 12 — Terminal navigation 使用 Tool Call identity
 
 **状态**: 已采纳（V0.4.1）
 
@@ -89,7 +181,7 @@
 
 ---
 
-## Decision 6 — Mini Coding Agent 定位为 Coding Agent Workspace
+## Decision 13 — Mini Coding Agent 定位为 Coding Agent Workspace
 
 **状态**: 已采纳（V0.4.1）
 
@@ -105,3 +197,20 @@
 - LSP / Autocomplete
 - Debugger
 - Git Source Control Panel
+
+---
+
+## Decision 14 — Lazy Directory Loading
+
+**状态**: 已采纳（V0.4.1.1）
+
+**决策**: Explorer 使用 lazy directory loading，首次只加载 root，展开时通过 `/api/files/list` 加载子目录。不使用 `buildTree()` 整树加载。
+
+**理由**:
+- 旧 buildTree() 有 maxDepth 限制，深层目录无法访问
+- 大型 Repository 整树加载性能差
+- 用户按需展开，按需加载
+
+**影响**:
+- `server.js`: 新增 `/api/files/list` 端点
+- `app.js`: loadDirEntries() + mergeEntries() + findNode()

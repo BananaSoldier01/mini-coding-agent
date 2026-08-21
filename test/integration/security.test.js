@@ -65,7 +65,8 @@ test('Security: allows safe commands', () => {
   assert.strictEqual(evaluateShell('ls').decision, 'allow');
   assert.strictEqual(evaluateShell('pwd').decision, 'allow');
   assert.strictEqual(evaluateShell('git status').decision, 'allow');
-  assert.strictEqual(evaluateShell('npm test').decision, 'allow');
+  // npm test is a project script → requireApproval (V0.3.3+ security policy)
+  assert.strictEqual(evaluateShell('npm test').decision, 'requireApproval');
   assert.strictEqual(evaluateShell('cat package.json').decision, 'allow');
 });
 
@@ -92,16 +93,18 @@ test('Security: requires approval for destructive file ops', () => {
   assert.strictEqual(evaluateShell('rm -rf node_modules').decision, 'requireApproval');
 });
 
-test('Security: allows npm run build', () => {
-  assert.strictEqual(evaluateShell('npm run build').decision, 'allow');
+test('Security: requires approval for npm run build', () => {
+  // npm run build is a project script → requireApproval (V0.3.3+ security policy)
+  assert.strictEqual(evaluateShell('npm run build').decision, 'requireApproval');
 });
 
 test('Security: allows git diff', () => {
   assert.strictEqual(evaluateShell('git diff').decision, 'allow');
 });
 
-test('Security: allows python script execution', () => {
-  assert.strictEqual(evaluateShell('python3 -c "print(1)"').decision, 'allow');
+test('Security: requires approval for python script execution', () => {
+  // python -c is a project script → requireApproval (V0.3.3+ security policy)
+  assert.strictEqual(evaluateShell('python3 -c "print(1)"').decision, 'requireApproval');
 });
 
 test('Security: denies curl | sh pattern', () => {
