@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.4.0 — Control & Visibility**（进行中）
+**V0.4.0.1 — Control Integrity Hotfix**（当前）
 
 核心目标：Git 仓库、测试结果、文档和 Builder 报告四者描述的是同一个现实。
 
@@ -67,7 +67,7 @@
 
 ### V0.4.x — Product Experience
 
-#### V0.4.0 — Control & Visibility（当前）
+#### V0.4.0 — Control & Visibility
 - Permission Mode: Safe/Standard/Full Access, Session-scoped
 - Agent Run Status: Thinking→Reading→Searching→Editing→Running→Waiting→Verifying→Completed
 - Agent Activity Timeline: 人类可读的工具调用展示
@@ -75,6 +75,17 @@
 - Changes Panel: Net Diff 一级展示
 - Completion Summary: 结构化总结
 - Directory delete: real before content snapshot
+- 状态：已完成
+
+#### V0.4.0.1 — Control Integrity Hotfix（当前）
+- Permission decision merge 重构（Base Policy 始终执行）
+- Hard Deny 永远不可被 Mode 覆盖
+- Safe 的 Approval 不可被 base allow 降级
+- Full Access: requireApproval → allow
+- Permission UI ↔ Session 一致性（PATCH 成功后才更新 UI）
+- Directory delete: NON_EXISTENT import + integration regression
+- Completion Summary: 真实 command evidence
+- Permission merge matrix: 9/9 tests
 - 状态：进行中
 
 ### V0.2 — Core Overhaul
