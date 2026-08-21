@@ -13,7 +13,11 @@ class ApprovalScope {
 
   register(toolCallId, timeoutMs = 5 * 60 * 1000) {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(false), timeoutMs);
+      const timer = setTimeout(() => {
+        // timeout 后清理 pending entry，防止残留
+        this.pending.delete(toolCallId);
+        resolve(false);
+      }, timeoutMs);
       this.pending.set(toolCallId, { resolve, timer });
     });
   }

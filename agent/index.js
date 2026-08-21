@@ -213,6 +213,7 @@ async function runAgent(opts) {
 
           // 记录变更到 tracker（使用真实 before/after 内容）
           if (result.path && (toolName === 'write_file' || toolName === 'edit_file' || toolName === 'delete_file')) {
+            // 主文件
             tracker.record({
               type: toolName === 'write_file' ? (result.action === 'created' ? 'create' : 'modify')
                 : toolName === 'delete_file' ? 'delete' : 'modify',
@@ -220,6 +221,17 @@ async function runAgent(opts) {
               oldContent: result.before,
               newContent: result.after,
             });
+            // 目录删除：记录子文件
+            if (result.deletedFiles && result.deletedFiles.length > 0) {
+              for (const subPath of result.deletedFiles) {
+                tracker.record({
+                  type: 'delete',
+                  path: subPath,
+                  oldContent: NON_EXISTENT,
+                  newContent: NON_EXISTENT,
+                });
+              }
+            }
           }
         } catch (err) {
           result = { error: err.message };

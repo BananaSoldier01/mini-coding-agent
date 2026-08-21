@@ -140,18 +140,40 @@ class FileTools {
     if (!fs.existsSync(absolute)) throw new Error(`文件不存在: ${filePath}`);
     const stat = fs.statSync(absolute);
 
-    let before = NON_EXISTENT;
-    try { before = fs.readFileSync(absolute, 'utf-8'); } catch { before = NON_EXISTENT; }
+    const deletedFiles = [];
+    if (stat.isDirectory()) {
+      // 递归收集目录中的普通文件（用于 Net Diff baseline）
+      this._collectFiles(absolute, deletedFiles);
+    }
 
-    fs.rmSync(absolute, { recursive: stat.isDirectory() });
+    fs.rmSync(absolute, { recursive: true });
 
     return {
       path: this.service.sandbox.relative(absolute),
       action: 'deleted',
       wasDirectory: stat.isDirectory(),
-      before,
+      before: NON_EXISTENT,
       after: NON_EXISTENT,
+      deletedFiles: deletedFiles.map((f) => this.service.sandbox.relative(f)),
     };
+  }
+
+  /** 递归收集目录中的普通文件（跳过敏感文件和 binary） */
+  _collectFiles(dir, result) {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          this._collectFiles(full, result);
+        } else if (entry.isFile()) {
+          const rel = this.service.sandbox.relative(full);
+          if (!this.service.isSensitive(rel) && !this.service.isBinary(full)) {
+            result.push(full);
+          }
+        }
+      }
+    } catch {}
   }
 
   _walk(dir, cb) {

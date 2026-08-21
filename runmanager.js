@@ -9,7 +9,7 @@
  */
 
 import { registry as approvalRegistry } from './approval.js';
-import { spawn as spawnProcess } from 'child_process';
+import { spawn as spawnProcess, execSync } from 'child_process';
 
 // ── 终止原因 ──────────────────────────────────────────
 const TERMINATION_REASON = {
@@ -92,9 +92,8 @@ function killProcessTree(child) {
 
   try {
     if (process.platform === 'win32') {
-      // Windows: taskkill /T /F 杀进程树
+      // Windows: taskkill /T /F 杀进程树（ESM-compatible）
       try {
-        const { execSync } = require('child_process');
         execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore', timeout: 5000 });
       } catch {}
       // 兜底：直接 kill

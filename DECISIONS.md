@@ -132,3 +132,60 @@ Express 在 V0.3 中已从 dependencies 移除。项目使用 Node.js 原生 `ht
 - V0.3 改为严格同源：仅允许 `http://127.0.0.1:PORT` 的 origin
 
 **Trade-off**: 无 Origin 的请求（curl/CLI）仍然允许，不影响开发调试。
+
+---
+
+## D-010: 为什么使用 NON_EXISTENT sentinel 区分"不存在"与"空文件"？
+
+**日期**: V0.3.2  
+**状态**: 已确定
+
+**理由**:
+- `value || null` 会将空文件 `""` 误判为不存在
+- 删除操作后文件变为不存在，需要与空文件区分
+- 使用 Symbol('NON_EXISTENT') 作为 sentinel，确保语义精确
+
+**实现**: `tracker.js` 中 `NON_EXISTENT` 常量，`record()` 和 `getNetDiff()` 均使用它。
+
+---
+
+## D-011: 为什么 Shell SAFE 使用 operation allowlist 而非 executable allowlist？
+
+**日期**: V0.3.1  
+**状态**: 已确定
+
+**理由**:
+- V0.2 的 executable allowlist 允许 `cat`/`cp`/`mv` 等 executable，但这些可被用于读取敏感文件
+- V0.3.1 改为 operation allowlist：只允许明确安全的操作（`pwd`/`git status`/`git diff` 等）
+- 未知命令 → REQUIRE_APPROVAL，而不是 SAFE
+
+**Trade-off**: 更多命令需要用户确认，但安全性提升。
+
+---
+
+## D-012: 为什么 Project Script 默认 REQUIRE_APPROVAL？
+
+**日期**: V0.3.3  
+**状态**: 已确定
+
+**理由**:
+- Agent 可以修改 `package.json` 后执行 `npm test` / `npm run build`
+- 这相当于间接执行任意代码
+- 没有 OS-level sandbox 时，不能假设项目脚本安全
+- V0.4 Permission Modes 可以进一步区分
+
+**Trade-off**: 用户需要多一步确认，但防止了权限升级攻击。
+
+---
+
+## D-013: 为什么引入 CSRF Local Session Token？
+
+**日期**: V0.3.3  
+**状态**: 已确定
+
+**理由**:
+- 即使 Host/Origin 验证严格，恶意网页仍可能通过 DNS rebinding 或用户诱导点击发起请求
+- 启动时生成 `crypto.randomBytes(16)` token，前端从 `/api/config` 获取后附加到所有 mutation 请求
+- Server 对 mutation route 统一执行 `validateMutation()`
+
+**Trade-off**: 增加了一次请求往返（获取 token），但安全性提升明显。

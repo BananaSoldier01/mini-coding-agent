@@ -18,6 +18,7 @@ const state = {
 /* ── Init ──────────────────────────────────────────── */
 async function init() {
   const cfg = await api('/api/config');
+  if (cfg.localToken) localToken = cfg.localToken;
   state.workspace = cfg.workspace;
   $('#wsPath').textContent = state.workspace;
   $('#cfgEndpoint').value = cfg.llm.endpoint || '';
@@ -63,14 +64,30 @@ async function init() {
 }
 
 /* ── API ───────────────────────────────────────────── */
+let localToken = null;
+
 async function api(url, opts) {
+  const headers = { 'Content-Type': 'application/json' };
+  // Mutation 请求携带 CSRF token
+  const method = (opts?.method || 'GET').toUpperCase();
+  if (method !== 'GET' && localToken) {
+    headers['X-Local-Token'] = localToken;
+  }
   const res = await fetch(url, {
-    method: opts?.method || 'GET',
-    headers: { 'Content-Type': 'application/json' },
+    method,
+    headers,
     body: opts?.body ? JSON.stringify(opts.body) : undefined,
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
+}
+
+async function loadConfig() {
+  try {
+    const cfg = await api('/api/config');
+    if (cfg.localToken) localToken = cfg.localToken;
+    return cfg;
+  } catch { return null; }
 }
 
 /* ── File Tree ─────────────────────────────────────── */

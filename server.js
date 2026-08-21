@@ -13,6 +13,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import url from 'url';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { runAgent } from './agent/index.js';
@@ -32,7 +33,7 @@ const DEFAULT_WORKSPACE = config.workspace;
 const sessionManager = new SessionManager();
 
 // ── Local Session Token（CSRF 防护）─────────────────
-const LOCAL_SESSION_TOKEN = `tok_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+const LOCAL_SESSION_TOKEN = 'tok_' + crypto.randomBytes(16).toString('hex');
 
 function validateMutation(req) {
   const v = validateRequest(req);
@@ -151,11 +152,14 @@ const server = http.createServer(async (req, resp) => {
         },
         workspace: config.workspace,
         port: config.port,
+        localToken: LOCAL_SESSION_TOKEN,
         trustedWorkspaces: workspaceRegistry.list(),
       });
     }
 
     if (pathname === '/api/config' && method === 'POST') {
+      const mv = validateMutation(req);
+      if (!mv.ok) return sendError(resp, mv.status, mv.reason);
       const body = await readBody(req);
       const newConfig = JSON.parse(body);
       const current = loadConfig();
@@ -179,6 +183,8 @@ const server = http.createServer(async (req, resp) => {
     }
 
     if (pathname === '/api/workspaces' && method === 'POST') {
+      const mv = validateMutation(req);
+      if (!mv.ok) return sendError(resp, mv.status, mv.reason);
       const body = JSON.parse(await readBody(req));
       const { path: wsPath, action } = body;
       if (action === 'add') {
@@ -222,6 +228,8 @@ const server = http.createServer(async (req, resp) => {
 
     // ── API: Session ─────────────────────────────────
     if (pathname === '/api/session' && method === 'POST') {
+      const mv = validateMutation(req);
+      if (!mv.ok) return sendError(resp, mv.status, mv.reason);
       const body = JSON.parse(await readBody(req));
       const ws = body.workspace || config.workspace;
       if (!workspaceRegistry.isTrusted(ws)) {
@@ -245,6 +253,8 @@ const server = http.createServer(async (req, resp) => {
 
     // ── API: 停止当前运行 ────────────────────────────
     if (pathname === '/api/stop' && method === 'POST') {
+      const mv = validateMutation(req);
+      if (!mv.ok) return sendError(resp, mv.status, mv.reason);
       const body = JSON.parse(await readBody(req));
       const { sessionId } = body;
       const ok = runManager.stop(sessionId);
@@ -254,6 +264,8 @@ const server = http.createServer(async (req, resp) => {
     // ── SSE: 运行 Agent ──────────────────────────────
     if (pathname === '/api/run' && method === 'POST') {
       // ── Phase 1: 解析 + 验证（在写 SSE headers 之前）──
+      const mv = validateMutation(req);
+      if (!mv.ok) return sendError(resp, mv.status, mv.reason);
       const body = JSON.parse(await readBody(req));
       const { task, workspace, sessionId, config: clientConfig } = body;
       const ws = workspace || config.workspace;
@@ -340,6 +352,8 @@ const server = http.createServer(async (req, resp) => {
 
     // ── API: 审批响应 ────────────────────────────────
     if (pathname === '/api/approve' && method === 'POST') {
+      const mv = validateMutation(req);
+      if (!mv.ok) return sendError(resp, mv.status, mv.reason);
       const body = JSON.parse(await readBody(req));
       const { runId, toolCallId, approved } = body;
       const ok = approvalRegistry.resolve(runId, toolCallId, approved);

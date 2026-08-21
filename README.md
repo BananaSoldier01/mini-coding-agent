@@ -2,22 +2,40 @@
 
 一个可在本地 workspace 中执行编码任务的轻量级 Agent Harness。
 
+**当前版本**: V0.3.3 — Delivery Integrity
+
 ## 特性
 
-- **完整 Agent Loop** — LLM 分析 → 调用工具 → 获取结果 → 继续推理 → 修改项目 → 运行验证 → 完成任务
-- **多轮会话上下文** — 同一 session 内后续任务理解前文，自动 prune 超长上下文
-- **基础工具能力** — 浏览目录、读取文件（支持范围读取）、搜索代码、创建/修改文件、执行 shell 命令、展示 diff
+- **Agent Loop** — LLM 分析 → 调用工具 → 获取结果 → 继续推理 → 修改项目 → 完成任务
+- **多轮会话上下文** — 同一 session 内后续任务理解前文
+- **基础工具能力** — 浏览目录、读取文件、搜索代码、创建/修改文件、执行 shell 命令、展示 diff
 - **统一 Tool Policy** — `policy.js` 评估每个 tool call → allow / deny / requireApproval
-- **Shell Capability Policy** — `shellpolicy.js` 从 denylist 改为 allowlist/capability 思维：SAFE / APPROVAL / DENY 三级
+- **Shell Capability Policy** — `shellpolicy.js` 按 operation 分类：SAFE / APPROVAL / DENY 三级
 - **ActiveRun 生命周期** — `runmanager.js` 管理 sessionId → ActiveRun，Stop 中止 LLM + kill process tree + cancel approval
 - **Run-scoped Approval** — 每个 Run 独立 approval scope，Stop A 不影响 B
 - **Session Transcript** — LLM Transcript 是唯一真相源，UI Event 只是观察者
 - **Run Net Diff** — 由 baseline → current 计算净变更，A → B → A 显示 No net change
-- **安全沙箱** — 文件操作严格 workspace scoped；Shell 使用 secret scrubbing + capability classification
+- **安全沙箱** — 文件操作严格 workspace scoped；Shell 使用 operation classification
 - **统一文件访问** — `WorkspaceFileService` 由 Agent Tool / Web API 共同复用
 - **可替换 Provider** — 抽象 LLM 层，支持任何 OpenAI-compatible API
 - **流式输出** — Token 级流式展示，Tool Call 实时可见
 - **Web UI** — 开发者工具风格：文件树、对话、Changes、Terminal
+- **CI** — GitHub Actions 自动运行单元测试和集成测试
+
+## 安全边界
+
+- **文件操作**：严格 workspace scoped，敏感文件（.env/.ssh/key 等）拒绝读写
+- **Shell 命令**：按 operation 分类，SAFE 操作自动执行，其他需用户确认
+- **HTTP 访问**：仅限 127.0.0.1，严格 Host/Origin 验证，CSRF token 防护
+- **Agent 权限**：修改 package.json 后执行 npm script 需要用户确认（项目脚本不视为安全）
+
+## 已知限制
+
+- **Shell 命令在 OS 层面不受 workspace 限制** — 安全模型依赖 operation classification + 用户监督
+- **大文件范围读取** — 行计数不精确，UTF-8 chunk boundary 处理待完善
+- **Diff 性能** — 使用 LCS 算法 O(m×n)，大文件性能不佳（V0.4 计划迁移到 Myers）
+- **Windows 平台** — process tree kill 已实现但未实际验证
+- **浏览器 E2E** — 未引入 Playwright 或其他 browser automation
 
 ## 快速启动
 

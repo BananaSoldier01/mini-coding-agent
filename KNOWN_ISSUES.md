@@ -107,3 +107,50 @@ LLM 调用失败时（网络超时、API error），Agent Loop 直接 break，�
 当前日志使用 `console.log` / `console.error`，没有结构化格式，不支持日志级别过滤和 tracing。
 
 **计划版本**: V0.4+（可选：引入结构化日志 + tracing）
+
+---
+
+## K-007: Windows Process Tree Kill 未实际验证
+
+**发现版本**: V0.3.3  
+**当前状态**: 已实现，未验证  
+**严重程度**: 中（跨平台可靠性）
+
+**描述**:
+Windows 分支的 `taskkill /T /F` 已改为 ESM-compatible 实现，但当前开发平台为 Linux，Windows 行为未实际测试。
+
+**当前缓解措施**:
+- 代码已从 `require('child_process')` 迁移到 ESM import
+- Linux/macOS 平台已验证 process group kill
+
+**计划版本**: 需要在 Windows 主机上验证
+
+---
+
+## K-008: 浏览器 E2E 测试未引入
+
+**发现版本**: V0.3.3  
+**当前状态**: 未开始  
+**严重程度**: 低
+
+**描述**:
+Playwright 或其他 browser E2E 测试未引入。当前仅通过 Node.js 脚本模拟 HTTP 请求验证核心链路。
+
+**计划版本**: V0.4+（可选）
+
+---
+
+## K-009: Project Script 权限升级
+
+**发现版本**: V0.3.3  
+**当前状态**: 已缓解  
+**严重程度**: 中
+
+**描述**:
+Agent 可以修改 `package.json` 后执行 `npm test` / `npm run build`，相当于间接执行任意代码。
+
+**当前缓解措施**:
+- V0.3.3 将 npm test/build/lint 从 SAFE 移至 REQUIRE_APPROVAL
+- 用户需要确认后才执行项目脚本
+
+**计划版本**: V0.4 Permission Modes 可进一步区分

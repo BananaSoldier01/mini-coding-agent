@@ -22,13 +22,14 @@ const SAFE_OPERATIONS = [
   { op: 'stat', match: (c) => /^\s*stat\b/.test(c) },
   { op: 'file', match: (c) => /^\s*file\b/.test(c) },
 
-  // Git 只读操作
+  // Git 只读操作（仅明确 argv，不使用通配符）
   { op: 'git_status', match: (c) => /^\s*git\s+status\b/.test(c) },
   { op: 'git_diff', match: (c) => /^\s*git\s+diff\b/.test(c) },
   { op: 'git_log', match: (c) => /^\s*git\s+log\b/.test(c) },
   { op: 'git_branch_show', match: (c) => /^\s*git\s+branch\s+--show-current\b/.test(c) },
   { op: 'git_branch_list', match: (c) => /^\s*git\s+branch\b(?!.*--show-current)/.test(c) },
-  { op: 'git_remote', match: (c) => /^\s*git\s+remote\b/.test(c) },
+  { op: 'git_remote_list', match: (c) => /^\s*git\s+remote\b/.test(c) },
+  { op: 'git_remote_verbose', match: (c) => /^\s*git\s+remote\s+-v\b/.test(c) },
 
   // 文本查看（只读，不涉及敏感路径）
   { op: 'cat_normal', match: (c) => {
@@ -50,13 +51,9 @@ const SAFE_OPERATIONS = [
   { op: 'md5sum', match: (c) => /^\s*md5sum\b/.test(c) },
   { op: 'sha256sum', match: (c) => /^\s*sha256sum\b/.test(c) },
 
-  // 构建/测试（项目定义的 script，需诚实说明风险）
-  { op: 'npm_test', match: (c) => /^\s*npm\s+test\b/.test(c) },
-  { op: 'npm_run_test', match: (c) => /^\s*npm\s+run\s+test\b/.test(c) },
-  { op: 'npm_run_lint', match: (c) => /^\s*npm\s+run\s+lint\b/.test(c) },
-  { op: 'npm_run_build', match: (c) => /^\s*npm\s+run\s+build\b/.test(c) },
-  { op: 'npm_run_typecheck', match: (c) => /^\s*npm\s+run\s+typecheck\b/.test(c) },
-  { op: 'npm_run_type-check', match: (c) => /^\s*npm\s+run\s+type-check\b/.test(c) },
+  // 构建/测试（项目定义的 script — 默认 REQUIRE_APPROVAL，见 APPROVAL_PATTERNS）
+  // V0.3.3: Agent 可修改 package.json 后执行 npm script = 间接执行任意代码
+  // 移除 SAFE 分类，全部走 APPROVAL_PATTERNS
 
   // 环境信息（只读）
   { op: 'date', match: (c) => /^\s*date\b/.test(c) },
@@ -141,6 +138,9 @@ const APPROVAL_PATTERNS = [
   /^\s*npm\s+uninstall\b/i,
   /^\s*npm\s+exec\b/i,
   /^\s*npx\b/i,
+  // 项目脚本（Agent 可修改 package.json 后执行 = 间接任意代码）
+  /^\s*npm\s+test\b/i,
+  /^\s*npm\s+run\s+(test|build|lint|typecheck|type-check)\b/i,
   /^\s*pip\s+install\b/i,
   /^\s*pip3\s+install\b/i,
   /^\s*yarn\s+add\b/i,
@@ -160,6 +160,9 @@ const APPROVAL_PATTERNS = [
   /^\s*git\s+stash\b/i,
   /^\s*git\s+restore\b/i,
   /^\s*git\s+rm\b/i,
+  // Git branch 远程/删除 mutation
+  /^\s*git\s+branch\s+-[a-zA-Z]*[dD]/i,
+  /^\s*git\s+remote\s+(add|remove|set-url)\b/i,
 
   // 文件系统操作
   /^\s*rm\b/i,

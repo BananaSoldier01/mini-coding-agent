@@ -1,9 +1,11 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.3.0 — Harness Reliability**（已完成）
+**V0.3.3 — Delivery Integrity**（当前）
 
-核心目标：让 Harness Core 在真实任务、失败路径和边界条件下仍然正确，而不是"看起来正确"。
+核心目标：Git 仓库、测试结果、文档和 Builder 报告四者描述的是同一个现实。
+
+## 版本路线
 
 ## 版本路线
 
@@ -12,6 +14,49 @@
 - 基础工具：read/write/edit/search/list/run
 - 简单 Web UI
 - 状态：已完成
+
+### V0.3.x — Harness Reliability
+
+#### V0.3.0
+- buildFileTree 回归修复
+- WorkspaceFileService 统一文件访问
+- Shell Policy 改为 capability-based
+- Session Transcript 重构
+- Run Net Diff
+- Run-scoped Approval
+- 106 tests
+- 状态：已完成
+
+#### V0.3.1 — Integration Closure
+- Approval 协议修复（runId 传递）
+- Config POST 去重 JSON.parse
+- LLM AbortSignal 完整链路
+- RunManager race 修复
+- Shell operation allowlist
+- search_files 敏感文件防护
+- Session/Workspace 绑定
+- 状态：已完成
+
+#### V0.3.2 — Verification Closure
+- Run Net Diff: NON_EXISTENT sentinel
+- Canonical transcript: final assistant
+- Shell compound command 检测
+- HTTP Trust Boundary: Host/Origin/CSRF
+- /api/run 验证顺序修复
+- 状态：已完成
+
+#### V0.3.3 — Delivery Integrity（当前）
+- 修复报告与 Git 状态不一致
+- CSRF token 落地或删除
+- Shell SAFE 边界收紧
+- Project script 权限升级
+- 目录删除 Net Diff
+- Approval timeout cleanup
+- Windows ESM process kill
+- GitHub Actions CI
+- Regression tests
+- Version consistency
+- 状态：进行中
 
 ### V0.2 — Core Overhaul
 - Session 接入 Agent（真实多轮上下文）

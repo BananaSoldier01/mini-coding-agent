@@ -90,7 +90,13 @@ class ChangeTracker {
 
     // 第一次修改此 path 时，用 oldContent 初始化 baseline
     if (!this.baselineSnapshot.has(filePath)) {
-      this.baselineSnapshot.set(filePath, oldContent !== undefined ? oldContent : NON_EXISTENT);
+      // delete 操作：文件在 baseline 时存在（内容可能未知）
+      // create/modify 操作：使用 oldContent（可能为 NON_EXISTENT 表示不存在）
+      if (type === 'delete') {
+        this.baselineSnapshot.set(filePath, oldContent !== undefined && oldContent !== NON_EXISTENT ? oldContent : '');
+      } else {
+        this.baselineSnapshot.set(filePath, oldContent !== undefined ? oldContent : NON_EXISTENT);
+      }
     }
 
     // 更新 current
