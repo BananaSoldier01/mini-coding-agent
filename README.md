@@ -2,7 +2,7 @@
 
 一个可在本地 workspace 中执行编码任务的轻量级 Agent Harness。
 
-**当前版本**: V0.3.3 — Delivery Integrity
+**当前版本**: V0.4.0 — Control & Visibility
 
 ## 特性
 
@@ -21,6 +21,13 @@
 - **流式输出** — Token 级流式展示，Tool Call 实时可见
 - **Web UI** — 开发者工具风格：文件树、对话、Changes、Terminal
 - **CI** — GitHub Actions 自动运行单元测试和集成测试
+- **Permission Mode** — Safe / Standard / Full Access 三档权限，Session-scoped
+- **Agent Run Status** — Thinking / Reading / Searching / Editing / Running / Waiting / Verifying / Completed
+- **Agent Activity Timeline** — 人类可读的工具调用展示，点击可查看参数和结果
+- **Approval UX** — 人类可读的审批说明（运行命令？/ 删除文件？/ 修改 Git 状态？）
+- **Changes Panel** — Run Net Diff 一级展示，支持 A/M/D 文件标记
+- **Completion Summary** — 结构化任务总结（变更 / 耗时 / 审批 / 验证）
+- **Diff Viewer** — 点击 Changes 文件打开 Diff 查看器
 
 ## 安全边界
 
