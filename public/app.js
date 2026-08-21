@@ -29,6 +29,8 @@ const state = {
   expandedDirs: new Set(),
   selectedFile: null,
   fileTreeData: null,
+  // Run identity
+  activeRunId: null,
 };
 
 /* ── Inspector ─────────────────────────────────────── */
@@ -61,24 +63,36 @@ async function openFileCurrent(relPath) {
 
   try {
     const data = await api(`/api/files/read?path=${encodeURIComponent(relPath)}`);
-    if (data.error) {
-      if (data.binary) {
-        body.innerHTML = '<div class="fv-error">Binary file preview is not supported.</div>';
-      } else if (data.sensitive) {
-        body.innerHTML = '<div class="fv-error">Sensitive file — access denied.</div>';
-      } else if (data.tooLarge) {
-        body.innerHTML = '<div class="fv-error">File is too large for full preview.</div>';
-      } else {
-        body.innerHTML = '<div class="fv-error">Unable to open file: ' + escapeHtml(data.error) + '</div>';
-      }
-      return;
-    }
     state.fvContent = data.content;
     state.fvPath = data.path;
     $('#fvPath').textContent = data.path;
     renderFvBody();
   } catch (err) {
-    body.innerHTML = '<div class="fv-error">Unable to open file: ' + escapeHtml(err.message) + '</div>';
+    let html;
+    if (err instanceof ApiError) {
+      switch (err.code) {
+        case 'BINARY_FILE':
+          html = '<div class="fv-error">Binary file preview is not supported.</div>';
+          break;
+        case 'SENSITIVE_FILE':
+          html = '<div class="fv-error">Sensitive file — access denied.</div>';
+          break;
+        case 'FILE_TOO_LARGE':
+          html = '<div class="fv-error">File is too large for full preview.<br>Use Agent range reading for this file.</div>';
+          break;
+        case 'FILE_NOT_FOUND':
+          html = '<div class="fv-error">File no longer exists.</div>';
+          break;
+        case 'NOT_A_FILE':
+          html = '<div class="fv-error">Not a regular file.</div>';
+          break;
+        default:
+          html = '<div class="fv-error">Unable to open file: ' + escapeHtml(err.message) + '</div>';
+      }
+    } else {
+      html = '<div class="fv-error">Unable to open file: ' + escapeHtml(err.message) + '</div>';
+    }
+    body.innerHTML = html;
   }
 }
 
@@ -263,6 +277,93 @@ function getChangeBadge(relPath) {
   return null;
 }
 
+/* ── UI Lifecycle ──────────────────────────────────── */
+
+function setRunningUi(running) {
+  state.running = running;
+  $('#sendBtn').disabled = running;
+  $('#stopBtn').disabled = !running;
+  $('#newSessionBtn').disabled = running;
+  if (running) {
+    setStatus('running', 'running');
+  } else {
+    setStatus('idle', 'idle');
+  }
+}
+
+/* ── Session List ──────────────────────────────────── */
+async function openSessionList() {
+  try {
+    const data = await api('/api/sessions');
+    const list = $('#sessionList');
+    if (data.sessions.length === 0) {
+      list.innerHTML = '<div class="fv-empty">暂无 Session</div>';
+    } else {
+      list.innerHTML = '';
+      for (const s of data.sessions) {
+        const item = document.createElement('div');
+        item.className = 'session-item' + (s.id === state.sessionId ? ' active' : '');
+        item.innerHTML = `
+          <div class="session-item-info">
+            <div class="session-item-title">${escapeHtml(s.title)}</div>
+            <div class="session-item-meta">${s.workspace} · ${new Date(s.updatedAt).toLocaleString()}</div>
+          </div>
+          <span class="session-item-mode">${s.permissionMode}</span>
+        `;
+        item.onclick = () => switchSession(s.id);
+        list.appendChild(item);
+      }
+    }
+    $('#sessionListModal').classList.add('open');
+  } catch (err) {
+    appendSystemMessage('❌ 加载 Session 列表失败: ' + err.message);
+  }
+}
+
+async function switchSession(sessionId) {
+  $('#sessionListModal').classList.remove('open');
+  try {
+    const data = await api('/api/session/switch', {
+      method: 'POST',
+      body: { sessionId },
+    });
+    state.sessionId = data.sessionId;
+    state.permissionMode = data.permissionMode || 'standard';
+    $('#modeSelect').value = state.permissionMode;
+    updateModeLabel(state.permissionMode);
+
+    // 恢复 transcript
+    const chat = $('#chatMessages');
+    chat.innerHTML = '';
+    if (data.title) {
+      const welcome = document.createElement('div');
+      welcome.className = 'welcome';
+      welcome.innerHTML = `<div class="welcome-logo">◆</div><h1>Mini Coding Agent</h1><p class="welcome-sub">${escapeHtml(data.title)}</p>`;
+      chat.appendChild(welcome);
+    }
+
+    // 清空 Run observation
+    state.timeline = [];
+    state.changes = [];
+    state.commands = [];
+    state.approvals = { approved: 0, rejected: 0 };
+    state.activeRunId = null;
+    state.expandedDirs.clear();
+    state.expandedDirs.add('.');
+    state.selectedFile = null;
+    state.fvPath = null;
+    state.fvContent = null;
+
+    $('#timeline').innerHTML = '';
+    $('#completionSummary').style.display = 'none';
+    $('#diffPanel').innerHTML = '<div class="diff-empty">文件修改将在此显示</div>';
+    $('#fvBody').innerHTML = '<div class="fv-empty">选择一个文件或修改来查看</div>';
+    $('#terminalBody').innerHTML = '';
+  } catch (err) {
+    appendSystemMessage('❌ 切换 Session 失败: ' + err.message);
+  }
+}
+
 /* ── New Session ───────────────────────────────────── */
 async function newSession() {
   if (state.running) {
@@ -323,7 +424,12 @@ async function init() {
   $('#sendBtn').addEventListener('click', sendMessage);
   $('#stopBtn').addEventListener('click', stopTask);
   $('#configBtn').addEventListener('click', openConfig);
+  $('#sessionListBtn').addEventListener('click', openSessionList);
   $('#newSessionBtn').addEventListener('click', newSession);
+  $('#newSessionFromList').addEventListener('click', () => {
+    $('#sessionListModal').classList.remove('open');
+    newSession();
+  });
   $('#refreshTree').addEventListener('click', loadFileTree);
   $('#clearTerminal').addEventListener('click', () => { $('#terminalBody').innerHTML = ''; });
   $('#toggleTerminal').addEventListener('click', toggleTerminal);
@@ -439,6 +545,15 @@ function findNode(node, path) {
 /* ── API ───────────────────────────────────────────── */
 let localToken = null;
 
+class ApiError extends Error {
+  constructor(status, code, message) {
+    super(message || `HTTP ${status}`);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code || 'HTTP_ERROR';
+  }
+}
+
 async function api(url, opts) {
   const headers = { 'Content-Type': 'application/json' };
   // Mutation 请求携带 CSRF token
@@ -451,7 +566,18 @@ async function api(url, opts) {
     headers,
     body: opts?.body ? JSON.stringify(opts.body) : undefined,
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    let code = 'HTTP_ERROR';
+    let message = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body.error) {
+        code = body.error.code || code;
+        message = body.error.message || message;
+      }
+    } catch {}
+    throw new ApiError(res.status, code, message);
+  }
   return res.json();
 }
 
@@ -466,14 +592,15 @@ async function loadConfig() {
 /* ── File Tree ─────────────────────────────────────── */
 async function loadFileTree() {
   try {
-    const data = await api('/api/files');
-    state.workspace = data.workspace;
-    $('#wsPath').textContent = data.workspace;
+    // 使用 /api/config 获取 workspace 信息，不再用 /api/files 构建整树
+    const cfg = await api('/api/config');
+    state.workspace = cfg.workspace;
+    $('#wsPath').textContent = state.workspace;
     state.expandedDirs.clear();
     state.expandedDirs.add('.');
     state.fileTreeData = null;
     $('#fileTree').innerHTML = '<div class="tree-empty">加载中…</div>';
-    // Lazy load root
+    // Lazy load root only
     await loadDirEntries('.');
   } catch (err) {
     $('#fileTree').innerHTML = `<div class="tree-empty">加载失败: ${err.message}</div>`;
@@ -639,87 +766,6 @@ function compactSummary(toolName, args) {
       return (args.command || '').slice(0, 60);
     default:
       return JSON.stringify(args).slice(0, 60);
-  }
-}
-
-/* ── Diff ───────────────────────────────────────────── */
-function addDiffFromResult(toolName, result) {
-  const panel = $('#diffPanel');
-  if ($('.diff-empty')) panel.innerHTML = '';
-
-  // 更新摘要
-  updateDiffSummary();
-
-  const file = document.createElement('div');
-  file.className = 'diff-file';
-
-  const badge = toolName === 'write_file' ? (result.action === 'created' ? 'create' : 'modify') :
-                 toolName === 'delete_file' ? 'delete' : 'modify';
-  const header = document.createElement('div');
-  header.className = 'diff-file-header';
-  const stats = result.diff ? `${result.diff.filter(d=>d.type==='add').length}+/${result.diff.filter(d=>d.type==='remove').length}-` : '';
-  header.innerHTML = `
-    <span class="badge ${badge}">${badge}</span>
-    <span class="diff-file-name">${escapeHtml(result.path)}</span>
-    <span class="stats">${stats}</span>
-  `;
-  file.appendChild(header);
-
-  const body = document.createElement('div');
-  body.className = 'diff-file-body';
-
-  if (result.diff && result.diff.length) {
-    for (const line of result.diff) {
-      const dl = document.createElement('div');
-      dl.className = 'diff-line ' + line.type;
-      dl.textContent = (line.type === 'add' ? '+' : '-') + ' ' + line.content;
-      body.appendChild(dl);
-    }
-  } else if (toolName === 'write_file' && result.action === 'created') {
-    const dl = document.createElement('div');
-    dl.className = 'diff-line add';
-    dl.textContent = '+ (新建文件)';
-    body.appendChild(dl);
-  } else if (toolName === 'delete_file') {
-    const dl = document.createElement('div');
-    dl.className = 'diff-line remove';
-    dl.textContent = '- (删除)';
-    body.appendChild(dl);
-  }
-
-  file.appendChild(body);
-  header.addEventListener('click', (e) => {
-    if (e.target.closest('.stats')) {
-      file.classList.toggle('open');
-      return;
-    }
-    // 点击文件名 → Inspector Diff
-    openFileDiff(result.path);
-    switchInspectorTab('file');
-  });
-  file.classList.add('open');
-
-  panel.appendChild(file);
-  state.changes.push({
-    type: badge,
-    path: result.path,
-    before: result.before || '',
-    after: result.after || '',
-    diff: result.diff || [],
-  });
-}
-
-function updateDiffSummary() {
-  const existing = $('.diff-summary');
-  const total = state.changes.length;
-  const summary = `${total} files changed`;
-  if (existing) {
-    existing.textContent = summary;
-  } else {
-    const el = document.createElement('div');
-    el.className = 'diff-summary';
-    el.textContent = summary;
-    $('#diffPanel').insertBefore(el, $('#diffPanel').firstChild);
   }
 }
 
@@ -932,15 +978,12 @@ async function sendMessage() {
   if (welcome) welcome.remove();
 
   appendMessage('user', escapeHtml(task));
-  state.running = true;
+  state.activeRunId = 'run-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+  setRunningUi(true);
   state.runStartTime = Date.now();
   state.timeline = [];
   state.commands = [];
   state.approvals = { approved: 0, rejected: 0 };
-  $('#sendBtn').disabled = true;
-  $('#stopBtn').disabled = false;
-  $('#newSessionBtn').disabled = true;
-  setStatus('running', 'running');
 
   if (!state.sessionId) {
     try {
@@ -957,10 +1000,7 @@ async function sendMessage() {
       }
     } catch (err) {
       appendSystemMessage('创建会话失败: ' + err.message);
-      state.running = false;
-      $('#sendBtn').disabled = false;
-      $('#stopBtn').disabled = true;
-      $('#newSessionBtn').disabled = false;
+      setRunningUi(false);
       return;
     }
   }
@@ -1016,11 +1056,7 @@ async function sendMessage() {
       appendSystemMessage('运行出错: ' + err.message);
     }
   } finally {
-    state.running = false;
-    $('#sendBtn').disabled = false;
-    $('#stopBtn').disabled = true;
-    $('#newSessionBtn').disabled = false;
-    setStatus('idle', 'idle');
+    setRunningUi(false);
     state.currentAssistant = null;
     state.currentThinking = null;
   }
@@ -1044,6 +1080,10 @@ function stopTask() {
 
 /* ── Event Handler ──────────────────────────────────── */
 function handleEvent(event) {
+  // Run identity filter: ignore late events from old runs
+  if (state.activeRunId && event.runId && event.runId !== state.activeRunId) {
+    return;
+  }
   switch (event.type) {
     case 'assistant_start':
       startAssistantMessage();

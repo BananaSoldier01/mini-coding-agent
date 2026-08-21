@@ -18,8 +18,14 @@ class Session {
     this.active = true;
     this.createdAt = Date.now();
     this.lastActivity = Date.now();
+    this.title = 'New Session';
     // V0.4.0: Session-scoped Permission Mode
     this.permissionMode = 'standard';
+  }
+
+  setTitle(title) {
+    this.title = (title || 'New Session').slice(0, 60);
+    this.lastActivity = Date.now();
   }
 
   addMessage(msg) {
@@ -144,6 +150,10 @@ class SessionManager {
 
   get(id) {
     return this.sessions.get(id);
+  }
+
+  list() {
+    return Array.from(this.sessions.values());
   }
 
   cleanup(maxAgeMs = 30 * 60 * 1000) {

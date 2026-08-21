@@ -36,6 +36,7 @@
             <option value="full_access">Full Access</option>
           </select>
         </div>
+        <button class="btn btn-ghost" id="sessionListBtn" title="Sessions">Sessions</button>
         <button class="btn btn-ghost" id="newSessionBtn" title="新 Session">＋</button>
         <button class="btn btn-ghost" id="configBtn" title="配置">⚙</button>
       </div>
@@ -126,6 +127,23 @@
       </div>
       <div class="terminal-body" id="terminalBody"></div>
     </footer>
+  </div>
+
+  <!-- ── Session 列表 ──────────────────────────────────── -->
+  <div class="modal session-list-modal" id="sessionListModal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-content session-list">
+      <div class="modal-header">
+        <h2>Sessions</h2>
+        <button class="btn-icon" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="sessionList"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="newSessionFromList">新 Session</button>
+      </div>
+    </div>
   </div>
 
   <!-- ── 配置弹窗 ──────────────────────────────────────── -->

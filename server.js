@@ -238,7 +238,15 @@ const server = http.createServer(async (req, resp) => {
         const data = svc.readFile(filePath);
         return sendJson(resp, data);
       } catch (err) {
-        return sendError(resp, 400, err.message);
+        const msg = err.message || '';
+        let code = 'FILE_ERROR';
+        if (msg.includes('敏感文件')) code = 'SENSITIVE_FILE';
+        else if (msg.includes('二进制')) code = 'BINARY_FILE';
+        else if (msg.includes('不存在')) code = 'FILE_NOT_FOUND';
+        else if (msg.includes('不是文件')) code = 'NOT_A_FILE';
+        else if (msg.includes('过大')) code = 'FILE_TOO_LARGE';
+        resp.writeHead(400, { 'Content-Type': 'application/json' });
+        resp.end(JSON.stringify({ error: { code, message: msg } }));
       }
     }
 
@@ -259,7 +267,45 @@ const server = http.createServer(async (req, resp) => {
           session.permissionMode = body.permissionMode;
         }
       }
-      return sendJson(resp, { sessionId: session.id, workspace: ws, permissionMode: session.permissionMode });
+      // 接受客户端传入的 title
+      if (body.title) session.setTitle(body.title);
+      return sendJson(resp, {
+        sessionId: session.id,
+        workspace: ws,
+        permissionMode: session.permissionMode,
+        title: session.title,
+      });
+    }
+
+    // ── API: Session 列表 ─────────────────────────────
+    if (pathname === '/api/sessions' && method === 'GET') {
+      const sessions = sessionManager.list();
+      return sendJson(resp, {
+        sessions: sessions.map(s => ({
+          id: s.id,
+          title: s.title || 'New Session',
+          workspace: s.workspace,
+          permissionMode: s.permissionMode || 'standard',
+          createdAt: s.createdAt,
+          updatedAt: s.updatedAt,
+        })),
+      });
+    }
+
+    // ── API: 切换 Session ─────────────────────────────
+    if (pathname === '/api/session/switch' && method === 'POST') {
+      const mv = validateMutation(req);
+      if (!mv.ok) return sendError(resp, mv.status, mv.reason);
+      const body = JSON.parse(await readBody(req));
+      const { sessionId } = body;
+      const session = sessionManager.get(sessionId);
+      if (!session) return sendError(resp, 404, '会话不存在');
+      return sendJson(resp, {
+        sessionId: session.id,
+        permissionMode: session.permissionMode || 'standard',
+        title: session.title || 'New Session',
+        workspace: session.workspace,
+      });
     }
 
     // ── API: 更新 Session Permission Mode ──────────────
@@ -326,6 +372,8 @@ const server = http.createServer(async (req, resp) => {
       }
       if (!session) {
         session = sessionManager.create(ws);
+        // 用第一条 task 作为 Session title
+        if (task) session.setTitle(task.slice(0, 60));
       }
 
       const llmConfig = clientConfig?.llm || config.llm;

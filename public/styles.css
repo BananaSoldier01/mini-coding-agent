@@ -788,3 +788,43 @@ html, body {
 .cmd-highlight { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 0.3s; }
 
 /* ── New Session button ────────────────────────── */
+
+/* ── Session List ─────────────────────────────────── */
+.session-list { min-width: 360px; max-width: 480px; }
+.session-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: var(--bg-elevated);
+}
+.session-item:hover { background: var(--bg-hover); }
+.session-item.active { border-color: var(--accent); background: var(--bg-active); }
+.session-item-info { flex: 1; min-width: 0; }
+.session-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-item-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.session-item-mode {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text-dim);
+  flex-shrink: 0;
+  margin-left: 8px;
+}
