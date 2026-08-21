@@ -19,7 +19,291 @@ const state = {
   runStartTime: null,
   approvals: { approved: 0, rejected: 0 },
   commands: [],
+  // Inspector state
+  inspectorTab: 'changes',
+  fvView: 'current',
+  fvPath: null,
+  fvContent: null,
+  fvDiff: null,
+  // Explorer state
+  expandedDirs: new Set(),
+  selectedFile: null,
+  fileTreeData: null,
 };
+
+/* ── Inspector ─────────────────────────────────────── */
+
+function switchInspectorTab(tab) {
+  state.inspectorTab = tab;
+  $$('.inspector-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === tab);
+  });
+  $('#inspectorChanges').style.display = tab === 'changes' ? '' : 'none';
+  $('#inspectorFile').style.display = tab === 'file' ? '' : 'none';
+}
+
+function switchFvView(view) {
+  state.fvView = view;
+  $$('.fv-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.fv === view);
+  });
+  renderFvBody();
+}
+
+async function openFileCurrent(relPath) {
+  state.fvPath = relPath;
+  state.fvView = 'current';
+  $$('.fv-tab').forEach(t => t.classList.toggle('active', t.dataset.fv === 'current'));
+  $('#fvPath').textContent = relPath;
+  const body = $('#fvBody');
+  body.innerHTML = '<div class="fv-loading">Loading…</div>';
+  switchInspectorTab('file');
+
+  try {
+    const data = await api(`/api/files/read?path=${encodeURIComponent(relPath)}`);
+    if (data.error) {
+      if (data.binary) {
+        body.innerHTML = '<div class="fv-error">Binary file preview is not supported.</div>';
+      } else if (data.sensitive) {
+        body.innerHTML = '<div class="fv-error">Sensitive file — access denied.</div>';
+      } else if (data.tooLarge) {
+        body.innerHTML = '<div class="fv-error">File is too large for full preview.</div>';
+      } else {
+        body.innerHTML = '<div class="fv-error">Unable to open file: ' + escapeHtml(data.error) + '</div>';
+      }
+      return;
+    }
+    state.fvContent = data.content;
+    state.fvPath = data.path;
+    $('#fvPath').textContent = data.path;
+    renderFvBody();
+  } catch (err) {
+    body.innerHTML = '<div class="fv-error">Unable to open file: ' + escapeHtml(err.message) + '</div>';
+  }
+}
+
+function openFileDiff(relPath) {
+  state.fvPath = relPath;
+  state.fvView = 'diff';
+  $$('.fv-tab').forEach(t => t.classList.toggle('active', t.dataset.fv === 'diff'));
+  $('#fvPath').textContent = relPath;
+  switchInspectorTab('file');
+
+  // 从当前 Run Net Diff 中查找该文件
+  const diff = state.changes.find(c => c.path === relPath);
+  if (!diff) {
+    $('#fvBody').innerHTML = '<div class="fv-empty">No changes in this run for this file</div>';
+    return;
+  }
+
+  let before = diff.before || '';
+  let after = diff.after || '';
+
+  if (diff.type === 'deleted') {
+    $('#fvBody').innerHTML = `
+      <div class="fv-empty">
+        File deleted in this run<br>
+        <button class="btn btn-ghost" id="viewDiffBtn" style="margin-top:8px">View Diff</button>
+      </div>`;
+    $('#viewDiffBtn').addEventListener('click', () => renderDiffView(before, after, relPath));
+    return;
+  }
+
+  renderDiffView(before, after, relPath);
+}
+
+function renderDiffView(before, after, path) {
+  const lines = unifiedDiffLines(before, after);
+  const body = $('#fvBody');
+  if (lines.length === 0) {
+    body.innerHTML = '<div class="fv-diff-empty">No changes in this run</div>';
+    return;
+  }
+  let html = '<div class="fv-diff-container">';
+  for (const line of lines) {
+    const cls = line.type === 'added' ? 'added' : line.type === 'removed' ? 'removed' : '';
+    html += '<div class="fv-diff-line ' + cls + '">' + escapeHtml(line.text) + '</div>';
+  }
+  html += '</div>';
+  body.innerHTML = html;
+}
+
+function renderFvBody() {
+  const body = $('#fvBody');
+  if (state.fvView === 'current') {
+    if (state.fvContent === null) {
+      body.innerHTML = '<div class="fv-empty">Select a file or change to inspect</div>';
+      return;
+    }
+    const lines = state.fvContent.split('\n');
+    let html = '<div class="fv-content">';
+    for (let i = 0; i < lines.length; i++) {
+      html += '<div class="fv-line"><span class="fv-line-num">' + (i + 1) + '</span><span class="fv-line-content">' + escapeHtml(lines[i]) + '</span></div>';
+    }
+    html += '</div>';
+    body.innerHTML = html;
+  } else if (state.fvView === 'diff') {
+    const diff = state.changes.find(c => c.path === state.fvPath);
+    if (!diff) {
+      body.innerHTML = '<div class="fv-empty">No changes in this run</div>';
+      return;
+    }
+    renderDiffView(diff.before || '', diff.after || '', state.fvPath);
+  }
+}
+
+/* ── Unified Diff Lines ────────────────────────────── */
+function unifiedDiffLines(before, after) {
+  const beforeLines = before ? before.split('\n') : [];
+  const afterLines = after ? after.split('\n') : [];
+  const result = [];
+  const m = beforeLines.length;
+  const n = afterLines.length;
+  const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      if (beforeLines[i] === afterLines[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
+      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (beforeLines[i] === afterLines[j]) {
+      result.push({ type: 'context', text: '  ' + beforeLines[i] });
+      i++; j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      result.push({ type: 'removed', text: '- ' + beforeLines[i] });
+      i++;
+    } else {
+      result.push({ type: 'added', text: '+ ' + afterLines[j] });
+      j++;
+    }
+  }
+  while (i < m) { result.push({ type: 'removed', text: '- ' + beforeLines[i] }); i++; }
+  while (j < n) { result.push({ type: 'added', text: '+ ' + afterLines[j] }); j++; }
+  return result;
+}
+
+/* ── Explorer ──────────────────────────────────────── */
+
+function toggleDir(path) {
+  if (state.expandedDirs.has(path)) state.expandedDirs.delete(path);
+  else state.expandedDirs.add(path);
+  renderFileTree();
+}
+
+function selectFile(path) {
+  state.selectedFile = path;
+  renderFileTree();
+}
+
+function renderFileTree() {
+  const container = $('#fileTree');
+  if (!state.fileTreeData) {
+    container.innerHTML = '<div class="tree-empty">加载中…</div>';
+    return;
+  }
+  const html = renderTreeNode(state.fileTreeData, 0);
+  container.innerHTML = html;
+}
+
+function renderTreeNode(node, depth) {
+  if (!node) return '';
+  // Sort: directories first, then files, alphabetically
+  const entries = (node.children || []).sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  let html = '';
+  const isExpanded = state.expandedDirs.has(node.path);
+  const hasChildren = entries.length > 0;
+
+  // Row for this node (skip root)
+  if (node.path !== '.' && node.path !== '') {
+    const isSelected = state.selectedFile === node.path;
+    const badge = getChangeBadge(node.path);
+    const chevron = node.type === 'directory'
+      ? (isExpanded ? '▼' : '▶')
+      : '';
+    const icon = node.type === 'directory'
+      ? (isExpanded ? '📁' : '📁')
+      : '📄';
+
+    html += '<div class="tree-row' + (isSelected ? ' selected' : '') + '" data-path="' + escapeHtml(node.path) + '" data-type="' + node.type + '">';
+    if (node.type === 'directory') {
+      html += '<span class="tree-chevron" data-toggle="' + escapeHtml(node.path) + '">' + chevron + '</span>';
+    } else {
+      html += '<span class="tree-chevron"></span>';
+    }
+    html += '<span class="tree-icon">' + icon + '</span>';
+    html += '<span class="tree-name">' + escapeHtml(node.name) + '</span>';
+    if (badge) html += '<span class="tree-badge ' + badge.cls + '">' + badge.text + '</span>';
+    html += '</div>';
+  }
+
+  // Children
+  if (hasChildren && (isExpanded || node.path === '.')) {
+    html += '<div class="tree-children">';
+    for (const child of entries) {
+      html += renderTreeNode(child, depth + 1);
+    }
+    html += '</div>';
+  }
+
+  return html;
+}
+
+function getChangeBadge(relPath) {
+  const diff = state.changes.find(c => c.path === relPath);
+  if (!diff) return null;
+  if (diff.type === 'added') return { text: 'A', cls: 'tree-badge-add' };
+  if (diff.type === 'deleted') return { text: 'D', cls: 'tree-badge-delete' };
+  if (diff.type === 'modified') return { text: 'M', cls: 'tree-badge-modify' };
+  return null;
+}
+
+/* ── New Session ───────────────────────────────────── */
+async function newSession() {
+  if (state.running) {
+    if (!confirm('Agent 正在运行中，确定要创建新 Session 吗？')) return;
+  }
+  try {
+    const data = await api('/api/session', {
+      method: 'POST',
+      body: { workspace: state.workspace, permissionMode: 'standard' },
+    });
+    state.sessionId = data.sessionId;
+    state.permissionMode = data.permissionMode || 'standard';
+    $('#modeSelect').value = state.permissionMode;
+    updateModeLabel(state.permissionMode);
+
+    // 清空前端状态
+    state.timeline = [];
+    state.changes = [];
+    state.commands = [];
+    state.approvals = { approved: 0, rejected: 0 };
+    state.expandedDirs.clear();
+    state.expandedDirs.add('.');
+    state.selectedFile = null;
+    state.fvPath = null;
+    state.fvContent = null;
+    state.fvView = 'current';
+
+    $('#timeline').innerHTML = '';
+    $('#completionSummary').style.display = 'none';
+    $('#diffPanel').innerHTML = '<div class="diff-empty">文件修改将在此显示</div>';
+    $('#fvBody').innerHTML = '<div class="fv-empty">选择一个文件或修改来查看</div>';
+    $('#terminalBody').innerHTML = '';
+    loadFileTree();
+
+    // 清空 chat
+    const chat = $('#chatMessages');
+    chat.innerHTML = '<div class="welcome"><div class="welcome-logo">◆</div><h1>Mini Coding Agent</h1><p class="welcome-sub">输入任务，Agent 会自主读取文件、修改代码、运行验证。</p><div class="quick-starts"><button class="quick-start" data-task="阅读测试 workspace，把首页标题修改成 Hello Agent">示例：修改标题</button><button class="quick-start" data-task="检查这个项目目前为什么无法启动，找出问题并修复，修复后自行运行验证">示例：修复启动问题</button></div></div>';
+  } catch (err) {
+    appendSystemMessage('❌ 创建 Session 失败: ' + err.message);
+  }
+}
 
 /* ── Init ──────────────────────────────────────────── */
 async function init() {
@@ -38,11 +322,38 @@ async function init() {
   $('#sendBtn').addEventListener('click', sendMessage);
   $('#stopBtn').addEventListener('click', stopTask);
   $('#configBtn').addEventListener('click', openConfig);
+  $('#newSessionBtn').addEventListener('click', newSession);
   $('#refreshTree').addEventListener('click', loadFileTree);
   $('#clearTerminal').addEventListener('click', () => { $('#terminalBody').innerHTML = ''; });
   $('#toggleTerminal').addEventListener('click', toggleTerminal);
   $('#clearDiff').addEventListener('click', clearDiff);
   $('#saveConfig').addEventListener('click', saveConfig);
+
+  // Inspector tab switching
+  $$('.inspector-tab').forEach(tab => {
+    tab.addEventListener('click', () => switchInspectorTab(tab.dataset.tab));
+  });
+
+  // File Viewer tabs
+  $$('.fv-tab').forEach(tab => {
+    tab.addEventListener('click', () => switchFvView(tab.dataset.fv));
+  });
+
+  // File tree delegation
+  $('#fileTree').addEventListener('click', (e) => {
+    const toggle = e.target.closest('[data-toggle]');
+    if (toggle) {
+      toggleDir(toggle.dataset.toggle);
+      return;
+    }
+    const row = e.target.closest('.tree-row');
+    if (row) {
+      selectFile(row.dataset.path);
+      if (row.dataset.type === 'file') {
+        openFileCurrent(row.dataset.path);
+      }
+    }
+  });
 
   // Permission Mode selector — 仅在 PATCH 成功后更新 UI
   $('#modeSelect').addEventListener('change', async (e) => {
@@ -377,7 +688,7 @@ function addDiffFromResult(toolName, result) {
   const stats = result.diff ? `${result.diff.filter(d=>d.type==='add').length}+/${result.diff.filter(d=>d.type==='remove').length}-` : '';
   header.innerHTML = `
     <span class="badge ${badge}">${badge}</span>
-    <span>${escapeHtml(result.path)}</span>
+    <span class="diff-file-name">${escapeHtml(result.path)}</span>
     <span class="stats">${stats}</span>
   `;
   file.appendChild(header);
@@ -405,13 +716,25 @@ function addDiffFromResult(toolName, result) {
   }
 
   file.appendChild(body);
-  header.addEventListener('click', () => {
-    file.classList.toggle('open');
+  header.addEventListener('click', (e) => {
+    if (e.target.closest('.stats')) {
+      file.classList.toggle('open');
+      return;
+    }
+    // 点击文件名 → Inspector Diff
+    openFileDiff(result.path);
+    switchInspectorTab('file');
   });
   file.classList.add('open');
 
   panel.appendChild(file);
-  state.changes.push({ type: badge, path: result.path });
+  state.changes.push({
+    type: badge,
+    path: result.path,
+    before: result.before || '',
+    after: result.after || '',
+    diff: result.diff || [],
+  });
 }
 
 function updateDiffSummary() {
@@ -508,41 +831,88 @@ function terminalWrite(cmd, result) {
   }
 
   const body = $('#terminalBody');
-  const line = document.createElement('div');
-  line.innerHTML = `<span class="t-cmd">$ ${escapeHtml(cmd)}</span>`;
-  body.appendChild(line);
+  const card = document.createElement('div');
+  card.className = 'cmd-card';
+  card.dataset.toolCallId = result.toolCallId || '';
 
+  const header = document.createElement('div');
+  header.className = 'cmd-card-header';
+
+  const chevron = document.createElement('span');
+  chevron.className = 'cmd-card-chevron';
+  chevron.textContent = '▶';
+
+  const cmdSpan = document.createElement('span');
+  cmdSpan.className = 'cmd-card-command';
+  cmdSpan.textContent = '$ ' + cmd;
+
+  const status = document.createElement('span');
+  let statusCls = 'ok';
+  let statusText = '';
+  if (result.timedOut) { statusCls = 'timeout'; statusText = 'Timed out'; }
+  else if (result.stopped) { statusCls = 'stopped'; statusText = 'Stopped'; }
+  else if (result.exitCode === 0) { statusCls = 'ok'; statusText = 'Exit 0'; }
+  else if (result.exitCode !== undefined) { statusCls = 'fail'; statusText = 'Exit ' + result.exitCode; }
+  else { statusCls = 'ok'; statusText = 'Running'; }
+  status.className = 'cmd-card-status ' + statusCls;
+  status.textContent = statusText;
+
+  const dur = document.createElement('span');
+  dur.className = 'cmd-card-duration';
+  dur.textContent = result.duration ? (result.duration / 1000).toFixed(1) + 's' : '';
+
+  header.appendChild(chevron);
+  header.appendChild(cmdSpan);
+  header.appendChild(status);
+  header.appendChild(dur);
+
+  header.onclick = () => {
+    card.classList.toggle('open');
+    chevron.classList.toggle('open', card.classList.contains('open'));
+  };
+
+  card.appendChild(header);
+
+  const body2 = document.createElement('div');
+  body2.className = 'cmd-card-body';
   if (result.stdout) {
     const out = document.createElement('div');
-    out.className = 't-out';
+    out.className = 'cmd-card-body stdout';
     out.textContent = result.stdout;
-    body.appendChild(out);
+    body2.appendChild(out);
   }
   if (result.stderr) {
     const err = document.createElement('div');
-    err.className = 't-err';
+    err.className = 'cmd-card-body stderr';
     err.textContent = result.stderr;
-    body.appendChild(err);
+    body2.appendChild(err);
   }
+  if (!result.stdout && !result.stderr) {
+    body2.innerHTML = '<span style="color:var(--text-dim)">（无输出）</span>';
+  }
+  card.appendChild(body2);
 
-  // 状态行
-  const status = document.createElement('div');
-  if (result.timedOut) {
-    status.className = 't-timeout';
-    status.textContent = `[timeout after ${result.duration || '?'}ms]`;
-  } else if (result.stopped) {
-    status.className = 't-killed';
-    status.textContent = `[killed]`;
-  } else if (result.exitCode !== undefined) {
-    status.className = result.exitCode === 0 ? 't-sys' : 't-sys';
-    status.textContent = `[exit: ${result.exitCode}]`;
-  }
-  if (result.duration) {
-    status.textContent += `  ${result.duration}ms`;
-  }
-  body.appendChild(status);
-
+  body.appendChild(card);
   body.scrollTop = body.scrollHeight;
+}
+
+function navigateToTerminal(toolCallId) {
+  const panel = $('#terminalPanel');
+  if (panel.classList.contains('collapsed')) {
+    panel.classList.remove('collapsed');
+    $('#toggleTerminal').textContent = '─';
+  }
+  const card = document.querySelector('.cmd-card[data-tool-call-id="' + CSS.escape(toolCallId) + '"]');
+  if (card) {
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    card.classList.add('cmd-highlight');
+    setTimeout(() => card.classList.remove('cmd-highlight'), 1500);
+    if (!card.classList.contains('open')) {
+      card.classList.add('open');
+      const chevron = card.querySelector('.cmd-card-chevron');
+      if (chevron) chevron.classList.add('open');
+    }
+  }
 }
 
 function toggleTerminal() {
@@ -702,7 +1072,7 @@ function handleEvent(event) {
     case 'tool_result':
       updateTimelineItem(event.toolCall.id, event.result, event.toolCall.name);
       if (event.toolCall.name === 'run_command') {
-        terminalWrite(event.toolCall.args.command, event.result);
+        terminalWrite(event.toolCall.args.command, { ...event.result, toolCallId: event.toolCall.id });
       }
       break;
     case 'command_result':
@@ -886,21 +1256,33 @@ function renderTimeline() {
       const cmd = document.createElement('div');
       cmd.className = 'ti-cmd';
       cmd.textContent = '$ ' + (item.args.command || '');
+      cmd.style.cursor = 'pointer';
+      cmd.title = '点击定位到 Terminal';
+      cmd.onclick = () => navigateToTerminal(item.id);
       text.appendChild(cmd);
     } else if (item.name === 'read_file') {
       const f = document.createElement('div');
       f.className = 'ti-file';
-      f.textContent = '📄 ' + (item.args.path || '');
+      f.style.cursor = 'pointer';
+      f.title = '点击打开文件';
+      f.innerHTML = '📄 <span class="ti-file-link">' + escapeHtml(item.args.path || '') + '</span>';
+      f.onclick = () => openFileCurrent(item.args.path);
       text.appendChild(f);
     } else if (item.name === 'write_file') {
       const f = document.createElement('div');
       f.className = 'ti-file';
-      f.textContent = '✏️ ' + (item.args.path || '');
+      f.style.cursor = 'pointer';
+      f.title = '点击打开文件';
+      f.innerHTML = '✏️ <span class="ti-file-link">' + escapeHtml(item.args.path || '') + '</span>';
+      f.onclick = () => openFileCurrent(item.args.path);
       text.appendChild(f);
     } else if (item.name === 'edit_file') {
       const f = document.createElement('div');
       f.className = 'ti-file';
-      f.textContent = '✏️ ' + (item.args.path || '');
+      f.style.cursor = 'pointer';
+      f.title = '点击打开文件（可切换 Diff）';
+      f.innerHTML = '✏️ <span class="ti-file-link">' + escapeHtml(item.args.path || '') + '</span>';
+      f.onclick = () => openFileCurrent(item.args.path);
       text.appendChild(f);
     } else if (item.name === 'search_files') {
       const f = document.createElement('div');
@@ -910,7 +1292,10 @@ function renderTimeline() {
     } else if (item.name === 'delete_file') {
       const f = document.createElement('div');
       f.className = 'ti-file';
-      f.textContent = '🗑 ' + (item.args.path || '');
+      f.style.cursor = 'pointer';
+      f.title = '点击查看 Diff';
+      f.innerHTML = '🗑 <span class="ti-file-link">' + escapeHtml(item.args.path || '') + '</span>';
+      f.onclick = () => openFileDiff(item.args.path);
       text.appendChild(f);
     } else if (item.name === 'list_directory') {
       const f = document.createElement('div');
@@ -978,9 +1363,9 @@ function renderCompletionSummary(result) {
   html += `<span class="cs-value">${state.approvals.approved} approved · ${state.approvals.rejected} rejected</span>`;
   html += '</div>';
 
-  // Verification evidence: 实际执行过的 command + exit status
+  // Commands evidence: 实际执行过的 command + exit status
   if (state.commands.length > 0) {
-    html += '<div class="cs-section"><span class="cs-label">验证</span>';
+    html += '<div class="cs-section"><span class="cs-label">Commands</span>';
     for (const cmd of state.commands) {
       const status = cmd.stopped ? '■ 停止' : cmd.timedOut ? '⏱ 超时' : cmd.exitCode === 0 ? '✓' : '✕';
       html += `<div class="cs-cmd">${status} ${escapeHtml(cmd.command)} ${cmd.exitCode !== null ? '(exit ' + cmd.exitCode + ')' : ''} ${cmd.duration ? (cmd.duration/1000).toFixed(1)+'s' : ''}</div>`;

@@ -36,6 +36,7 @@
             <option value="full_access">Full Access</option>
           </select>
         </div>
+        <button class="btn btn-ghost" id="newSessionBtn" title="新 Session">＋</button>
         <button class="btn btn-ghost" id="configBtn" title="配置">⚙</button>
       </div>
     </header>
@@ -81,15 +82,34 @@
         <div class="input-hint">Enter 发送，Shift+Enter 换行</div>
       </section>
 
-      <!-- 右侧：Changes -->
-      <aside class="sidebar right">
-        <div class="sidebar-header">
-          <span>Changes</span>
-          <span class="changes-count" id="changesCount"></span>
-          <button class="btn-icon" id="clearDiff" title="清除">✕</button>
+      <!-- 右侧：Inspector -->
+      <aside class="sidebar right inspector">
+        <div class="inspector-tabs">
+          <button class="inspector-tab active" data-tab="changes">Changes</button>
+          <button class="inspector-tab" data-tab="file">File</button>
         </div>
-        <div class="diff-panel" id="diffPanel">
-          <div class="diff-empty">文件修改将在此显示</div>
+        <div class="inspector-body">
+          <!-- Changes Tab -->
+          <div class="inspector-tab-content" id="inspectorChanges">
+            <div class="diff-panel" id="diffPanel">
+              <div class="diff-empty">文件修改将在此显示</div>
+            </div>
+          </div>
+          <!-- File Tab -->
+          <div class="inspector-tab-content" id="inspectorFile" style="display:none">
+            <div class="file-viewer">
+              <div class="fv-header">
+                <span class="fv-path" id="fvPath">—</span>
+                <div class="fv-tabs">
+                  <button class="fv-tab active" data-fv="current">Current</button>
+                  <button class="fv-tab" data-fv="diff">Diff</button>
+                </div>
+              </div>
+              <div class="fv-body" id="fvBody">
+                <div class="fv-empty">选择一个文件或修改来查看</div>
+              </div>
+            </div>
+          </div>
         </div>
       </aside>
     </div>
@@ -106,33 +126,6 @@
       </div>
       <div class="terminal-body" id="terminalBody"></div>
     </footer>
-  </div>
-
-  <!-- ── 文件查看器 ──────────────────────────────────────── -->
-  <div class="modal file-viewer-modal" id="fileViewerModal">
-    <div class="modal-backdrop" data-close></div>
-    <div class="modal-content file-viewer">
-      <div class="modal-header">
-        <span class="fv-path" id="fvPath">file</span>
-        <button class="btn-icon" data-close>✕</button>
-      </div>
-      <div class="modal-body fv-body" id="fvBody">
-        <pre id="fvContent"></pre>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Diff 查看器 ──────────────────────────────────────── -->
-  <div class="modal diff-viewer-modal" id="diffViewerModal">
-    <div class="modal-backdrop" data-close></div>
-    <div class="modal-content diff-viewer">
-      <div class="modal-header">
-        <span class="fv-path" id="diffFilePath">file</span>
-        <button class="btn-icon" data-close>✕</button>
-      </div>
-      <div class="modal-body diff-viewer-body" id="diffViewerBody">
-      </div>
-    </div>
   </div>
 
   <!-- ── 配置弹窗 ──────────────────────────────────────── -->

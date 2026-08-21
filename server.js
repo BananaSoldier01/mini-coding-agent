@@ -209,6 +209,22 @@ const server = http.createServer(async (req, resp) => {
       return sendJson(resp, { workspace: ws, tree });
     }
 
+    // ── API: 目录列表（Lazy Directory Loading）─────────
+    if (pathname === '/api/files/list' && method === 'GET') {
+      const ws = parsedUrl.query.workspace || config.workspace;
+      const dirPath = parsedUrl.query.path || '.';
+      if (!workspaceRegistry.isTrusted(ws)) {
+        return sendError(resp, 403, `不允许访问 workspace: ${ws}`);
+      }
+      const svc = new WorkspaceFileService(ws);
+      try {
+        const dirEntry = svc.listDirectory(dirPath);
+        return sendJson(resp, { path: dirPath, entries: dirEntry.entries });
+      } catch (err) {
+        return sendError(resp, 400, err.message);
+      }
+    }
+
     // ── API: 文件读取 ────────────────────────────────
     if (pathname === '/api/files/read' && method === 'GET') {
       const ws = parsedUrl.query.workspace || config.workspace;

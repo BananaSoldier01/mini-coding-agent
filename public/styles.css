@@ -547,3 +547,244 @@ html, body {
 }
 .completion-summary .cs-cmd .cs-cmd-ok { color: var(--ok); }
 .completion-summary .cs-cmd .cs-cmd-fail { color: var(--err); }
+
+/* ── Inspector ─────────────────────────────────── */
+.inspector-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+.inspector-tab {
+  flex: 1;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+.inspector-tab:hover { color: var(--text); background: var(--bg-hover); }
+.inspector-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.inspector-tab-content { padding: 0; overflow: auto; flex: 1; }
+
+/* ── File Viewer (Inspector) ───────────────────── */
+.file-viewer { display: flex; flex-direction: column; height: 100%; }
+.fv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.fv-path {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fv-tabs { display: flex; gap: 2px; }
+.fv-tab {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+.fv-tab:hover { color: var(--text); background: var(--bg-hover); }
+.fv-tab.active { color: var(--accent); background: var(--bg-hover); border-color: var(--border); }
+
+.fv-body { flex: 1; overflow: auto; position: relative; }
+.fv-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-dim);
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
+.fv-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.fv-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--err);
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
+.fv-content {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+  overflow: auto;
+  padding: 12px 0;
+  min-height: 100%;
+}
+.fv-line-num {
+  display: inline-block;
+  width: 48px;
+  padding-right: 12px;
+  margin-right: 12px;
+  color: var(--text-dim);
+  text-align: right;
+  user-select: none;
+  border-right: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.fv-line { display: flex; }
+.fv-line:hover { background: var(--bg-hover); }
+.fv-line-content { padding-right: 12px; white-space: pre; }
+.fv-diff-line {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+  padding: 12px 0;
+}
+.fv-diff-line.added { background: rgba(34,197,94,0.08); }
+.fv-diff-line.removed { background: rgba(239,68,68,0.08); }
+.fv-diff-line.added::before { content: '+ '; color: var(--ok); font-weight: 700; }
+.fv-diff-line.removed::before { content: '- '; color: var(--err); font-weight: 700; }
+.fv-diff-empty { color: var(--text-dim); font-style: italic; padding: 12px; }
+
+/* ── File Tree ─────────────────────────────────── */
+.tree-node { user-select: none; }
+.tree-row {
+  display: flex;
+  align-items: center;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  border-radius: 4px;
+  gap: 4px;
+}
+.tree-row:hover { background: var(--bg-hover); }
+.tree-row.selected { background: var(--bg-active); color: var(--text); }
+.tree-row .tree-icon { width: 16px; text-align: center; flex-shrink: 0; color: var(--text-dim); }
+.tree-row .tree-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-row .tree-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.tree-badge-modify { background: rgba(245,158,11,0.15); color: #f59e0b; }
+.tree-badge-add { background: rgba(34,197,94,0.15); color: #22c55e; }
+.tree-badge-delete { background: rgba(239,68,68,0.15); color: #ef4444; }
+.tree-children { padding-left: 16px; }
+.tree-row .tree-chevron {
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.tree-row .tree-chevron:hover { color: var(--text); }
+
+/* ── Diff Panel ────────────────────────────────── */
+.diff-file {
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+}
+.diff-file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-elevated);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin: 2px 0;
+}
+.diff-file-header:hover { background: var(--bg-hover); }
+.diff-file-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.diff-file-name { font-family: var(--mono); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-file-stats { color: var(--text-dim); font-size: 11px; flex-shrink: 0; }
+.diff-file-body { display: none; font-family: var(--mono); font-size: 11px; }
+.diff-file-body.open { display: block; }
+.diff-file-body .diff-line {
+  padding: 1px 12px;
+  white-space: pre;
+  line-height: 1.5;
+}
+.diff-line.added { background: rgba(34,197,94,0.06); }
+.diff-line.removed { background: rgba(239,68,68,0.06); }
+.diff-line.added::before { content: '+ '; color: var(--ok); }
+.diff-line.removed::before { content: '- '; color: var(--err); }
+
+/* ── Terminal Command Card ─────────────────────── */
+.cmd-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 4px 0;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+.cmd-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.cmd-card-header:hover { background: var(--bg-hover); }
+.cmd-card-chevron { font-size: 10px; color: var(--text-dim); transition: transform 0.15s; }
+.cmd-card-chevron.open { transform: rotate(90deg); }
+.cmd-card-command {
+  font-family: var(--mono);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-card-status { font-size: 11px; font-weight: 600; }
+.cmd-card-status.ok { color: var(--ok); }
+.cmd-card-status.fail { color: var(--err); }
+.cmd-card-status.timeout { color: #f59e0b; }
+.cmd-card-status.stopped { color: var(--text-dim); }
+.cmd-card-duration { font-size: 11px; color: var(--text-dim); }
+.cmd-card-body { display: none; padding: 8px 10px; font-family: var(--mono); font-size: 11px; white-space: pre; max-height: 300px; overflow: auto; background: var(--bg); }
+.cmd-card-body.open { display: block; }
+.cmd-card-body.stdout { color: var(--text); }
+.cmd-card-body.stderr { color: var(--err); }
+.cmd-highlight { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 0.3s; }
+
+/* ── New Session button ────────────────────────── */

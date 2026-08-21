@@ -107,7 +107,7 @@ class FileTools {
       // 敏感文件检查 — 防止通过 search 绕过 secret protection
       const relPath = this.service.sandbox.relative(filePath);
       if (this.service.isSensitive(relPath)) return true; // 跳过，不读取
-      if (this.service.isBinary(filePath)) return true;
+      if (this.service.isBinary(relPath)) return true;
       try {
         const stat = fs.statSync(filePath);
         if (stat.size > 1024 * 1024) return true;
@@ -173,16 +173,8 @@ class FileTools {
           const rel = this.service.sandbox.relative(full);
           // 敏感文件检查
           if (this.service.isSensitive(rel)) continue;
-          // Binary 扩展名检查（避免 isBinary 的 buffer 零填充 bug）
-          const BINARY_EXTS = new Set([
-            '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp',
-            '.pdf', '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
-            '.exe', '.dll', '.so', '.dylib', '.a', '.o', '.obj',
-            '.wasm', '.bin', '.dat', '.db', '.sqlite', '.sqlite3',
-            '.mp3', '.mp4', '.avi', '.mov', '.wav', '.ogg',
-            '.lock', '.class', '.jar', '.war',
-          ]);
-          if (BINARY_EXTS.has(path.extname(full).toLowerCase())) continue;
+          // Binary 检测 — 统一使用 WorkspaceFileService.isBinary（唯一事实源）
+          if (this.service.isBinary(rel)) continue;
           try {
             const before = fs.readFileSync(full, 'utf-8');
             result.push({ path: full, before });

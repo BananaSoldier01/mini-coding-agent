@@ -298,8 +298,9 @@ class WorkspaceFileService {
       const fd = fs.openSync(absolute, 'r');
       try {
         const buf = Buffer.alloc(BINARY_CHECK_BYTES);
-        fs.readSync(fd, buf, 0, BINARY_CHECK_BYTES, 0);
-        return isBinaryContent(buf);
+        const bytesRead = fs.readSync(fd, buf, 0, BINARY_CHECK_BYTES, 0);
+        // 只检查实际读取的字节，避免未初始化区域的 0x00 误判
+        return isBinaryContent(buf.subarray(0, bytesRead));
       } finally {
         fs.closeSync(fd);
       }
