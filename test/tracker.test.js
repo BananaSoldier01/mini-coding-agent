@@ -125,3 +125,89 @@ test('ChangeTracker: clear 清空', () => {
   ct.clear();
   assert.strictEqual(ct.changes.length, 0);
 });
+
+// ── V0.3.3.1 Regression: NON_EXISTENT vs empty file ────
+import { NON_EXISTENT } from '../tracker.js';
+
+test('REGRESSION: 不存在→A = create', () => {
+  const ct = new ChangeTracker();
+  ct.record({ type: 'create', path: 'new.txt', oldContent: NON_EXISTENT, newContent: 'A' });
+  const diff = ct.getNetDiff();
+  assert.strictEqual(diff.totalChanges, 1);
+  assert.strictEqual(diff.files[0].type, 'create');
+});
+
+test('REGRESSION: A→B = modify', () => {
+  const ct = new ChangeTracker();
+  ct.baselineSnapshot.set('x.txt', 'A');
+  ct.record({ type: 'modify', path: 'x.txt', oldContent: 'A', newContent: 'B' });
+  const diff = ct.getNetDiff();
+  assert.strictEqual(diff.totalChanges, 1);
+  assert.strictEqual(diff.files[0].type, 'modify');
+});
+
+test('REGRESSION: A→deleted = delete', () => {
+  const ct = new ChangeTracker();
+  ct.baselineSnapshot.set('x.txt', 'A');
+  ct.record({ type: 'delete', path: 'x.txt', oldContent: NON_EXISTENT, newContent: NON_EXISTENT });
+  const diff = ct.getNetDiff();
+  assert.strictEqual(diff.totalChanges, 1);
+  assert.strictEqual(diff.files[0].type, 'delete');
+});
+
+test('REGRESSION: A→B→A = No net change', () => {
+  const ct = new ChangeTracker();
+  ct.record({ type: 'modify', path: 'x.txt', oldContent: 'A', newContent: 'B' });
+  ct.record({ type: 'modify', path: 'x.txt', oldContent: 'B', newContent: 'A' });
+  const diff = ct.getNetDiff();
+  assert.strictEqual(diff.totalChanges, 0);
+});
+
+test('REGRESSION: 不存在→create→delete = No net change', () => {
+  const ct = new ChangeTracker();
+  ct.record({ type: 'create', path: 'temp.txt', oldContent: NON_EXISTENT, newContent: 'X' });
+  ct.record({ type: 'delete', path: 'temp.txt', oldContent: NON_EXISTENT, newContent: NON_EXISTENT });
+  const diff = ct.getNetDiff();
+  assert.strictEqual(diff.totalChanges, 0);
+});
+
+test('REGRESSION: 空文件→A = modify', () => {
+  const ct = new ChangeTracker();
+  ct.baselineSnapshot.set('empty.txt', '');
+  ct.record({ type: 'modify', path: 'empty.txt', oldContent: '', newContent: 'A' });
+  const diff = ct.getNetDiff();
+  assert.strictEqual(diff.totalChanges, 1);
+  assert.strictEqual(diff.files[0].type, 'modify');
+});
+
+test('REGRESSION: A→空文件 = modify', () => {
+  const ct = new ChangeTracker();
+  ct.baselineSnapshot.set('x.txt', 'A');
+  ct.record({ type: 'modify', path: 'x.txt', oldContent: 'A', newContent: '' });
+  const diff = ct.getNetDiff();
+  assert.strictEqual(diff.totalChanges, 1);
+  assert.strictEqual(diff.files[0].type, 'modify');
+});
+
+test('REGRESSION: 空文件→deleted = delete', () => {
+  const ct = new ChangeTracker();
+  ct.baselineSnapshot.set('empty.txt', '');
+  ct.record({ type: 'delete', path: 'empty.txt', oldContent: NON_EXISTENT, newContent: NON_EXISTENT });
+  const diff = ct.getNetDiff();
+  assert.strictEqual(diff.totalChanges, 1);
+  assert.strictEqual(diff.files[0].type, 'delete');
+});
+
+test('REGRESSION: 目录删除子文件 baseline', () => {
+  const ct = new ChangeTracker();
+  // 模拟子文件已存在（baseline 有内容）
+  ct.baselineSnapshot.set('src/foo/a.js', 'const a=1;');
+  ct.baselineSnapshot.set('src/foo/b.js', 'const b=2;');
+  // 目录删除时记录子文件删除
+  ct.record({ type: 'delete', path: 'src/foo/a.js', oldContent: NON_EXISTENT, newContent: NON_EXISTENT });
+  ct.record({ type: 'delete', path: 'src/foo/b.js', oldContent: NON_EXISTENT, newContent: NON_EXISTENT });
+  const diff = ct.getNetDiff();
+  assert.strictEqual(diff.totalChanges, 2);
+  assert.ok(diff.files.some(f => f.path === 'src/foo/a.js' && f.type === 'delete'));
+  assert.ok(diff.files.some(f => f.path === 'src/foo/b.js' && f.type === 'delete'));
+});

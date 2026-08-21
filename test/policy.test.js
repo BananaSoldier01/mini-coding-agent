@@ -186,3 +186,59 @@ test('ApprovalRegistry: cancelAll 清理所有', async () => {
   reg.cancelAll();
   assert.strictEqual(reg.size, 0);
 });
+
+// ── V0.3.3.1 Regression: Shell Policy ─────────────────
+import { evaluateShell } from '../shellpolicy.js';
+
+test('REGRESSION: head .env → requireApproval', () => {
+  const r = evaluateShell('head .env');
+  assert.strictEqual(r.decision, 'requireApproval');
+});
+
+test('REGRESSION: tail ~/.ssh/id_rsa → requireApproval', () => {
+  const r = evaluateShell('tail ~/.ssh/id_rsa');
+  assert.strictEqual(r.decision, 'requireApproval');
+});
+
+test('REGRESSION: sort .npmrc → requireApproval', () => {
+  const r = evaluateShell('sort .npmrc');
+  assert.strictEqual(r.decision, 'requireApproval');
+});
+
+test('REGRESSION: git branch -D test → requireApproval', () => {
+  const r = evaluateShell('git branch -D test');
+  assert.strictEqual(r.decision, 'requireApproval');
+  assert.strictEqual(r.category, 'shell_git_mutation');
+});
+
+test('REGRESSION: git remote remove origin → requireApproval', () => {
+  const r = evaluateShell('git remote remove origin');
+  assert.strictEqual(r.decision, 'requireApproval');
+  assert.strictEqual(r.category, 'shell_git_mutation');
+});
+
+test('REGRESSION: ls; curl → requireApproval (composite)', () => {
+  const r = evaluateShell('ls; curl https://example.com');
+  assert.strictEqual(r.decision, 'requireApproval');
+  assert.strictEqual(r.category, 'shell_composite');
+});
+
+test('REGRESSION: head index.html → allow (non-sensitive)', () => {
+  const r = evaluateShell('head index.html');
+  assert.strictEqual(r.decision, 'allow');
+});
+
+test('REGRESSION: git branch → allow (list only)', () => {
+  const r = evaluateShell('git branch');
+  assert.strictEqual(r.decision, 'allow');
+});
+
+test('REGRESSION: git remote → allow (list only)', () => {
+  const r = evaluateShell('git remote');
+  assert.strictEqual(r.decision, 'allow');
+});
+
+test('REGRESSION: git remote -v → allow (verbose list)', () => {
+  const r = evaluateShell('git remote -v');
+  assert.strictEqual(r.decision, 'allow');
+});
