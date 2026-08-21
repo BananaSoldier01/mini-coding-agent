@@ -13,6 +13,12 @@ const state = {
   changes: [],
   operations: [],
   terminalRunning: false,
+  permissionMode: 'standard',
+  runStatus: 'idle',
+  timeline: [],
+  runStartTime: null,
+  approvals: { approved: 0, rejected: 0 },
+  commands: [],
 };
 
 /* ── Init ──────────────────────────────────────────── */
@@ -37,6 +43,19 @@ async function init() {
   $('#toggleTerminal').addEventListener('click', toggleTerminal);
   $('#clearDiff').addEventListener('click', clearDiff);
   $('#saveConfig').addEventListener('click', saveConfig);
+
+  // Permission Mode selector
+  $('#modeSelect').addEventListener('change', (e) => {
+    if (state.sessionId) {
+      api('/api/session', {
+        method: 'PATCH',
+        body: { sessionId: state.sessionId, permissionMode: e.target.value },
+      }).catch(() => {});
+    }
+    state.permissionMode = e.target.value;
+    $('#modeSelect').value = e.target.value;
+    updateModeLabel(e.target.value);
+  });
 
   $$('[data-close]').forEach((el) => el.addEventListener('click', closeConfig));
 
@@ -543,6 +562,9 @@ async function sendMessage() {
 
   appendMessage('user', escapeHtml(task));
   state.running = true;
+  state.runStartTime = Date.now();
+  state.timeline = [];
+  state.approvals = { approved: 0, rejected: 0 };
   $('#sendBtn').disabled = true;
   $('#stopBtn').disabled = false;
   setStatus('running', 'running');
@@ -569,7 +591,10 @@ async function sendMessage() {
   try {
     const res = await fetch('/api/run', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(localToken ? { 'X-Local-Token': localToken } : {}),
+      },
       body: JSON.stringify({
         task,
         workspace: state.workspace,
@@ -650,16 +675,20 @@ function handleEvent(event) {
       break;
     case 'iteration':
       break;
+    case 'status':
+      updateRunStatus(event.status, event.label, event.detail);
+      break;
     case 'tool_call':
-      addToolCall(event.toolCall);
+      addTimelineItem(event.toolCall, event.policy);
       break;
     case 'tool_result':
-      setToolCallResult(event.toolCall.id, event.result, event.toolCall.name);
+      updateTimelineItem(event.toolCall.id, event.result, event.toolCall.name);
       if (event.toolCall.name === 'run_command') {
         terminalWrite(event.toolCall.args.command, event.result);
       }
       break;
     case 'approval_needed':
+      addTimelineApproval(event);
       showApproval(event);
       break;
     case 'done':
@@ -670,6 +699,7 @@ function handleEvent(event) {
       if (event.result && event.result.changes) {
         renderNetDiff(event.result.changes);
       }
+      renderCompletionSummary(event.result);
       break;
     case 'error':
       if (event.message && event.message.includes('取消')) {
@@ -685,21 +715,6 @@ function handleEvent(event) {
 
 /* ── Approval ───────────────────────────────────────── */
 let pendingApproval = null;
-
-function showApproval(event) {
-  pendingApproval = {
-    runId: event.runId,
-    toolCallId: event.toolCall.id,
-    toolName: event.toolCall.name,
-    args: event.toolCall.args,
-    reason: event.reason,
-    category: event.category,
-  };
-  $('#approvalCommand').textContent = event.toolCall.args.command || JSON.stringify(event.toolCall.args);
-  $('#approvalReason').textContent = event.reason || 'Agent 即将执行此操作';
-  $('#approvalCategory').textContent = event.category || '';
-  $('#approvalModal').classList.add('open');
-}
 
 function respondApproval(approved) {
   $('#approvalModal').classList.remove('open');
@@ -759,6 +774,260 @@ function escapeHtml(s) {
 function scrollToBottom() {
   const container = $('#chatMessages');
   container.scrollTop = container.scrollHeight;
+}
+
+/* ── V0.4.0: Run Status ─────────────────────────────── */
+function updateRunStatus(status, label, detail) {
+  state.runStatus = status;
+  const dot = $('#runStatus .status-dot');
+  const text = $('#statusText');
+  const detailEl = $('#statusDetail');
+  dot.className = 'status-dot ' + status;
+  text.textContent = label;
+  detailEl.textContent = detail || '';
+}
+
+/* ── V0.4.0: Permission Mode ────────────────────────── */
+function updateModeLabel(mode) {
+  const labels = { safe: 'Safe', standard: 'Standard', full_access: 'Full Access' };
+  $('.mode-label').textContent = labels[mode] || mode;
+}
+
+/* ── V0.4.0: Agent Activity Timeline ────────────────── */
+function addTimelineItem(toolCall, policy) {
+  const item = {
+    id: toolCall.id,
+    name: toolCall.name,
+    args: toolCall.args,
+    policy: policy || 'allow',
+    status: 'running',
+    startTime: Date.now(),
+    result: null,
+  };
+  state.timeline.push(item);
+  renderTimeline();
+}
+
+function updateTimelineItem(toolCallId, result, toolName) {
+  const item = state.timeline.find((t) => t.id === toolCallId);
+  if (!item) return;
+  item.result = result;
+  item.status = result.error ? 'error' : 'done';
+  item.duration = Date.now() - item.startTime;
+  renderTimeline();
+}
+
+function addTimelineApproval(event) {
+  const item = {
+    id: event.toolCall.id,
+    name: event.toolCall.name,
+    args: event.toolCall.args,
+    policy: 'requireApproval',
+    status: 'waiting',
+    startTime: Date.now(),
+    result: null,
+  };
+  state.timeline.push(item);
+  renderTimeline();
+}
+
+function renderTimeline() {
+  const container = $('#timeline');
+  if (state.timeline.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = '';
+  for (const item of state.timeline) {
+    const el = document.createElement('div');
+    el.className = 'timeline-item' + (item.status === 'running' || item.status === 'waiting' ? '' : '');
+    el.dataset.id = item.id;
+
+    const icon = document.createElement('span');
+    icon.className = 'ti-icon ' + item.status;
+    icon.textContent = item.status === 'done' ? '✓' : item.status === 'error' ? '✕' : item.status === 'waiting' ? '⚠' : '●';
+    el.appendChild(icon);
+
+    const text = document.createElement('span');
+    text.className = 'ti-text';
+
+    if (item.name === 'run_command') {
+      const cmd = document.createElement('div');
+      cmd.className = 'ti-cmd';
+      cmd.textContent = '$ ' + (item.args.command || '');
+      text.appendChild(cmd);
+    } else if (item.name === 'read_file') {
+      const f = document.createElement('div');
+      f.className = 'ti-file';
+      f.textContent = '📄 ' + (item.args.path || '');
+      text.appendChild(f);
+    } else if (item.name === 'write_file') {
+      const f = document.createElement('div');
+      f.className = 'ti-file';
+      f.textContent = '✏️ ' + (item.args.path || '');
+      text.appendChild(f);
+    } else if (item.name === 'edit_file') {
+      const f = document.createElement('div');
+      f.className = 'ti-file';
+      f.textContent = '✏️ ' + (item.args.path || '');
+      text.appendChild(f);
+    } else if (item.name === 'search_files') {
+      const f = document.createElement('div');
+      f.className = 'ti-file';
+      f.textContent = '🔍 ' + (item.args.pattern || '');
+      text.appendChild(f);
+    } else if (item.name === 'delete_file') {
+      const f = document.createElement('div');
+      f.className = 'ti-file';
+      f.textContent = '🗑 ' + (item.args.path || '');
+      text.appendChild(f);
+    } else if (item.name === 'list_directory') {
+      const f = document.createElement('div');
+      f.className = 'ti-file';
+      f.textContent = '📁 ' + (item.args.path || '.');
+      text.appendChild(f);
+    } else {
+      text.textContent = item.name;
+    }
+
+    if (item.duration) {
+      const dur = document.createElement('span');
+      dur.className = 'ti-duration';
+      dur.textContent = (item.duration / 1000).toFixed(1) + 's';
+      text.appendChild(dur);
+    }
+
+    el.appendChild(text);
+
+    // Expand button
+    const expand = document.createElement('button');
+    expand.className = 'ti-expand';
+    expand.textContent = '>';
+    expand.onclick = () => el.classList.toggle('open');
+    el.appendChild(expand);
+
+    // Details
+    const details = document.createElement('div');
+    details.className = 'timeline-details';
+    let detailText = '';
+    if (item.args && Object.keys(item.args).length > 0) {
+      detailText += 'args: ' + JSON.stringify(item.args) + '\n';
+    }
+    if (item.result) {
+      const rStr = JSON.stringify(item.result);
+      detailText += 'result: ' + (rStr.length > 500 ? rStr.slice(0, 500) + '...' : rStr);
+    }
+    details.textContent = detailText;
+    el.appendChild(details);
+
+    container.appendChild(el);
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+/* ── V0.4.0: Completion Summary ─────────────────────── */
+function renderCompletionSummary(result) {
+  const container = $('#completionSummary');
+  if (!result) {
+    container.style.display = 'none';
+    return;
+  }
+
+  const changes = result.changes || { files: [], totalChanges: 0 };
+  const totalAdded = changes.files.reduce((s, f) => s + (f.added || 0), 0);
+  const totalRemoved = changes.files.reduce((s, f) => s + (f.removed || 0), 0);
+
+  let html = '<div class="cs-title">✓ 任务完成</div>';
+  html += '<div class="cs-grid">';
+  html += '<span class="cs-label">变更</span>';
+  html += `<span class="cs-value">${changes.totalChanges} files · +${totalAdded} -${totalRemoved}</span>`;
+  html += '<span class="cs-label">耗时</span>';
+  html += `<span class="cs-value">${state.runStartTime ? ((Date.now() - state.runStartTime) / 1000).toFixed(1) + 's' : '—'}</span>`;
+  html += '<span class="cs-label">审批</span>';
+  html += `<span class="cs-value">${state.approvals.approved} approved · ${state.approvals.rejected} rejected</span>`;
+  html += '</div>';
+
+  if (result.finalContent) {
+    html += '<div class="cs-summary">' + escapeHtml(result.finalContent).slice(0, 200) + '</div>';
+  }
+
+  container.innerHTML = html;
+  container.style.display = 'block';
+}
+
+/* ── V0.4.0: Human-Readable Approval ────────────────── */
+function showApproval(event) {
+  pendingApproval = {
+    runId: event.runId,
+    toolCallId: event.toolCall.id,
+    toolName: event.toolCall.name,
+    args: event.toolCall.args,
+    reason: event.reason,
+    category: event.category,
+    permissionMode: event.permissionMode,
+  };
+
+  const titleEl = $('#approvalTitle');
+  const msgEl = $('#approvalMessage');
+  const cmdEl = $('#approvalCommand');
+  const reasonEl = $('#approvalReason');
+  const catEl = $('#approvalCategory');
+
+  const toolName = event.toolCall.name;
+  const args = event.toolCall.args;
+
+  if (toolName === 'run_command') {
+    titleEl.textContent = '运行命令？';
+    msgEl.textContent = 'Agent 即将执行以下 Shell 命令：';
+    cmdEl.textContent = args.command || '';
+    reasonEl.textContent = event.reason || '此操作可能产生破坏性影响，需要确认。';
+  } else if (toolName === 'delete_file') {
+    titleEl.textContent = '删除文件？';
+    msgEl.textContent = '以下文件将被移出当前 workspace：';
+    cmdEl.textContent = args.path || '';
+    reasonEl.textContent = event.reason || '此操作不可撤销，需要确认。';
+  } else if (toolName === 'write_file') {
+    titleEl.textContent = '写入文件？';
+    msgEl.textContent = 'Agent 即将写入以下文件：';
+    cmdEl.textContent = args.path || '';
+    reasonEl.textContent = event.reason || '此操作将修改 workspace 文件，需要确认。';
+  } else if (toolName === 'edit_file') {
+    titleEl.textContent = '修改文件？';
+    msgEl.textContent = 'Agent 即将修改以下文件：';
+    cmdEl.textContent = args.path || '';
+    reasonEl.textContent = event.reason || '此操作将修改 workspace 文件，需要确认。';
+  } else if (toolName && toolName.startsWith('git')) {
+    titleEl.textContent = '修改 Git 状态？';
+    msgEl.textContent = 'Agent 即将执行 Git 操作：';
+    cmdEl.textContent = JSON.stringify(args);
+    reasonEl.textContent = event.reason || '此操作将修改 Git 状态，需要确认。';
+  } else {
+    titleEl.textContent = '需要确认';
+    msgEl.textContent = 'Agent 即将执行以下操作：';
+    cmdEl.textContent = JSON.stringify(args);
+    reasonEl.textContent = event.reason || '需要确认。';
+  }
+
+  catEl.textContent = event.category || '';
+  $('#approvalModal').classList.add('open');
+}
+
+/* ── V0.4.0: Diff Viewer ────────────────────────────── */
+function openDiffViewer(filePath, diff) {
+  $('#diffFilePath').textContent = filePath;
+  const body = $('#diffViewerBody');
+  body.innerHTML = '';
+  if (!diff || diff.length === 0) {
+    body.innerHTML = '<div class="dv-line">无 diff 数据</div>';
+    return;
+  }
+  for (const line of diff) {
+    const dl = document.createElement('div');
+    dl.className = 'dv-line ' + line.type;
+    dl.textContent = (line.type === 'add' ? '+' : '-') + ' ' + (line.content || '');
+    body.appendChild(dl);
+  }
+  $('#diffViewerModal').classList.add('open');
 }
 
 /* ── Init ───────────────────────────────────────────── */

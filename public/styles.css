@@ -400,3 +400,142 @@ html, body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-l); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+/* ── V0.4.0: Permission Mode ───────────────────────── */
+.permission-mode {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 4px 10px;
+}
+.mode-label {
+  font-size: 12px; font-weight: 600; color: var(--text);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.mode-select {
+  background: var(--bg); border: 1px solid var(--border-l);
+  color: var(--text); padding: 3px 6px; border-radius: 4px;
+  font-size: 12px; cursor: pointer; font-family: var(--mono);
+}
+.mode-select:focus { outline: none; border-color: var(--accent-dim); }
+
+/* ── V0.4.0: Run Status ────────────────────────────── */
+.run-status {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 12px; border-radius: 16px;
+  background: var(--bg-elev); border: 1px solid var(--border);
+  font-size: 12px;
+}
+.run-status .status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-faint);
+}
+.run-status .status-dot.idle { background: var(--text-faint); }
+.run-status .status-dot.thinking, .run-status .status-dot.reading,
+.run-status .status-dot.searching, .run-status .status-dot.editing,
+.run-status .status-dot.running, .run-status .status-dot.verifying {
+  background: var(--accent); animation: pulse 1.5s infinite;
+}
+.run-status .status-dot.waiting_approval { background: var(--warn); animation: pulse 1s infinite; }
+.run-status .status-dot.completed { background: var(--ok); }
+.run-status .status-dot.cancelled { background: var(--text-faint); }
+.run-status .status-dot.failed { background: var(--err); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.run-status .status-text { color: var(--text); font-weight: 600; }
+.run-status .status-detail { color: var(--text-dim); font-size: 11px; }
+
+/* ── V0.4.0: Agent Activity Timeline ───────────────── */
+.timeline {
+  border-top: 1px solid var(--border);
+  padding: 8px 16px; max-height: 200px; overflow-y: auto;
+  font-size: 13px;
+}
+.timeline-item {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 4px 0; color: var(--text-dim);
+}
+.timeline-item .ti-icon { flex-shrink: 0; width: 16px; text-align: center; }
+.timeline-item .ti-icon.done { color: var(--ok); }
+.timeline-item .ti-icon.running { color: var(--accent); }
+.timeline-item .ti-icon.error { color: var(--err); }
+.timeline-item .ti-icon.waiting { color: var(--warn); }
+.timeline-item .ti-text { flex: 1; }
+.timeline-item .ti-file { color: var(--text); font-family: var(--mono); font-size: 12px; }
+.timeline-item .ti-stats { color: var(--text-faint); font-size: 11px; margin-left: auto; }
+.timeline-item .ti-cmd { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+.timeline-item .ti-duration { color: var(--text-faint); font-size: 11px; }
+.timeline-item .ti-expand {
+  cursor: pointer; color: var(--text-faint); font-size: 11px;
+  background: none; border: none; padding: 0 4px;
+}
+.timeline-item .ti-expand:hover { color: var(--text-dim); }
+.timeline-details {
+  display: none; margin: 2px 0 4px 24px; padding: 6px 10px;
+  background: var(--bg-elev); border-radius: var(--radius);
+  font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+  white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto;
+}
+.timeline-item.open .timeline-details { display: block; }
+
+/* ── V0.4.0: Completion Summary ────────────────────── */
+.completion-summary {
+  margin: 12px 16px; padding: 12px 16px;
+  background: var(--bg-elev); border: 1px solid var(--border-l);
+  border-radius: var(--radius); font-size: 13px;
+}
+.completion-summary .cs-title { color: var(--ok); font-weight: 600; margin-bottom: 8px; }
+.completion-summary .cs-grid {
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 12px;
+  color: var(--text-dim);
+}
+.completion-summary .cs-grid .cs-label { color: var(--text-faint); }
+.completion-summary .cs-grid .cs-value { color: var(--text); }
+.completion-summary .cs-summary {
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);
+  color: var(--text-dim); font-style: italic;
+}
+
+/* ── V0.4.0: Changes Panel ─────────────────────────── */
+.changes-count { color: var(--text-faint); font-size: 11px; margin-right: 8px; }
+.diff-file { margin-bottom: 4px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.diff-file-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; background: var(--bg-elev); cursor: pointer;
+  font-size: 13px;
+}
+.diff-file-header:hover { background: var(--bg-elev2); }
+.badge { font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px; text-transform: uppercase; }
+.badge.create { background: rgba(74,222,128,0.15); color: var(--ok); }
+.badge.modify { background: rgba(96,165,250,0.15); color: var(--accent); }
+.badge.delete { background: rgba(248,113,113,0.15); color: var(--err); }
+.diff-file-header .stats { color: var(--text-faint); font-size: 11px; margin-left: auto; }
+.diff-file-body { display: none; border-top: 1px solid var(--border); }
+.diff-file.open .diff-file-body { display: block; }
+.diff-line { padding: 1px 10px; font-family: var(--mono); font-size: 12px; line-height: 1.5; }
+.diff-line.add { background: rgba(74,222,128,0.08); color: var(--ok); }
+.diff-line.remove { background: rgba(248,113,113,0.08); color: var(--err); }
+.diff-line .dl-num { display: inline-block; width: 40px; color: var(--text-faint); text-align: right; margin-right: 8px; user-select: none; }
+
+/* ── V0.4.0: Diff Viewer Modal ─────────────────────── */
+.diff-viewer { width: 800px; max-width: 90vw; max-height: 80vh; }
+.diff-viewer-body {
+  padding: 12px; overflow-y: auto; max-height: calc(80vh - 60px);
+  font-family: var(--mono); font-size: 12px; line-height: 1.5;
+}
+.diff-viewer-body .dv-line { padding: 1px 8px; white-space: pre-wrap; word-break: break-word; }
+.diff-viewer-body .dv-line.add { background: rgba(74,222,128,0.08); }
+.diff-viewer-body .dv-line.remove { background: rgba(248,113,113,0.08); }
+.diff-viewer-body .dv-num { display: inline-block; width: 35px; color: var(--text-faint); text-align: right; margin-right: 8px; user-select: none; }
+
+/* ── V0.4.0: Approval Modal ────────────────────────── */
+.approval .approval-message { color: var(--text); font-weight: 600; margin-bottom: 12px; }
+.approval .approval-command {
+  background: var(--bg); border: 1px solid var(--border-l);
+  padding: 10px 12px; border-radius: var(--radius); font-family: var(--mono);
+  font-size: 13px; color: var(--accent); margin-bottom: 10px;
+  white-space: pre-wrap; word-break: break-word;
+}
+.approval .approval-reason { color: var(--text-dim); font-size: 13px; margin-bottom: 6px; }
+.approval .approval-category {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 11px; background: var(--bg-elev2); color: var(--warn);
+  margin-top: 4px;
+}

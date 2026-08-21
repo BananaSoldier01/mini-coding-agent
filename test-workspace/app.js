@@ -4,7 +4,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 function getWelcomeTitle() {
-  return 'Welcome to the Demo App';
+  return 'Hello Agent';
 }
 
 app.get('/', (req, res) => {

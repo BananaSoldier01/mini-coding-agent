@@ -190,6 +190,7 @@ async function runAgent(opts) {
         }
 
         // 如果 Permission Mode 决定 allow，直接执行（跳过底层 Policy 详细检查）
+        let policyResult;
         if (modeDecision === 'allow') {
           policyResult = { decision: 'allow', category, reason: '' };
         } else {

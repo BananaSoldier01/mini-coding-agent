@@ -20,10 +20,21 @@
           <span class="ws-path" id="wsPath">—</span>
         </div>
       </div>
-      <div class="topbar-right">
-        <div class="status-indicator" id="statusIndicator">
+      <div class="topbar-center">
+        <div class="run-status" id="runStatus">
           <span class="status-dot idle"></span>
-          <span class="status-text">idle</span>
+          <span class="status-text" id="statusText">Idle</span>
+          <span class="status-detail" id="statusDetail"></span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="permission-mode" id="permissionMode">
+          <span class="mode-label">Standard</span>
+          <select id="modeSelect" class="mode-select">
+            <option value="safe">Safe</option>
+            <option value="standard" selected>Standard</option>
+            <option value="full_access">Full Access</option>
+          </select>
         </div>
         <button class="btn btn-ghost" id="configBtn" title="配置">⚙</button>
       </div>
@@ -42,7 +53,7 @@
         </div>
       </aside>
 
-      <!-- 中间：对话区 -->
+      <!-- 中间：Agent Thread -->
       <section class="chat-panel">
         <div class="chat-messages" id="chatMessages">
           <div class="welcome">
@@ -56,6 +67,12 @@
           </div>
         </div>
 
+        <!-- Agent Activity Timeline -->
+        <div class="timeline" id="timeline"></div>
+
+        <!-- Completion Summary -->
+        <div class="completion-summary" id="completionSummary" style="display:none"></div>
+
         <div class="chat-input-wrap">
           <textarea id="chatInput" placeholder="描述任务…" rows="1"></textarea>
           <button class="btn btn-primary" id="sendBtn">发送</button>
@@ -64,10 +81,11 @@
         <div class="input-hint">Enter 发送，Shift+Enter 换行</div>
       </section>
 
-      <!-- 右侧：操作面板 -->
+      <!-- 右侧：Changes -->
       <aside class="sidebar right">
         <div class="sidebar-header">
           <span>Changes</span>
+          <span class="changes-count" id="changesCount"></span>
           <button class="btn-icon" id="clearDiff" title="清除">✕</button>
         </div>
         <div class="diff-panel" id="diffPanel">
@@ -100,6 +118,19 @@
       </div>
       <div class="modal-body fv-body" id="fvBody">
         <pre id="fvContent"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Diff 查看器 ──────────────────────────────────────── -->
+  <div class="modal diff-viewer-modal" id="diffViewerModal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-content diff-viewer">
+      <div class="modal-header">
+        <span class="fv-path" id="diffFilePath">file</span>
+        <button class="btn-icon" data-close>✕</button>
+      </div>
+      <div class="modal-body diff-viewer-body" id="diffViewerBody">
       </div>
     </div>
   </div>
@@ -142,17 +173,17 @@
     <div class="modal-backdrop" data-close></div>
     <div class="modal-content approval">
       <div class="modal-header">
-        <h2>⚠ 需要确认</h2>
+        <h2 id="approvalTitle">⚠ 需要确认</h2>
       </div>
       <div class="modal-body">
-        <p>Agent 即将执行以下操作：</p>
+        <p class="approval-message" id="approvalMessage">Agent 即将执行以下操作：</p>
         <pre class="approval-command" id="approvalCommand"></pre>
         <p class="approval-reason" id="approvalReason"></p>
         <p class="approval-category" id="approvalCategory"></p>
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="rejectApproval">拒绝</button>
-        <button class="btn btn-primary" id="approveApproval">允许执行</button>
+        <button class="btn btn-primary" id="approveApproval">允许一次</button>
       </div>
     </div>
   </div>
