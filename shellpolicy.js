@@ -1,132 +1,92 @@
 /**
- * shellpolicy.js — Shell Capability Policy
+ * shellpolicy.js — Shell Operation Policy
  *
- * 从 denylist 正则思维改为 allowlist / capability 思维。
+ * V0.3.1: 从 executable allowlist 升级为 operation allowlist。
+ *
+ * 核心原则：
+ *   Allow operations, not executables.
+ *   Unknown → REQUIRE_APPROVAL
  *
  * 三级分类：
- *   SAFE       — 明确低风险，适合 Coding Agent 自动执行
+ *   SAFE       — 明确低风险操作，适合 Coding Agent 自动执行
  *   APPROVAL   — 无法明确判断安全 → 需要用户确认
  *   DENY       — 明确读取 Secret / 攻击 Harness 安全边界
- *
- * 原则：
- *   Unknown shell command ≠ SAFE
- *   Unknown shell command → REQUIRE_APPROVAL
  */
 
-// ── SAFE: 明确低风险的命令前缀 ────────────────────────
-// 格式: [风险组, 命令前缀, 允许的参数模式?]
-const SAFE_COMMANDS = [
-  // 文件浏览
-  ['file', 'pwd', null],
-  ['file', 'ls', null],
-  ['file', 'tree', null],
-  ['file', 'stat', null],
-  ['file', 'file', null],
-  ['file', 'test', null],
-  ['file', 'true', null],
-  ['file', 'false', null],
+// ── SAFE: 明确低风险的操作（按 operation，不按 executable）──
+const SAFE_OPERATIONS = [
+  // 文件浏览（只读）
+  { op: 'pwd', match: (c) => /^\s*pwd\b/.test(c) },
+  { op: 'ls', match: (c) => /^\s*ls\b/.test(c) },
+  { op: 'tree', match: (c) => /^\s*tree\b/.test(c) },
+  { op: 'stat', match: (c) => /^\s*stat\b/.test(c) },
+  { op: 'file', match: (c) => /^\s*file\b/.test(c) },
 
-  // 文件操作（非破坏性）
-  ['file', 'cat', null],
-  ['file', 'head', null],
-  ['file', 'tail', null],
-  ['file', 'wc', null],
-  ['file', 'sort', null],
-  ['file', 'uniq', null],
-  ['file', 'tr', null],
-  ['file', 'cut', null],
-  ['file', 'diff', null],
-  ['file', 'cmp', null],
-  ['file', 'md5sum', null],
-  ['file', 'sha1sum', null],
-  ['file', 'sha256sum', null],
-  ['file', 'echo', null],
-  ['file', 'printf', null],
-  ['file', 'mkdir', null],
-  ['file', 'cp', null],
-  ['file', 'mv', null],
-  ['file', 'touch', null],
-  ['file', 'ln', null],
-  ['file', 'chmod', null],  // 注意: chmod 777 会被拦截
+  // Git 只读操作
+  { op: 'git_status', match: (c) => /^\s*git\s+status\b/.test(c) },
+  { op: 'git_diff', match: (c) => /^\s*git\s+diff\b/.test(c) },
+  { op: 'git_log', match: (c) => /^\s*git\s+log\b/.test(c) },
+  { op: 'git_branch_show', match: (c) => /^\s*git\s+branch\s+--show-current\b/.test(c) },
+  { op: 'git_branch_list', match: (c) => /^\s*git\s+branch\b(?!.*--show-current)/.test(c) },
+  { op: 'git_remote', match: (c) => /^\s*git\s+remote\b/.test(c) },
 
-  // Git
-  ['git', 'git', null],
+  // 文本查看（只读，不涉及敏感路径）
+  { op: 'cat_normal', match: (c) => {
+    if (!/^\s*cat\b/.test(c)) return false;
+    // 排除敏感路径
+    if (/\.env|\.npmrc|\.pem|\.key|\.p12|\.ssh\/|\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519/i.test(c)) return false;
+    return true;
+  }},
 
-  // Node.js / npm
-  ['node', 'node', null],
-  ['node', 'npm', null],
-  ['node', 'npx', null],
-  ['node', 'node', null],
+  { op: 'head', match: (c) => /^\s*head\b/.test(c) },
+  { op: 'tail', match: (c) => /^\s*tail\b/.test(c) },
+  { op: 'wc', match: (c) => /^\s*wc\b/.test(c) },
+  { op: 'sort', match: (c) => /^\s*sort\b/.test(c) },
+  { op: 'uniq', match: (c) => /^\s*uniq\b/.test(c) },
+  { op: 'tr', match: (c) => /^\s*tr\b/.test(c) },
+  { op: 'cut', match: (c) => /^\s*cut\b/.test(c) },
+  { op: 'diff_files', match: (c) => /^\s*diff\b/.test(c) },
+  { op: 'cmp', match: (c) => /^\s*cmp\b/.test(c) },
+  { op: 'md5sum', match: (c) => /^\s*md5sum\b/.test(c) },
+  { op: 'sha256sum', match: (c) => /^\s*sha256sum\b/.test(c) },
 
-  // Python
-  ['python', 'python', null],
-  ['python', 'python3', null],
-  ['python', 'pip', null],
-  ['python', 'pip3', null],
+  // 构建/测试（项目定义的 script，需诚实说明风险）
+  { op: 'npm_test', match: (c) => /^\s*npm\s+test\b/.test(c) },
+  { op: 'npm_run_test', match: (c) => /^\s*npm\s+run\s+test\b/.test(c) },
+  { op: 'npm_run_lint', match: (c) => /^\s*npm\s+run\s+lint\b/.test(c) },
+  { op: 'npm_run_build', match: (c) => /^\s*npm\s+run\s+build\b/.test(c) },
+  { op: 'npm_run_typecheck', match: (c) => /^\s*npm\s+run\s+typecheck\b/.test(c) },
+  { op: 'npm_run_type-check', match: (c) => /^\s*npm\s+run\s+type-check\b/.test(c) },
 
-  // 构建工具
-  ['build', 'make', null],
-  ['build', 'cmake', null],
-  ['build', 'go', null],
-  ['build', 'cargo', null],
-  ['build', 'rustc', null],
-  ['build', 'gcc', null],
-  ['build', 'g++', null],
-  ['build', 'clang', null],
-  ['build', 'clang++', null],
-
-  // 压缩/归档
-  ['archive', 'tar', null],
-  ['archive', 'gzip', null],
-  ['archive', 'gunzip', null],
-  ['archive', 'zip', null],
-  ['archive', 'unzip', null],
-
-  // 搜索
-  ['search', 'grep', null],
-  ['search', 'rg', null],
-  ['search', 'find', null],
-  ['search', 'ag', null],
-  ['search', 'which', null],
-  ['search', 'whereis', null],
-  ['search', 'type', null],
-
-  // 环境/系统信息
-  ['info', 'date', null],
-  ['info', 'whoami', null],
-  ['info', 'id', null],
-  ['info', 'uname', null],
-  ['info', 'hostname', null],
-  ['info', 'df', null],
-  ['info', 'du', null],
-  ['info', 'free', null],
-  ['info', 'uptime', null],
-  ['info', 'nproc', null],
-
-  // 文本处理
-  ['text', 'sed', null],
-  ['text', 'awk', null],
-  ['text', 'perl', null],
-
-  // 包管理
-  ['package', 'yarn', null],
-  ['package', 'pnpm', null],
-  ['package', 'bun', null],
-
-  // 其他安全工具
-  ['util', 'basename', null],
-  ['util', 'dirname', null],
-  ['util', 'realpath', null],
-  ['util', 'readlink', null],
-  ['util', 'env', null],
-  ['util', 'printenv', null],
-  ['util', 'xargs', null],
-  ['util', 'tee', null],
-  ['util', 'dircolors', null],
+  // 环境信息（只读）
+  { op: 'date', match: (c) => /^\s*date\b/.test(c) },
+  { op: 'whoami', match: (c) => /^\s*whoami\b/.test(c) },
+  { op: 'id', match: (c) => /^\s*id\b/.test(c) },
+  { op: 'uname', match: (c) => /^\s*uname\b/.test(c) },
+  { op: 'hostname', match: (c) => /^\s*hostname\b/.test(c) },
+  { op: 'df', match: (c) => /^\s*df\b/.test(c) },
+  { op: 'du', match: (c) => /^\s*du\b/.test(c) },
+  { op: 'free', match: (c) => /^\s*free\b/.test(c) },
+  { op: 'uptime', match: (c) => /^\s*uptime\b/.test(c) },
+  { op: 'nproc', match: (c) => /^\s*nproc\b/.test(c) },
+  { op: 'which', match: (c) => /^\s*which\b/.test(c) },
+  { op: 'whereis', match: (c) => /^\s*whereis\b/.test(c) },
+  { op: 'type', match: (c) => /^\s*type\b/.test(c) },
+  { op: 'basename', match: (c) => /^\s*basename\b/.test(c) },
+  { op: 'dirname', match: (c) => /^\s*dirname\b/.test(c) },
+  { op: 'realpath', match: (c) => /^\s*realpath\b/.test(c) },
+  { op: 'readlink', match: (c) => /^\s*readlink\b/.test(c) },
+  { op: 'true', match: (c) => /^\s*true\b/.test(c) },
+  { op: 'false', match: (c) => /^\s*false\b/.test(c) },
+  { op: 'echo_normal', match: (c) => {
+    if (!/^\s*echo\b/.test(c)) return false;
+    // 排除 echo secret
+    if (/\$[A-Z_]*(KEY|TOKEN|SECRET|PASSWORD|PASSWD|API)/i.test(c)) return false;
+    return true;
+  }},
 ];
 
 // ── DENY: 明确禁止 ────────────────────────────────────
-// 读取 Secret、破坏系统、逃逸 sandbox
 const DENY_PATTERNS = [
   // 读取敏感环境变量
   /^\s*(printenv|env)\s+.*(KEY|TOKEN|SECRET|PASSWORD|PASSWD|API)/i,
@@ -141,15 +101,15 @@ const DENY_PATTERNS = [
   /cat\s+.*\.key/i,
   /cat\s+.*\/etc\/passwd/i,
   /cat\s+.*\/etc\/shadow/i,
-  /\/etc\/passwd/i,           // 任何读取 /etc/passwd 的命令
-  /\/etc\/shadow/i,           // 任何读取 /etc/shadow 的命令
+  /\/etc\/passwd/i,
+  /\/etc\/shadow/i,
 
   // 系统破坏
   /^\s*(shutdown|reboot|halt|init\s+0|poweroff)\b/i,
   /^\s*mkfs\b/i,
   /^\s*dd\s+.*\/dev\//i,
-  /^\s*rm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+\/(\s|$)/i,  // rm -rf /
-  /^\s*rm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+\*/i,         // rm -rf *
+  /^\s*rm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+\/(\s|$)/i,
+  /^\s*rm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+\*/i,
 
   // 管道执行
   /\|\s*(sh|bash|zsh|ksh|dash|ash)\s*$/i,
@@ -162,31 +122,71 @@ const DENY_PATTERNS = [
   /chmod\s+777\b/i,
   /chown\s+/i,
 
-  // 网络传输到外部（curl | sh 模式）
+  // 网络传输到外部
   /^\s*(curl|wget)\s+.*\|\s*(sh|bash|zsh)\b/i,
 ];
 
-// ── 需要审批的模式 ────────────────────────────────────
+// ── APPROVAL: 需要确认的操作模式 ──────────────────────
 const APPROVAL_PATTERNS = [
-  // 破坏性文件操作
-  /^\s*rm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+/i,
-  /^\s*rm\s+/i,  // 任何 rm
+  // 任意代码执行（即使 executable 已知）
+  /^\s*python[23]?\s+-c\b/i,
+  /^\s*python[23]?\s+-m\b/i,
+  /^\s*node\s+-e\b/i,
+  /^\s*node\s+--eval\b/i,
+  /^\s*perl\s+-e\b/i,
+  /^\s*ruby\s+-e\b/i,
+
+  // 包管理
+  /^\s*npm\s+install\b/i,
+  /^\s*npm\s+uninstall\b/i,
+  /^\s*npm\s+exec\b/i,
+  /^\s*npx\b/i,
+  /^\s*pip\s+install\b/i,
+  /^\s*pip3\s+install\b/i,
+  /^\s*yarn\s+add\b/i,
+  /^\s*pnpm\s+add\b/i,
+  /^\s*bun\s+add\b/i,
+
+  // Git 写操作
+  /^\s*git\s+reset\b/i,
+  /^\s*git\s+checkout\b/i,
+  /^\s*git\s+clean\b/i,
+  /^\s*git\s+config\b/i,
+  /^\s*git\s+commit\b/i,
+  /^\s*git\s+push\b/i,
+  /^\s*git\s+merge\b/i,
+  /^\s*git\s+rebase\b/i,
+  /^\s*git\s+tag\b/i,
+  /^\s*git\s+stash\b/i,
+  /^\s*git\s+restore\b/i,
+  /^\s*git\s+rm\b/i,
+
+  // 文件系统操作
+  /^\s*rm\b/i,
+  /^\s*rmdir\b/i,
+  /^\s*cp\b/i,
+  /^\s*mv\b/i,
+  /^\s*ln\b/i,
+  /^\s*chmod\b/i,
+  /^\s*chown\b/i,
+  /^\s*tee\b/i,
 
   // 网络操作
   /^\s*(curl|wget|nc|netcat|ssh|scp|rsync|ftp)\b/i,
 
-  // 系统修改
-  /^\s*(iptables|ufw|systemctl|service)\b/i,
+  // 压缩/归档
+  /^\s*tar\b/i,
+  /^\s*gzip\b/i,
+  /^\s*gunzip\b/i,
+  /^\s*zip\b/i,
+  /^\s*unzip\b/i,
 
   // 进程管理
   /^\s*(kill|killall|pkill)\b/i,
 
-  // 重定向/清空
+  // 重定向
   /^\s*>\s*\//i,
-  />\s*\/dev\//i,
-
-  // 压缩包操作（可能包含大量文件）
-  /^\s*(tar\s+.*-x|tar\s+.*-c)\b/i,
+  />\/dev\//i,
 ];
 
 /**
@@ -213,31 +213,12 @@ function evaluateShell(command) {
     }
   }
 
-  // ── SAFE 检查 ──────────────────────────────────────
-  const firstWord = trimmed.split(/\s+/)[0];
-  // 处理完整路径，如 /bin/ls
-  const baseWord = firstWord.split('/').pop();
-
-  for (const [group, prefix, paramPattern] of SAFE_COMMANDS) {
-    if (baseWord === prefix) {
-      // 检查危险参数
-      if (baseWord === 'chmod' && /\b777\b/.test(trimmed)) {
-        return {
-          decision: 'requireApproval',
-          category: 'shell_destructive',
-          reason: 'chmod 777 是危险权限设置，需要确认。',
-        };
-      }
-      if (baseWord === 'rm' || baseWord === 'rmdir') {
-        return {
-          decision: 'requireApproval',
-          category: 'shell_destructive',
-          reason: 'rm 命令会删除文件，需要确认。',
-        };
-      }
+  // ── SAFE 检查（operation-based）─────────────────────
+  for (const { op, match } of SAFE_OPERATIONS) {
+    if (match(trimmed)) {
       return {
         decision: 'allow',
-        category: `shell_${group}`,
+        category: `shell_${op}`,
         reason: '',
       };
     }
@@ -249,12 +230,14 @@ function evaluateShell(command) {
       return {
         decision: 'requireApproval',
         category: 'shell_destructive',
-        reason: `命令可能产生破坏性影响，需要确认。`,
+        reason: `命令可能产生破坏性影响或执行任意代码，需要确认。`,
       };
     }
   }
 
   // ── 未知命令 → APPROVAL ────────────────────────────
+  const firstWord = trimmed.split(/\s+/)[0];
+  const baseWord = firstWord.split('/').pop();
   return {
     decision: 'requireApproval',
     category: 'shell_unknown',
@@ -262,4 +245,4 @@ function evaluateShell(command) {
   };
 }
 
-export { evaluateShell, SAFE_COMMANDS, DENY_PATTERNS, APPROVAL_PATTERNS };
+export { evaluateShell, SAFE_OPERATIONS, DENY_PATTERNS, APPROVAL_PATTERNS };

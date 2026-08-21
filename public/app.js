@@ -386,6 +386,72 @@ function clearDiff() {
   state.changes = [];
 }
 
+/* ── Run Net Diff 渲染 ──────────────────────────────── */
+function renderNetDiff(netDiff) {
+  const panel = $('#diffPanel');
+  panel.innerHTML = '';
+
+  if (!netDiff || netDiff.totalChanges === 0) {
+    panel.innerHTML = '<div class="diff-empty">本轮无净变更</div>';
+    return;
+  }
+
+  // 摘要
+  const summary = document.createElement('div');
+  summary.className = 'diff-summary';
+  summary.textContent = `${netDiff.totalChanges} files changed`;
+  panel.appendChild(summary);
+
+  // 每个文件
+  for (const file of netDiff.files) {
+    const fileEl = document.createElement('div');
+    fileEl.className = 'diff-file';
+
+    const header = document.createElement('div');
+    header.className = 'diff-file-header';
+
+    const badge = file.type === 'create' ? 'A' : file.type === 'delete' ? 'D' : 'M';
+    const badgeClass = file.type === 'create' ? 'create' : file.type === 'delete' ? 'delete' : 'modify';
+    const stats = `+${file.added} -${file.removed}`;
+
+    header.innerHTML = `
+      <span class="badge ${badgeClass}">${badge}</span>
+      <span>${escapeHtml(file.path)}</span>
+      <span class="stats">${stats}</span>
+    `;
+
+    const body = document.createElement('div');
+    body.className = 'diff-file-body';
+
+    if (file.diff && file.diff.length > 0) {
+      for (const line of file.diff) {
+        const dl = document.createElement('div');
+        dl.className = 'diff-line ' + line.type;
+        dl.textContent = (line.type === 'add' ? '+' : '-') + ' ' + line.content;
+        body.appendChild(dl);
+      }
+    } else if (file.type === 'create') {
+      const dl = document.createElement('div');
+      dl.className = 'diff-line add';
+      dl.textContent = '+ (新建文件)';
+      body.appendChild(dl);
+    } else if (file.type === 'delete') {
+      const dl = document.createElement('div');
+      dl.className = 'diff-line remove';
+      dl.textContent = '- (删除)';
+      body.appendChild(dl);
+    }
+
+    fileEl.appendChild(header);
+    fileEl.appendChild(body);
+    header.addEventListener('click', () => {
+      fileEl.classList.toggle('open');
+    });
+    fileEl.classList.add('open');
+    panel.appendChild(fileEl);
+  }
+}
+
 /* ── Terminal ───────────────────────────────────────── */
 function terminalWrite(cmd, result) {
   const panel = $('#terminalPanel');
@@ -538,8 +604,11 @@ async function sendMessage() {
 }
 
 function stopTask() {
+  // 关闭 Approval Modal
+  $('#approvalModal').classList.remove('open');
+  pendingApproval = null;
+
   if (state.sessionId) {
-    // 通知后端停止
     api('/api/stop', {
       method: 'POST',
       body: { sessionId: state.sessionId },
@@ -581,10 +650,18 @@ function handleEvent(event) {
       setStatus('done', 'done');
       break;
     case 'agent_done':
+      if (event.result && event.result.changes) {
+        renderNetDiff(event.result.changes);
+      }
       break;
     case 'error':
-      appendSystemMessage('❌ ' + event.message);
-      setStatus('error', 'error');
+      if (event.message && event.message.includes('取消')) {
+        appendSystemMessage('🛑 ' + event.message);
+        setStatus('cancelled', 'cancelled');
+      } else {
+        appendSystemMessage('❌ ' + event.message);
+        setStatus('error', 'error');
+      }
       break;
   }
 }
@@ -593,9 +670,17 @@ function handleEvent(event) {
 let pendingApproval = null;
 
 function showApproval(event) {
-  pendingApproval = event;
+  pendingApproval = {
+    runId: event.runId,
+    toolCallId: event.toolCall.id,
+    toolName: event.toolCall.name,
+    args: event.toolCall.args,
+    reason: event.reason,
+    category: event.category,
+  };
   $('#approvalCommand').textContent = event.toolCall.args.command || JSON.stringify(event.toolCall.args);
   $('#approvalReason').textContent = event.reason || 'Agent 即将执行此操作';
+  $('#approvalCategory').textContent = event.category || '';
   $('#approvalModal').classList.add('open');
 }
 
@@ -604,7 +689,11 @@ function respondApproval(approved) {
   if (pendingApproval) {
     api('/api/approve', {
       method: 'POST',
-      body: { toolCallId: pendingApproval.toolCall.id, approved },
+      body: {
+        runId: pendingApproval.runId,
+        toolCallId: pendingApproval.toolCallId,
+        approved,
+      },
     }).catch(() => {});
     pendingApproval = null;
   }

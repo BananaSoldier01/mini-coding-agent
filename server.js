@@ -114,7 +114,7 @@ const server = http.createServer(async (req, resp) => {
     }
 
     if (pathname === '/api/config' && method === 'POST') {
-      const body = JSON.parse(await readBody(req));
+      const body = await readBody(req);
       const newConfig = JSON.parse(body);
       const current = loadConfig();
       const merged = {
@@ -127,7 +127,6 @@ const server = http.createServer(async (req, resp) => {
       };
       saveFileConfig(merged);
       Object.assign(config, { llm: merged.llm, workspace: merged.workspace });
-      // workspace 变更需显式注册
       workspaceRegistry.add(merged.workspace, 'user');
       return sendJson(resp, { ok: true });
     }
@@ -238,10 +237,13 @@ const server = http.createServer(async (req, resp) => {
         resp.write(`data: ${data}\n\n`);
       };
 
-      // 获取或创建 session
+      // 获取或创建 session（Session 与 Workspace 强绑定）
       let session;
       if (sessionId) {
         session = sessionManager.get(sessionId);
+        if (session && session.workspace !== ws) {
+          return sendError(resp, 409, `Session ${sessionId} 属于 workspace ${session.workspace}，不能用于 ${ws}。请切换 workspace 或创建新 Session。`);
+        }
       }
       if (!session) {
         session = sessionManager.create(ws);
@@ -285,7 +287,7 @@ const server = http.createServer(async (req, resp) => {
           sendEvent({ type: 'error', message: err.message });
         }
       } finally {
-        runManager.remove(session.id);
+        runManager.remove(session.id, activeRun);
         resp.end();
       }
       return;

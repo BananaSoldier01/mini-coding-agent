@@ -77,8 +77,12 @@ async function runAgent(opts) {
   const messages = [
     { role: 'system', content: systemPrompt },
     ...sessionMessages,
-    { role: 'user', content: task },
   ];
+
+  // 本轮消息（turn boundary），不依赖 content 匹配
+  const turnMessages = [];
+  turnMessages.push({ role: 'user', content: task });
+  messages.push(...turnMessages);
 
   let iteration = 0;
   let finalContent = '';
@@ -97,7 +101,7 @@ async function runAgent(opts) {
 
     let assistantMsg;
     try {
-      assistantMsg = await callLLMStream(provider, messages, toolDefs, onEvent);
+      assistantMsg = await callLLMStream(provider, messages, toolDefs, onEvent, signals);
     } catch (err) {
       if (run?.isStopped() || err.name === 'AbortError') {
         stopped = true;
@@ -111,6 +115,7 @@ async function runAgent(opts) {
     if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
       // 将 assistant 消息加入上下文（保持为一个消息）
       messages.push(assistantMsg);
+      turnMessages.push(assistantMsg);
 
       for (const tc of assistantMsg.tool_calls) {
         if (run?.isStopped() || signals?.signal?.aborted) {
@@ -136,6 +141,7 @@ async function runAgent(opts) {
               result: { error: `未知工具: ${toolName}` },
             });
             messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: `未知工具: ${toolName}` }) });
+            turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: `未知工具: ${toolName}` }) });
             continue;
           }
           policyResult = evaluate(toolDef, args, { sandbox, tracker, workspace, run });
@@ -155,6 +161,7 @@ async function runAgent(opts) {
             result: { error: `拒绝执行: ${policyResult.reason}`, denied: true },
           });
           messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: `拒绝执行: ${policyResult.reason}` }) });
+          turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: `拒绝执行: ${policyResult.reason}` }) });
           continue;
         }
 
@@ -178,6 +185,7 @@ async function runAgent(opts) {
               result: { error: '用户拒绝执行', cancelled: true },
             });
             messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: '用户拒绝执行' }) });
+          turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: '用户拒绝执行' }) });
             continue;
           }
         }
@@ -203,14 +211,14 @@ async function runAgent(opts) {
             }
           }
 
-          // 记录变更到 tracker
+          // 记录变更到 tracker（使用真实 before/after 内容）
           if (result.path && (toolName === 'write_file' || toolName === 'edit_file' || toolName === 'delete_file')) {
             tracker.record({
               type: toolName === 'write_file' ? (result.action === 'created' ? 'create' : 'modify')
                 : toolName === 'delete_file' ? 'delete' : 'modify',
               path: result.path,
-              oldContent: null,
-              newContent: null,
+              oldContent: result.before || null,
+              newContent: result.after || null,
             });
           }
         } catch (err) {
@@ -234,6 +242,7 @@ async function runAgent(opts) {
           ? resultStr.slice(0, MAX_TOOL_OUTPUT_CHARS) + '\n...[输出已截断]'
           : resultStr;
         messages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
+        turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
       }
 
       if (stopped) break;
@@ -251,13 +260,9 @@ async function runAgent(opts) {
   // 计算净变更
   const netDiff = tracker.getNetDiff();
 
-  // 返回仅新增的消息（不含旧 session 消息和 system prompt）
-  // 从新 user task 开始截断
-  const userTaskIdx = messages.findIndex((m) => m.role === 'user' && m.content === task);
-  const newMessages = userTaskIdx >= 0 ? messages.slice(userTaskIdx) : messages.filter((m) => m.role !== 'system');
-
+  // 返回本轮消息（turnMessages），不含旧 session 消息和 system prompt
   return {
-    messages: newMessages,
+    messages: turnMessages,
     changes: netDiff,
     finalContent,
     iteration,
@@ -265,13 +270,14 @@ async function runAgent(opts) {
   };
 }
 
-async function callLLMStream(provider, messages, toolDefs, onEvent) {
+async function callLLMStream(provider, messages, toolDefs, onEvent, signals) {
   const stream = await provider.chatStream({
     messages,
     tools: toolDefs.map((t) => ({
       type: 'function',
       function: { name: t.name, description: t.description, parameters: t.input_schema },
     })),
+    signal: signals?.signal,
   });
 
   const reader = stream.getReader();

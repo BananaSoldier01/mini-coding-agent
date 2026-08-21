@@ -5,9 +5,8 @@
  * 替代旧的 denylist 正则。
  */
 
-import { spawn } from 'child_process';
 import { safeEnv, clampTimeout } from '../policy.js';
-import { killProcessTree, TERMINATION_REASON } from '../runmanager.js';
+import { killProcessTree, spawnDetached, TERMINATION_REASON } from '../runmanager.js';
 
 const MAX_OUTPUT = 200 * 1024;
 
@@ -25,9 +24,8 @@ async function runCommand(input, ctx) {
     let terminationReason = TERMINATION_REASON.COMPLETED;
     const startTime = Date.now();
 
-    const child = spawn(command, [], {
+    const child = spawnDetached(command, [], {
       cwd: workdir, shell: true, env,
-      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     if (run) run.registerChild(child);

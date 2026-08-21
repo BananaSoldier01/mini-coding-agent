@@ -40,10 +40,10 @@ class FileTools {
     const dir = path.dirname(absolute);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-    let oldContent = null, existed = false;
+    let before = null, existed = false;
     if (fs.existsSync(absolute)) {
       existed = true;
-      try { oldContent = fs.readFileSync(absolute, 'utf-8'); } catch {}
+      try { before = fs.readFileSync(absolute, 'utf-8'); } catch {}
     }
 
     fs.writeFileSync(absolute, content, 'utf-8');
@@ -52,6 +52,8 @@ class FileTools {
       path: this.service.sandbox.relative(absolute),
       action: existed ? 'modified' : 'created',
       size: Buffer.byteLength(content, 'utf-8'),
+      before,
+      after: content,
     };
   }
 
@@ -80,6 +82,8 @@ class FileTools {
       action: 'modified',
       replaced: true,
       occurrences,
+      before: content,
+      after: newContent,
     };
   }
 
@@ -99,6 +103,9 @@ class FileTools {
 
     this._walk(root, (filePath) => {
       if (results.length >= MAX_RESULTS) return false;
+      // 敏感文件检查 — 防止通过 search 绕过 secret protection
+      const relPath = this.service.sandbox.relative(filePath);
+      if (this.service.isSensitive(relPath)) return true; // 跳过，不读取
       if (this.service.isBinary(filePath)) return true;
       try {
         const stat = fs.statSync(filePath);
@@ -108,7 +115,7 @@ class FileTools {
         for (let i = 0; i < lines.length; i++) {
           if (regex.test(lines[i])) {
             results.push({
-              path: this.service.sandbox.relative(filePath),
+              path: relPath,
               line: i + 1,
               content: lines[i].trim().slice(0, MAX_LINE_LENGTH),
             });
@@ -132,12 +139,17 @@ class FileTools {
     if (!fs.existsSync(absolute)) throw new Error(`文件不存在: ${filePath}`);
     const stat = fs.statSync(absolute);
 
+    let before = null;
+    try { before = fs.readFileSync(absolute, 'utf-8'); } catch {}
+
     fs.rmSync(absolute, { recursive: stat.isDirectory() });
 
     return {
       path: this.service.sandbox.relative(absolute),
       action: 'deleted',
       wasDirectory: stat.isDirectory(),
+      before,
+      after: null,
     };
   }
 
