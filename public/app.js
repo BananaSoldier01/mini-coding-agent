@@ -575,6 +575,7 @@ async function sendMessage() {
   state.running = true;
   state.runStartTime = Date.now();
   state.timeline = [];
+  state.commands = [];
   state.approvals = { approved: 0, rejected: 0 };
   $('#sendBtn').disabled = true;
   $('#stopBtn').disabled = false;
@@ -584,7 +585,7 @@ async function sendMessage() {
     try {
       const data = await api('/api/session', {
         method: 'POST',
-        body: { workspace: state.workspace },
+        body: { workspace: state.workspace, permissionMode: state.permissionMode },
       });
       state.sessionId = data.sessionId;
       // 使用 Server 返回的 permissionMode 真值
@@ -746,15 +747,16 @@ let pendingApproval = null;
 function respondApproval(approved) {
   $('#approvalModal').classList.remove('open');
   if (pendingApproval) {
+    const { runId, toolCallId } = pendingApproval;
+    pendingApproval = null;
     api('/api/approve', {
       method: 'POST',
-      body: {
-        runId: pendingApproval.runId,
-        toolCallId: pendingApproval.toolCallId,
-        approved,
-      },
+      body: { runId, toolCallId, approved },
+    }).then(() => {
+      // Server 确认成功后才计数
+      if (approved) state.approvals.approved++;
+      else state.approvals.rejected++;
     }).catch(() => {});
-    pendingApproval = null;
   }
 }
 

@@ -1,27 +1,17 @@
 /**
  * permission.js — Permission Mode
  *
- * V0.4.0.1: 重构 Permission decision merge
+ * V0.4.0.2: 真正实现 Safe / Standard / Full Access 三档差异
  *
- * 合并规则（Base Policy 始终执行，不可跳过）：
+ * Safe = 最大监督：只读自动，修改/执行全部需要审批
+ * Standard = 日常默认：按 Base Policy 执行
+ * Full Access = 高自主：减少审批，但 Hard Deny 不可覆盖
  *
+ * 合并规则：
  * 1. Hard Deny 永远不可被 Mode 覆盖
- *    base=deny → 任何 mode 都 deny
- *
- * 2. Safe 模式：最大监督
- *    base=allow          → allow
- *    base=requireApproval → requireApproval（不可被 base allow 降级）
- *    base=deny           → deny
- *
- * 3. Standard 模式：默认
- *    base=allow          → allow
- *    base=requireApproval → requireApproval
- *    base=deny           → deny
- *
- * 4. Full Access 模式：高自主
- *    base=allow          → allow
- *    base=requireApproval → allow（降级为自动）
- *    base=deny           → deny（Hard Deny 不可覆盖）
+ * 2. Safe: write/edit/delete/shell → requireApproval（即使 base=allow）
+ * 3. Standard: 按 base 决策
+ * 4. Full Access: requireApproval → allow
  */
 
 // ── Permission Modes ──────────────────────────────────
@@ -52,42 +42,62 @@ const BASE_DECISION = {
   DENY: 'deny',
 };
 
+// ── Tool Categories that Safe mode always requires approval for ──
+const SAFE_REQUIRE_APPROVAL_CATEGORIES = new Set([
+  'file_write',
+  'file_edit',
+  'file_delete',
+  'shell', 'shell_composite', 'shell_unknown', 'shell_destructive',
+  'shell_git_mutation',
+  'network',
+  'dependency_install',
+  'project_script',
+  'git_mutation',
+]);
+
 /**
  * 合并 Permission Mode 与 Base Policy 决策
  *
- * @param {string} mode - Safe / Standard / Full Access
- * @param {string} baseDecision - Base Policy 的决策：allow / requireApproval / deny
+ * @param {object} opts
+ * @param {string} opts.mode - Safe / Standard / Full Access
+ * @param {string} opts.baseDecision - Base Policy: allow / requireApproval / deny
+ * @param {string} opts.baseCategory - 工具类别
+ * @param {string} opts.toolName - 工具名称
  * @returns { 'allow' | 'requireApproval' | 'deny' }
  */
-function mergePermission(mode, baseDecision) {
+function mergePermission({ mode, baseDecision, baseCategory, toolName }) {
   // ── Hard Deny：永远不可被 Mode 覆盖 ────────────────
   if (baseDecision === BASE_DECISION.DENY) {
     return BASE_DECISION.DENY;
   }
 
-  // ── Safe 模式 ──────────────────────────────────────
+  // ── Safe 模式：最大监督 ────────────────────────────
   if (mode === PERMISSION_MODES.SAFE) {
-    // base=allow → allow
-    // base=requireApproval → requireApproval（不可降级）
-    return baseDecision; // allow → allow, requireApproval → requireApproval
+    // 只读操作：允许
+    const SAFE_ALLOW_CATEGORIES = new Set([
+      'file_read', 'file_search', 'file_list', 'file_stat',
+      'git_read',
+    ]);
+    if (SAFE_ALLOW_CATEGORIES.has(baseCategory)) {
+      return BASE_DECISION.ALLOW;
+    }
+    // 修改/执行操作：全部需要审批（即使 base=allow）
+    return BASE_DECISION.REQUIRE_APPROVAL;
   }
 
-  // ── Standard 模式 ──────────────────────────────────
+  // ── Standard 模式：日常默认 ─────────────────────────
   if (mode === PERMISSION_MODES.STANDARD) {
     return baseDecision; // allow → allow, requireApproval → requireApproval
   }
 
-  // ── Full Access 模式 ───────────────────────────────
+  // ── Full Access 模式：高自主 ───────────────────────
   if (mode === PERMISSION_MODES.FULL_ACCESS) {
-    // base=requireApproval → allow（降级为自动）
-    // base=allow → allow
     if (baseDecision === BASE_DECISION.REQUIRE_APPROVAL) {
-      return BASE_DECISION.ALLOW;
+      return BASE_DECISION.ALLOW; // 降级为自动
     }
     return baseDecision;
   }
 
-  // 未知模式：默认 requireApproval
   return BASE_DECISION.REQUIRE_APPROVAL;
 }
 
@@ -114,9 +124,8 @@ class PermissionMode {
     return this.mode === mode;
   }
 
-  /** 合并 Base Policy 决策 */
-  merge(baseDecision) {
-    return mergePermission(this.mode, baseDecision);
+  merge(baseDecision, baseCategory, toolName) {
+    return mergePermission({ mode: this.mode, baseDecision, baseCategory, toolName });
   }
 }
 

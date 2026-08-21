@@ -17,7 +17,7 @@ import { Sandbox } from '../sandbox.js';
 import { registry as approvalRegistry } from '../approval.js';
 import { evaluate } from '../policy.js';
 import { evaluateShell } from '../shellpolicy.js';
-import { evaluatePermission, PERMISSION_MODES } from '../permission.js';
+import { mergePermission } from '../permission.js';
 import { RunStatus, RUN_STATUS } from '../runstatus.js';
 
 const MAX_ITERATIONS = 20;
@@ -169,7 +169,7 @@ async function runAgent(opts) {
         }
 
         // ── Step 2: Permission Mode 合并 Base Policy ────
-        const finalDecision = mergePermission(mode, baseDecision);
+        const finalDecision = mergePermission({ mode, baseDecision, baseCategory, toolName });
 
         // Hard Deny 不可被 Mode 覆盖
         if (finalDecision === 'deny') {
@@ -230,6 +230,11 @@ async function runAgent(opts) {
           run?.setPendingApproval(tc.id);
           const approved = await approvalRegistry.register(run?.runId || 'default', tc.id);
           run?.clearPendingApproval();
+
+          // Approval 后恢复到对应 tool 的状态
+          const postApprovalStatus = runStatus.inferFromTool(toolName);
+          runStatus.transition(postApprovalStatus, toolName);
+          emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label, detail: toolName });
 
           if (!approved) {
             emit(onEvent, {
@@ -330,7 +335,7 @@ async function runAgent(opts) {
       const finalAssistantMsg = { role: 'assistant', content: finalContent };
       messages.push(finalAssistantMsg);
       turnMessages.push(finalAssistantMsg);
-      runStatus.transition(RUN_STATUS.VERIFYING);
+      // 不要自动伪造 Verifying：没有真实 verification action 就直接 Completed
       runStatus.transition(RUN_STATUS.COMPLETED);
       emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label });
       emit(onEvent, { type: 'done', content: finalContent, iteration });
