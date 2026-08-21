@@ -407,6 +407,102 @@ async function newSession() {
   }
 }
 
+/* ── Test Hooks (仅 E2E) ──────────────────────────── */
+if (typeof window !== 'undefined') {
+  window.__dshTest = {
+    setTimeline(items) {
+      state.timeline = items;
+      renderTimeline();
+    },
+    setChanges(changes) {
+      state.changes = changes;
+      const panel = $('#diffPanel');
+      panel.innerHTML = '';
+      if (changes.length === 0) {
+        panel.innerHTML = '<div class="diff-empty">本轮无净变更</div>';
+        return;
+      }
+      const summary = document.createElement('div');
+      summary.className = 'diff-summary';
+      summary.textContent = `${changes.length} files changed`;
+      panel.appendChild(summary);
+      for (const c of changes) {
+        const fileEl = document.createElement('div');
+        fileEl.className = 'diff-file';
+        const badge = c.type === 'create' ? 'A' : c.type === 'delete' ? 'D' : 'M';
+        const badgeClass = c.type === 'create' ? 'create' : c.type === 'delete' ? 'delete' : 'modify';
+        const header = document.createElement('div');
+        header.className = 'diff-file-header';
+        header.innerHTML = `<span class="badge ${badgeClass}">${badge}</span><span class="diff-file-name">${escapeHtml(c.path)}</span><span class="stats">+${c.added||0} -${c.removed||0}</span>`;
+        const body = document.createElement('div');
+        body.className = 'diff-file-body';
+        if (c.diff && c.diff.length) {
+          for (const line of c.diff) {
+            const dl = document.createElement('div');
+            dl.className = 'diff-line ' + line.type;
+            dl.textContent = (line.type === 'add' ? '+' : '-') + ' ' + line.content;
+            body.appendChild(dl);
+          }
+        }
+        fileEl.appendChild(header);
+        fileEl.appendChild(body);
+        header.addEventListener('click', (e) => {
+          if (e.target.closest('.stats')) { fileEl.classList.toggle('open'); return; }
+          openFileDiff(c.path);
+          switchInspectorTab('file');
+        });
+        fileEl.classList.add('open');
+        panel.appendChild(fileEl);
+      }
+    },
+    setFileTree(tree) {
+      state.fileTreeData = tree;
+      state.expandedDirs.add('.');
+      renderFileTree();
+    },
+    openFile(path) {
+      openFileCurrent(path);
+    },
+    setTerminal(commands) {
+      const body = $('#terminalBody');
+      body.innerHTML = '';
+      for (const cmd of commands) {
+        const card = document.createElement('div');
+        card.className = 'cmd-card';
+        card.dataset.toolCallId = cmd.toolCallId || '';
+        const header = document.createElement('div');
+        header.className = 'cmd-card-header';
+        const chevron = document.createElement('span');
+        chevron.className = 'cmd-card-chevron';
+        chevron.textContent = '▶';
+        const cmdSpan = document.createElement('span');
+        cmdSpan.className = 'cmd-card-command';
+        cmdSpan.textContent = '$ ' + cmd.command;
+        const status = document.createElement('span');
+        status.className = 'cmd-card-status ok';
+        status.textContent = 'Exit 0';
+        const dur = document.createElement('span');
+        dur.className = 'cmd-card-duration';
+        dur.textContent = '0.1s';
+        header.appendChild(chevron);
+        header.appendChild(cmdSpan);
+        header.appendChild(status);
+        header.appendChild(dur);
+        header.onclick = () => {
+          card.classList.toggle('open');
+          chevron.classList.toggle('open', card.classList.contains('open'));
+        };
+        card.appendChild(header);
+        const body2 = document.createElement('div');
+        body2.className = 'cmd-card-body';
+        body2.textContent = cmd.stdout || '(no output)';
+        card.appendChild(body2);
+        body.appendChild(card);
+      }
+    },
+  };
+}
+
 /* ── Init ──────────────────────────────────────────── */
 async function init() {
   const cfg = await api('/api/config');
