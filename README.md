@@ -2,7 +2,7 @@
 
 一个可在本地 workspace 中执行编码任务的轻量级 Agent Harness。
 
-**当前版本**: V0.4.1 — Workspace Experience
+**当前版本**: V0.4.2 — Product Hardening
 
 ## 特性
 

@@ -165,3 +165,48 @@ test('E2E 10 — New Session', async ({ page }) => {
   await page.locator('#newSessionBtn').click();
   await expect(page.locator('#newSessionBtn')).not.toBeDisabled();
 });
+
+// ── E2E 11: Directory Delete Complete Flow ──────────────
+
+test('E2E 11 — Directory Delete Complete Flow', async ({ page }) => {
+  // Set up a directory delete scenario: timeline + changes
+  await page.evaluate(() => {
+    window.__dshTest.setTimeline([{
+      id: 'tc-del-1', name: 'delete_file',
+      args: { path: 'foo' }, status: 'done',
+      startTime: Date.now() - 100, duration: 50,
+      result: { action: 'deleted', wasDirectory: true,
+        deletedFiles: [
+          { path: 'foo/a.js', before: 'const a = 1;\n' },
+          { path: 'foo/b.js', before: 'const b = 2;\n' },
+        ] },
+    }]);
+    window.__dshTest.setChanges([{
+      path: 'foo/a.js', type: 'delete', added: 0, removed: 1,
+      diff: [{ type: 'remove', content: 'const a = 1;' }],
+      before: 'const a = 1;\n', after: '',
+    }]);
+  });
+
+  // 1. Timeline shows delete_file with trash icon and directory path
+  await expect(page.locator('.ti-file')).toContainText('foo');
+  await expect(page.locator('.ti-file')).toContainText('🗑');
+
+  // 2. Changes panel shows delete badge (D) and file entry
+  await page.locator('.inspector-tab[data-tab="changes"]').click();
+  await expect(page.locator('.badge.delete')).toBeVisible();
+  await expect(page.locator('.diff-file')).toContainText('foo/a.js');
+
+  // 3. Click the deleted file entry in Changes → opens Inspector File tab with Diff view
+  await page.locator('.diff-file-header').first().click();
+  await expect(page.locator('#inspectorFile')).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('.fv-tab.active')).toHaveText('Diff');
+  await expect(page.locator('#fvPath')).toContainText('foo/a.js');
+
+  // 4. Diff view shows "File deleted in this run"
+  await expect(page.locator('#fvBody')).toContainText('File deleted in this run');
+
+  // 5. Click "View Diff" button → shows deleted content lines
+  await page.locator('#viewDiffBtn').click();
+  await expect(page.locator('.fv-diff-line.removed').first()).toContainText('const a = 1;');
+});

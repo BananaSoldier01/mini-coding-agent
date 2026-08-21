@@ -828,3 +828,44 @@ html, body {
   flex-shrink: 0;
   margin-left: 8px;
 }
+
+/* ── Responsive ──────────────────────────────────────── */
+@media (max-width: 1280px) {
+  .sidebar.left { width: 200px; }
+  .sidebar.right { width: 280px; }
+  .terminal-panel { max-height: 30%; }
+  .ws-path { max-width: 200px; }
+  .logo-text { display: none; }
+}
+
+@media (max-width: 1024px) {
+  .main { flex-direction: column; }
+  .sidebar.right { width: 100%; border-left: none; border-top: 1px solid var(--border); }
+  .sidebar.left { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
+  .inspector-tab-content { padding: 8px; }
+  .cmd-card-body { max-height: 200px; }
+}
+
+@media (max-width: 720px) {
+  .topbar { padding: 0 10px; height: 40px; }
+  .topbar-left { gap: 8px; }
+  .ws-label { display: none; }
+  .ws-path { max-width: 120px; }
+  .session-list { min-width: 280px; }
+  .chat-input { font-size: 13px; }
+  .terminal-body { font-size: 11px; }
+  .cmd-card-body { font-size: 10px; max-height: 150px; }
+}
+
+@media (min-width: 1440px) and (min-height: 900px) {
+  .sidebar.left { width: 260px; }
+  .sidebar.right { width: 360px; }
+  .terminal-panel { max-height: 38%; }
+}
+
+@media (min-width: 1920px) and (min-height: 1080px) {
+  .sidebar.left { width: 280px; }
+  .sidebar.right { width: 400px; }
+  .terminal-panel { max-height: 40%; }
+  .ws-path { max-width: 400px; }
+}

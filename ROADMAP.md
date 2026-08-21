@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.4.1 — Workspace Experience**（进行中）
+**V0.4.2 — Product Hardening**（已完成）
 
-**Next: V0.4.2 — Product Hardening**
+**Next: V0.5 — TBD after milestone review**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -106,7 +106,7 @@
 - V0.4.0 Control & Visibility 阶段正式关闭
 - 状态：已完成
 
-### V0.4.1 — Workspace Experience（当前）
+### V0.4.1 — Workspace Experience
 - Unified Inspector: Changes | File 双 Tab
 - File Current / Diff viewer（行号、monospace、导航）
 - File Explorer: lazy loading, expand/collapse, change indicators
@@ -116,15 +116,17 @@
 - Binary Detection 修复 + 统一事实源
 - search_files path contract 修复
 - New Session 入口
-- 状态：进行中
+- 状态：已完成
 
-### V0.4.2 — Product Hardening（预留）
-- Browser E2E / Playwright
-- Session List 完善
-- Keyboard shortcuts
-- Accessibility
-- Loading / empty / error 边缘 case 覆盖
-- UI polish
+### V0.4.2 — Product Hardening
+- Browser E2E / Playwright（10 scenarios 全绿）
+- Session List（/api/sessions + /api/session/switch）
+- Terminal/Timeline output hardening（truncation 保护）
+- Accessibility（icon-only 按钮 aria-labels）
+- Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
+- Directory Delete 完整 runAgent E2E
+- CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
 
 ## 长期方向
 

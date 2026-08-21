@@ -36,9 +36,9 @@
             <option value="full_access">Full Access</option>
           </select>
         </div>
-        <button class="btn btn-ghost" id="sessionListBtn" title="Sessions">Sessions</button>
-        <button class="btn btn-ghost" id="newSessionBtn" title="新 Session">＋</button>
-        <button class="btn btn-ghost" id="configBtn" title="配置">⚙</button>
+        <button class="btn btn-ghost" id="sessionListBtn" title="Sessions" aria-label="Sessions">Sessions</button>
+        <button class="btn btn-ghost" id="newSessionBtn" title="新 Session" aria-label="新 Session">＋</button>
+        <button class="btn btn-ghost" id="configBtn" title="配置" aria-label="配置">⚙</button>
       </div>
     </header>
 
@@ -48,7 +48,7 @@
       <aside class="sidebar left">
         <div class="sidebar-header">
           <span>Files</span>
-          <button class="btn-icon" id="refreshTree" title="刷新">↻</button>
+          <button class="btn-icon" id="refreshTree" title="刷新" aria-label="刷新">↻</button>
         </div>
         <div class="file-tree" id="fileTree">
           <div class="tree-empty">加载中…</div>
@@ -121,8 +121,8 @@
         <span class="terminal-title">Terminal</span>
         <div class="terminal-controls">
           <span class="terminal-status" id="terminalStatus"></span>
-          <button class="btn-icon" id="clearTerminal" title="清除">✕</button>
-          <button class="btn-icon" id="toggleTerminal" title="折叠">─</button>
+          <button class="btn-icon" id="clearTerminal" title="清除" aria-label="清除 Terminal">✕</button>
+          <button class="btn-icon" id="toggleTerminal" title="折叠" aria-label="折叠 Terminal">─</button>
         </div>
       </div>
       <div class="terminal-body" id="terminalBody"></div>
@@ -135,7 +135,7 @@
     <div class="modal-content session-list">
       <div class="modal-header">
         <h2>Sessions</h2>
-        <button class="btn-icon" data-close>✕</button>
+        <button class="btn-icon" data-close aria-label="关闭">✕</button>
       </div>
       <div class="modal-body">
         <div id="sessionList"></div>
@@ -152,7 +152,7 @@
     <div class="modal-content">
       <div class="modal-header">
         <h2>配置</h2>
-        <button class="btn-icon" data-close>✕</button>
+        <button class="btn-icon" data-close aria-label="关闭">✕</button>
       </div>
       <div class="modal-body">
         <div class="field">

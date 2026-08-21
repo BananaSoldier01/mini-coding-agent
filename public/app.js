@@ -1007,16 +1007,31 @@ function terminalWrite(cmd, result) {
 
   const body2 = document.createElement('div');
   body2.className = 'cmd-card-body';
+  const MAX_OUT = 4000;
   if (result.stdout) {
     const out = document.createElement('div');
     out.className = 'cmd-card-body stdout';
-    out.textContent = result.stdout;
+    const t = truncateText(result.stdout, MAX_OUT);
+    out.textContent = t.text;
+    if (t.truncated) {
+      const more = document.createElement('span');
+      more.className = 'cmd-truncated';
+      more.textContent = ' （输出已截断，共 ' + result.stdout.length + ' 字符）';
+      out.appendChild(more);
+    }
     body2.appendChild(out);
   }
   if (result.stderr) {
     const err = document.createElement('div');
     err.className = 'cmd-card-body stderr';
-    err.textContent = result.stderr;
+    const t = truncateText(result.stderr, MAX_OUT);
+    err.textContent = t.text;
+    if (t.truncated) {
+      const more = document.createElement('span');
+      more.className = 'cmd-truncated';
+      more.textContent = ' （输出已截断，共 ' + result.stderr.length + ' 字符）';
+      err.appendChild(more);
+    }
     body2.appendChild(err);
   }
   if (!result.stdout && !result.stderr) {
@@ -1301,6 +1316,17 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * Truncate text to a max length with a tail indicator.
+ * Returns { text, truncated } so callers can show a "show more" affordance.
+ */
+function truncateText(s, maxLen) {
+  if (s === undefined || s === null) return { text: '', truncated: false };
+  const str = String(s);
+  if (str.length <= maxLen) return { text: str, truncated: false };
+  return { text: str.slice(0, maxLen) + '…', truncated: true };
+}
+
 function scrollToBottom() {
   const container = $('#chatMessages');
   container.scrollTop = container.scrollHeight;
@@ -1448,6 +1474,7 @@ function renderTimeline() {
     const expand = document.createElement('button');
     expand.className = 'ti-expand';
     expand.textContent = '>';
+    expand.setAttribute('aria-label', '展开/折叠详情');
     expand.onclick = () => el.classList.toggle('open');
     el.appendChild(expand);
 
@@ -1456,7 +1483,8 @@ function renderTimeline() {
     details.className = 'timeline-details';
     let detailText = '';
     if (item.args && Object.keys(item.args).length > 0) {
-      detailText += 'args: ' + JSON.stringify(item.args) + '\n';
+      const aStr = JSON.stringify(item.args);
+      detailText += 'args: ' + (aStr.length > 500 ? aStr.slice(0, 500) + '...' : aStr) + '\n';
     }
     if (item.result) {
       const rStr = JSON.stringify(item.result);
@@ -1565,24 +1593,6 @@ function showApproval(event) {
 
   catEl.textContent = event.category || '';
   $('#approvalModal').classList.add('open');
-}
-
-/* ── V0.4.0: Diff Viewer ────────────────────────────── */
-function openDiffViewer(filePath, diff) {
-  $('#diffFilePath').textContent = filePath;
-  const body = $('#diffViewerBody');
-  body.innerHTML = '';
-  if (!diff || diff.length === 0) {
-    body.innerHTML = '<div class="dv-line">无 diff 数据</div>';
-    return;
-  }
-  for (const line of diff) {
-    const dl = document.createElement('div');
-    dl.className = 'dv-line ' + line.type;
-    dl.textContent = (line.type === 'add' ? '+' : '-') + ' ' + (line.content || '');
-    body.appendChild(dl);
-  }
-  $('#diffViewerModal').classList.add('open');
 }
 
 /* ── Init ───────────────────────────────────────────── */
