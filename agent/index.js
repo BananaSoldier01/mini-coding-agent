@@ -17,6 +17,8 @@ import { Sandbox } from '../sandbox.js';
 import { registry as approvalRegistry } from '../approval.js';
 import { evaluate } from '../policy.js';
 import { evaluateShell } from '../shellpolicy.js';
+import { evaluatePermission, PERMISSION_MODES } from '../permission.js';
+import { RunStatus, RUN_STATUS } from '../runstatus.js';
 
 const MAX_ITERATIONS = 20;
 const MAX_TOOL_OUTPUT_CHARS = 4000;
@@ -88,11 +90,17 @@ async function runAgent(opts) {
   let finalContent = '';
   let stopped = false;
 
+  // V0.4.0: Run Status
+  const runStatus = new RunStatus();
+  runStatus.transition(RUN_STATUS.THINKING);
+
   while (iteration < MAX_ITERATIONS) {
     iteration++;
 
     if (run?.isStopped() || signals?.signal?.aborted) {
       stopped = true;
+      runStatus.transition(RUN_STATUS.CANCELLED);
+      emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label });
       emit(onEvent, { type: 'error', message: '任务被用户取消' });
       break;
     }
@@ -105,9 +113,13 @@ async function runAgent(opts) {
     } catch (err) {
       if (run?.isStopped() || err.name === 'AbortError') {
         stopped = true;
+        runStatus.transition(RUN_STATUS.CANCELLED);
+        emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label });
         emit(onEvent, { type: 'error', message: '任务被用户取消' });
         break;
       }
+      runStatus.transition(RUN_STATUS.FAILED, 'llm_error');
+      emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label });
       emit(onEvent, { type: 'error', message: `LLM 调用失败: ${err.message}` });
       break;
     }
@@ -128,10 +140,15 @@ async function runAgent(opts) {
         let args;
         try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
 
-        // ── Policy 评估 ──────────────────────────────
-        let policyResult;
+        // ── Policy 评估（Permission Mode → Policy Layer）───────
+        const mode = session?.permissionMode || 'standard';
+
+        // 将 tool 映射到 category 和 risk
+        let category, risk;
         if (toolName === 'run_command') {
-          policyResult = evaluateShell(args.command || '');
+          const shellResult = evaluateShell(args.command || '');
+          category = shellResult.category;
+          risk = shellResult.decision === 'deny' ? 'high' : shellResult.decision === 'allow' ? 'low' : 'medium';
         } else {
           const toolDef = toolMap.get(toolName);
           if (!toolDef) {
@@ -144,7 +161,45 @@ async function runAgent(opts) {
             turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: `未知工具: ${toolName}` }) });
             continue;
           }
-          policyResult = evaluate(toolDef, args, { sandbox, tracker, workspace, run });
+          // 映射 tool 到 category
+          const TOOL_CATEGORY_MAP = {
+            list_directory: 'file_list',
+            read_file: 'file_read',
+            search_files: 'file_search',
+            write_file: 'file_write',
+            edit_file: 'file_edit',
+            delete_file: 'file_delete',
+          };
+          category = TOOL_CATEGORY_MAP[toolName] || 'unknown';
+          risk = ['delete_file'].includes(toolName) ? 'high' : 'medium';
+        }
+
+        // Permission Mode 决策
+        const modeDecision = evaluatePermission(mode, toolName, category, risk);
+
+        // 如果 Permission Mode 决定 deny，直接拒绝
+        if (modeDecision === 'deny') {
+          emit(onEvent, {
+            type: 'tool_result',
+            toolCall: { id: tc.id, name: toolName, args },
+            result: { error: `Permission Mode "${mode}" 拒绝执行此操作。`, denied: true },
+          });
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: `Permission Mode "${mode}" 拒绝执行此操作。` }) });
+          turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: `Permission Mode "${mode}" 拒绝执行此操作。` }) });
+          continue;
+        }
+
+        // 如果 Permission Mode 决定 allow，直接执行（跳过底层 Policy 详细检查）
+        if (modeDecision === 'allow') {
+          policyResult = { decision: 'allow', category, reason: '' };
+        } else {
+          // requireApproval：使用底层 Policy 做最终判断
+          if (toolName === 'run_command') {
+            policyResult = evaluateShell(args.command || '');
+          } else {
+            const toolDef = toolMap.get(toolName);
+            policyResult = evaluate(toolDef, args, { sandbox, tracker, workspace, run });
+          }
         }
 
         emit(onEvent, {
@@ -153,6 +208,13 @@ async function runAgent(opts) {
           policy: policyResult.decision,
           category: policyResult.category,
         });
+
+        // 更新 Run Status
+        const newStatus = runStatus.inferFromTool(toolName);
+        if (newStatus !== runStatus.status) {
+          runStatus.transition(newStatus, toolName);
+          emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label, detail: toolName });
+        }
 
         if (policyResult.decision === 'deny') {
           emit(onEvent, {
@@ -166,12 +228,15 @@ async function runAgent(opts) {
         }
 
         if (policyResult.decision === 'requireApproval') {
+          runStatus.transition(RUN_STATUS.WAITING_APPROVAL, toolName);
+          emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label, detail: toolName });
           emit(onEvent, {
             type: 'approval_needed',
             toolCall: { id: tc.id, name: toolName, args },
             reason: policyResult.reason,
             category: policyResult.category,
             runId: run?.runId,
+            permissionMode: session?.permissionMode,
           });
 
           run?.setPendingApproval(tc.id);
@@ -221,13 +286,13 @@ async function runAgent(opts) {
               oldContent: result.before,
               newContent: result.after,
             });
-            // 目录删除：记录子文件
+            // 目录删除：记录子文件（使用真实 before content）
             if (result.deletedFiles && result.deletedFiles.length > 0) {
-              for (const subPath of result.deletedFiles) {
+              for (const sub of result.deletedFiles) {
                 tracker.record({
                   type: 'delete',
-                  path: subPath,
-                  oldContent: NON_EXISTENT,
+                  path: sub.path,
+                  oldContent: sub.before,
                   newContent: NON_EXISTENT,
                 });
               }
@@ -264,12 +329,17 @@ async function runAgent(opts) {
       const finalAssistantMsg = { role: 'assistant', content: finalContent };
       messages.push(finalAssistantMsg);
       turnMessages.push(finalAssistantMsg);
+      runStatus.transition(RUN_STATUS.VERIFYING);
+      runStatus.transition(RUN_STATUS.COMPLETED);
+      emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label });
       emit(onEvent, { type: 'done', content: finalContent, iteration });
       break;
     }
   }
 
   if (iteration >= MAX_ITERATIONS && !finalContent && !stopped) {
+    runStatus.transition(RUN_STATUS.FAILED, 'max_iterations');
+    emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label });
     emit(onEvent, { type: 'error', message: `已达到最大迭代次数 (${MAX_ITERATIONS})` });
   }
 

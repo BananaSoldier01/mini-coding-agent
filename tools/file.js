@@ -142,7 +142,7 @@ class FileTools {
 
     const deletedFiles = [];
     if (stat.isDirectory()) {
-      // 递归收集目录中的普通文件（用于 Net Diff baseline）
+      // 递归收集目录中的普通文件（用于 Net Diff baseline），读取真实 before content
       this._collectFiles(absolute, deletedFiles);
     }
 
@@ -154,11 +154,14 @@ class FileTools {
       wasDirectory: stat.isDirectory(),
       before: NON_EXISTENT,
       after: NON_EXISTENT,
-      deletedFiles: deletedFiles.map((f) => this.service.sandbox.relative(f)),
+      deletedFiles: deletedFiles.map((f) => ({
+        path: this.service.sandbox.relative(f.path),
+        before: f.before,
+      })),
     };
   }
 
-  /** 递归收集目录中的普通文件（跳过敏感文件和 binary） */
+  /** 递归收集目录中的普通文件（跳过敏感文件和 binary），并读取真实 before content */
   _collectFiles(dir, result) {
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -169,7 +172,10 @@ class FileTools {
         } else if (entry.isFile()) {
           const rel = this.service.sandbox.relative(full);
           if (!this.service.isSensitive(rel) && !this.service.isBinary(full)) {
-            result.push(full);
+            try {
+              const before = fs.readFileSync(full, 'utf-8');
+              result.push({ path: full, before });
+            } catch {}
           }
         }
       }

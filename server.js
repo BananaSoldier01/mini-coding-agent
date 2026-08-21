@@ -239,6 +239,18 @@ const server = http.createServer(async (req, resp) => {
       return sendJson(resp, { sessionId: session.id, workspace: ws });
     }
 
+    // ── API: 更新 Session Permission Mode ──────────────
+    if (pathname === '/api/session' && method === 'PATCH') {
+      const mv = validateMutation(req);
+      if (!mv.ok) return sendError(resp, mv.status, mv.reason);
+      const body = JSON.parse(await readBody(req));
+      const { sessionId, permissionMode } = body;
+      const session = sessionManager.get(sessionId);
+      if (!session) return sendError(resp, 404, '会话不存在');
+      session.permissionMode = permissionMode || 'standard';
+      return sendJson(resp, { ok: true, permissionMode: session.permissionMode });
+    }
+
     if (pathname === '/api/session' && method === 'GET') {
       const sessionId = parsedUrl.query.sessionId;
       const session = sessionManager.get(sessionId);
@@ -248,6 +260,7 @@ const server = http.createServer(async (req, resp) => {
         workspace: session.workspace,
         messageCount: session.messages.length,
         active: session.active,
+        permissionMode: session.permissionMode || 'standard',
       });
     }
 

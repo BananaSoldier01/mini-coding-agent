@@ -18,6 +18,8 @@ class Session {
     this.active = true;
     this.createdAt = Date.now();
     this.lastActivity = Date.now();
+    // V0.4.0: Session-scoped Permission Mode
+    this.permissionMode = 'standard';
   }
 
   addMessage(msg) {
