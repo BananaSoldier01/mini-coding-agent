@@ -752,10 +752,12 @@ function respondApproval(approved) {
     api('/api/approve', {
       method: 'POST',
       body: { runId, toolCallId, approved },
-    }).then(() => {
-      // Server 确认成功后才计数
-      if (approved) state.approvals.approved++;
-      else state.approvals.rejected++;
+    }).then((result) => {
+      // 只有 Server 确认 resolved=true 时才计数
+      if (result && result.resolved === true) {
+        if (approved) state.approvals.approved++;
+        else state.approvals.rejected++;
+      }
     }).catch(() => {});
   }
 }

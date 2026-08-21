@@ -12,7 +12,7 @@
 import { createProvider } from './LLM.js';
 import { FileTools } from '../tools/file.js';
 import { shellToolDef } from '../tools/shell.js';
-import { ChangeTracker } from '../tracker.js';
+import { ChangeTracker, NON_EXISTENT } from '../tracker.js';
 import { Sandbox } from '../sandbox.js';
 import { registry as approvalRegistry } from '../approval.js';
 import { evaluate } from '../policy.js';

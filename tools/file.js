@@ -171,12 +171,22 @@ class FileTools {
           this._collectFiles(full, result);
         } else if (entry.isFile()) {
           const rel = this.service.sandbox.relative(full);
-          if (!this.service.isSensitive(rel) && !this.service.isBinary(full)) {
-            try {
-              const before = fs.readFileSync(full, 'utf-8');
-              result.push({ path: full, before });
-            } catch {}
-          }
+          // 敏感文件检查
+          if (this.service.isSensitive(rel)) continue;
+          // Binary 扩展名检查（避免 isBinary 的 buffer 零填充 bug）
+          const BINARY_EXTS = new Set([
+            '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp',
+            '.pdf', '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
+            '.exe', '.dll', '.so', '.dylib', '.a', '.o', '.obj',
+            '.wasm', '.bin', '.dat', '.db', '.sqlite', '.sqlite3',
+            '.mp3', '.mp4', '.avi', '.mov', '.wav', '.ogg',
+            '.lock', '.class', '.jar', '.war',
+          ]);
+          if (BINARY_EXTS.has(path.extname(full).toLowerCase())) continue;
+          try {
+            const before = fs.readFileSync(full, 'utf-8');
+            result.push({ path: full, before });
+          } catch {}
         }
       }
     } catch {}
