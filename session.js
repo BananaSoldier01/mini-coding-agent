@@ -30,6 +30,8 @@ class Session {
       status: 'fresh',
       sourceRange: { start: 0, end: 0 },
     };
+    // V0.5.1: Plan State (Plan Mode & Execution Integrity)
+    this.planState = null;
   }
 
   /** 别名：与 API 返回字段对齐 */
@@ -70,6 +72,7 @@ class Session {
       createdAt: this.createdAt,
       lastActivity: this.lastActivity,
       contextState: this.contextState,
+      planState: this.planState,
     };
   }
 
@@ -86,6 +89,7 @@ class Session {
       status: 'fresh',
       sourceRange: { start: 0, end: 0 },
     };
+    s.planState = data.planState || null;
     return s;
   }
 }

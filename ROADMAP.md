@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.5.0.3 — Context Projection Closure**（已完成）
+**V0.5.1 — Plan Mode & Execution Integrity**（开发中）
 
-**Next: V0.5.1 — Plan Mode & Plan → Execute Integrity（TBD after milestone review）**
+**Next: V0.5.2 — TBD after milestone review**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -127,6 +127,13 @@
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
 - 状态：已完成
+
+### V0.5.1 — Plan Mode & Execution Integrity（开发中）
+- Plan Object: session.planState（goal/steps/risks/files/status）
+- Plan Mode: chat vs plan 模式切换，plan 模式下只分析不执行
+- Plan Approval Gate: 生成计划 → 用户审批 → 才执行
+- Plan ↔ Execution Binding: planId → runId → toolCalls 绑定
+- 状态：开发中
 
 ### V0.5.0.3 — Context Projection Closure
 - P0: 修 Context Projection 状态机 — 三种场景分开

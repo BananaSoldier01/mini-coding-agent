@@ -4,6 +4,17 @@
 
 ---
 
+## V0.5.1 — 开发中
+
+### Plan Mode
+- Plan Object (session.planState) 已定义
+- Plan Mode 逻辑已集成到 agent/index.js
+- Plan Approval Gate 已实现
+- Plan ↔ Execution Binding 已实现
+- 状态：开发中
+
+---
+
 ## Closed — V0.5.0.3 已解决
 
 ### Below trigger 时也会偷偷裁掉历史

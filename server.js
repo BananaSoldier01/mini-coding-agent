@@ -365,7 +365,7 @@ const server = http.createServer(async (req, resp) => {
       const mv = validateMutation(req);
       if (!mv.ok) return sendError(resp, mv.status, mv.reason);
       const body = JSON.parse(await readBody(req));
-      const { task, workspace, sessionId, config: clientConfig, title } = body;
+      const { task, workspace, sessionId, config: clientConfig, title, planMode } = body;
       const ws = workspace || config.workspace;
 
       // 验证 workspace
@@ -467,6 +467,7 @@ const server = http.createServer(async (req, resp) => {
           provider: fakeProvider || undefined,
           projectContext,
           contextBuilder: { buildAgentContext },
+          planMode: planMode || false,
         });
 
         // ── 由 Agent Runner 提交真实 Transcript ──────
@@ -475,6 +476,11 @@ const server = http.createServer(async (req, resp) => {
           session.addMessage(msg);
         }
         // V0.5.0: 不再 destructive prune，Canonical Transcript 永远保留
+
+        // V0.5.1: 保存 Plan 到 Session
+        if (result.plan) {
+          session.planState = result.plan;
+        }
 
         sendRunEvent({
           type: 'agent_done',

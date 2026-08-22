@@ -21,6 +21,7 @@ import { mergePermission } from '../permission.js';
 import { RunStatus, RUN_STATUS } from '../runstatus.js';
 import { buildAgentContext, CONTEXT_BUDGET, COMPACTION_TRIGGER_RATIO, HARD_BUDGET } from '../context/builder.js';
 import { estimateContextSize } from '../context/estimator.js';
+import { createPlan, validatePlan, updatePlanStatus, PLAN_STATUS, buildPlanPrompt, formatPlanForApproval } from './plan.js';
 
 const MAX_ITERATIONS = 20;
 const MAX_TOOL_OUTPUT_CHARS = 4000;
@@ -151,9 +152,102 @@ async function runAgent(opts) {
     };
   }
 
+  // ── V0.5.1: Plan Mode ──────────────────────────────────
+  const planMode = opts.planMode || false;
+  let activePlan = null;
+
+  if (planMode) {
+    // 生成计划
+    const planPrompt = buildPlanPrompt(task, projectContext, {
+      summary: contextMetadata.contextState.summary,
+      status: contextMetadata.contextState.status,
+    });
+
+    try {
+      const planResult = await providerInstance.chatSimple(planPrompt);
+      let planData;
+      try {
+        planData = JSON.parse(planResult);
+      } catch {
+        const match = planResult.match(/\{[\s\S]*\}/);
+        if (match) {
+          try { planData = JSON.parse(match[0]); } catch { planData = null; }
+        }
+      }
+
+      if (planData) {
+        activePlan = createPlan({
+          goal: planData.goal,
+          steps: planData.steps,
+          risks: planData.risks,
+          files: planData.files,
+          context: { estimatedChanges: planData.estimatedChanges },
+        });
+
+        const validation = validatePlan(activePlan);
+        if (validation.valid) {
+          session.planState = activePlan;
+          emit(onEvent, {
+            type: 'plan_generated',
+            plan: {
+              id: activePlan.id,
+              goal: activePlan.goal,
+              steps: activePlan.steps,
+              risks: activePlan.risks,
+              files: activePlan.files,
+              estimatedChanges: activePlan.context.estimatedChanges,
+            },
+          });
+
+          // 等待用户审批计划
+          runStatus.transition(RUN_STATUS.WAITING_APPROVAL, 'plan');
+          emit(onEvent, {
+            type: 'status',
+            status: runStatus.status,
+            label: runStatus.label,
+            detail: 'plan',
+          });
+
+          const approved = await approvalRegistry.register(run?.runId || 'default', `plan_${activePlan.id}`);
+
+          if (!approved) {
+            updatePlanStatus(activePlan, PLAN_STATUS.REJECTED);
+            emit(onEvent, { type: 'plan_rejected', planId: activePlan.id });
+            emit(onEvent, {
+              type: 'error',
+              message: '计划被用户拒绝',
+            });
+            return {
+              messages: turnMessages,
+              changes: { files: [], totalChanges: 0 },
+              finalContent: '计划已被拒绝。',
+              iteration: 0,
+              stopped: false,
+              plan: activePlan,
+            };
+          }
+
+          updatePlanStatus(activePlan, PLAN_STATUS.APPROVED);
+          session.planState = activePlan;
+          emit(onEvent, { type: 'plan_approved', planId: activePlan.id });
+        } else {
+          // Plan validation failed — continue without plan
+          emit(onEvent, {
+            type: 'context_warning',
+            message: '计划生成失败，直接执行任务',
+          });
+        }
+      }
+    } catch (err) {
+      // Plan generation failed — continue without plan
+      emit(onEvent, {
+        type: 'context_warning',
+        message: '计划生成失败，直接执行任务: ' + err.message,
+      });
+    }
+  }
+
   // 从 modelMessages 中提取本轮新增的 assistant/tool 消息
-  // modelMessages = system + project + summary + recent turns + current task
-  // 我们只需要在 tool loop 中新产生的消息
   let messages = [...modelMessages];
 
   let iteration = 0;
@@ -288,7 +382,14 @@ async function runAgent(opts) {
           toolCall: { id: tc.id, name: toolName, args },
           policy: policyResult.decision,
           category: policyResult.category,
+          planId: activePlan ? activePlan.id : null,
         });
+
+        // P0: Plan ↔ Execution Binding
+        if (activePlan) {
+          const { bindToolCall } = await import('./plan.js');
+          bindToolCall(activePlan, tc.id, toolName, args);
+        }
 
         // 更新 Run Status
         const newStatus = runStatus.inferFromTool(toolName);
@@ -452,6 +553,7 @@ async function runAgent(opts) {
     iteration,
     stopped,
     contextMetadata,
+    plan: activePlan,
   };
 }
 
