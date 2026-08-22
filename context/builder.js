@@ -147,27 +147,45 @@ async function buildAgentContext(opts) {
   const compactedThrough = contextState.compactedThrough;
   const recentTurns = turns.slice(compactedThrough);
 
-  // P0-3: Check if recent turns alone exceed budget
-  const recentSize = estimateTurnsSize(recentTurns);
-  const recentChars = recentSize.chars +
-    (systemAndProject.reduce((s, m) => s + (m.content?.length || 0), 0)) +
-    currentTurnMsgs[0].content.length;
+  // Calculate fixed overhead: system + summary + current task
+  let systemAndSummaryChars = systemAndProject.reduce((s, m) => s + (m.content?.length || 0), 0);
+  if (contextState.summary) {
+    systemAndSummaryChars += JSON.stringify(contextState.summary).length + 50; // [COMPACTED...]\n wrapper
+  }
+  const currentTaskChars = currentTask.length;
+  const fixedOverhead = systemAndSummaryChars + currentTaskChars;
 
-  let finalRecentTurns = recentTurns;
+  // P0-5.0.2: 从后往前选 Recent Raw Turns
+  // 目标：尽量保留到 RECENT_CONTEXT_TARGET * CONTEXT_BUDGET，但至少 MIN_RECENT_TURNS
+  const targetBudget = Math.floor(CONTEXT_BUDGET * RECENT_CONTEXT_TARGET);
+  let historyTrimmed = false;
 
-  // P0-4: Hard Budget Closure — if still over budget, reduce historical raw tail
-  if (recentChars > HARD_BUDGET) {
-    // Keep only the most recent turns that fit
-    let kept = [];
-    let keptChars = 0;
-    for (let i = recentTurns.length - 1; i >= 0; i--) {
-      const turnSize = estimateTurnsSize([recentTurns[i]]);
-      if (keptChars + turnSize.chars + recentChars - turnSize.chars > HARD_BUDGET) break;
-      kept.unshift(recentTurns[i]);
-      keptChars += turnSize.chars;
+  let finalRecentTurns = [];
+  let keptChars = 0;
+
+  for (let i = recentTurns.length - 1; i >= 0; i--) {
+    const turnSize = estimateTurnsSize([recentTurns[i]]);
+    const projectedTotal = fixedOverhead + keptChars + turnSize.chars;
+
+    // 如果加上这个 turn 会超过 Hard Budget，停止（除非还没达到 MIN_RECENT_TURNS）
+    if (projectedTotal > HARD_BUDGET && finalRecentTurns.length >= MIN_RECENT_TURNS) {
+      historyTrimmed = true;
+      break;
     }
-    finalRecentTurns = kept.length > 0 ? kept : recentTurns.slice(-MIN_RECENT_TURNS);
-    overflow = finalRecentTurns.length < recentTurns.length;
+
+    finalRecentTurns.unshift(recentTurns[i]);
+    keptChars += turnSize.chars;
+
+    // 如果已经达到 target budget 且至少保留了 MIN_RECENT_TURNS，可以停止
+    if (fixedOverhead + keptChars >= targetBudget && finalRecentTurns.length >= MIN_RECENT_TURNS) {
+      break;
+    }
+  }
+
+  // 确保至少 MIN_RECENT_TURNS（如果有的话）
+  if (finalRecentTurns.length < MIN_RECENT_TURNS && recentTurns.length >= MIN_RECENT_TURNS) {
+    finalRecentTurns = recentTurns.slice(-MIN_RECENT_TURNS);
+    historyTrimmed = finalRecentTurns.length < recentTurns.length;
   }
 
   for (const turn of finalRecentTurns) {
@@ -183,7 +201,8 @@ async function buildAgentContext(opts) {
   // ── Step 4: Final size check & overflow enforcement ──
   const finalSize = estimateContextSize(modelMessages);
 
-  // P0-4: Hard Budget enforcement
+  // P0-5.0.2: overflow 只在最终 projection 超过 HARD_BUDGET 时为 true
+  // historyTrimmed 和 overflow 是两个独立概念
   if (finalSize.chars > HARD_BUDGET) {
     overflow = true;
   }
@@ -202,6 +221,7 @@ async function buildAgentContext(opts) {
     estimatedSize: finalSize,
     compactionTriggered,
     overflow,
+    historyTrimmed,
     budget: CONTEXT_BUDGET,
     hardBudget: HARD_BUDGET,
     usageRatio: finalSize.chars / CONTEXT_BUDGET,

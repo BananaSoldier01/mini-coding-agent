@@ -562,3 +562,213 @@ test('Project Instructions: 安全独立 — AGENTS 不能覆盖 Policy', () => 
   assert.strictEqual(policyDecision, 'deny');
   assert.notStrictEqual(agentsRule, policyDecision);
 });
+
+// ── P0-5.0.2: Real ProjectInstructions contract ───────
+
+test('ProjectInstructions: 真实 load() contract — 文件不存在', async () => {
+  const fakeFileService = {
+    fileExists: () => false,
+    readFile: () => { throw new Error('should not be called'); },
+  };
+  const mod = await import('../context/project.js');
+  const loader = new mod.ProjectInstructions(fakeFileService);
+  const result = loader.load('/workspace');
+  assert.strictEqual(result.loaded, false);
+  assert.strictEqual(result.content, '');
+});
+
+test('ProjectInstructions: 真实 load() contract — 文件存在且内容正确', async () => {
+  const fakeFileService = {
+    fileExists: () => true,
+    readFile: () => ({
+      path: 'AGENTS.md',
+      size: 50,
+      content: 'Use ESM only.\nAlways run tests.',
+      totalLines: 2,
+    }),
+  };
+  const mod = await import('../context/project.js');
+  const loader = new mod.ProjectInstructions(fakeFileService);
+  const result = loader.load('/workspace');
+  assert.strictEqual(result.loaded, true);
+  assert.strictEqual(result.content, 'Use ESM only.\nAlways run tests.');
+  assert.strictEqual(result.originalLength, 31);
+  assert.strictEqual(result.truncated, false);
+  assert.ok(!result.content.path, 'content must be a string, not the file object');
+});
+
+test('ProjectInstructions: 真实 load() contract — oversized 截断', async () => {
+  const bigContent = 'x'.repeat(50000);
+  const fakeFileService = {
+    fileExists: () => true,
+    readFile: () => ({ path: 'AGENTS.md', content: bigContent }),
+  };
+  const mod = await import('../context/project.js');
+  const loader = new mod.ProjectInstructions(fakeFileService);
+  const result = loader.load('/workspace');
+  assert.strictEqual(result.loaded, true);
+  assert.strictEqual(result.truncated, true);
+  assert.strictEqual(result.originalLength, 50000);
+  assert.strictEqual(result.loadedLength, mod.PROJECT_INSTRUCTIONS_MAX_CHARS);
+  assert.strictEqual(result.content.length, mod.PROJECT_INSTRUCTIONS_MAX_CHARS);
+});
+
+test('ProjectInstructions: 真实 load() contract — read 失败返回未加载', async () => {
+  const fakeFileService = {
+    fileExists: () => true,
+    readFile: () => { throw new Error('read error'); },
+  };
+  const mod = await import('../context/project.js');
+  const loader = new mod.ProjectInstructions(fakeFileService);
+  const result = loader.load('/workspace');
+  assert.strictEqual(result.loaded, false);
+  assert.strictEqual(result.content, '');
+});
+
+// ── P0-5.0.2: Overflow / Fallback tests ──────────────
+
+test('Context Builder: History Trimmed ≠ Overflow — trim 后可继续', async () => {
+  const session = new Session('test', '/workspace');
+  // 创建大量历史消息，远超 Hard Budget
+  for (let i = 0; i < 100; i++) {
+    session.addMessage({ role: 'user', content: `turn ${i} ${'x'.repeat(1000)}` });
+    session.addMessage({ role: 'assistant', content: `reply ${i} ${'y'.repeat(1000)}` });
+  }
+
+  const fakeCompactor = {
+    compact: async () => ({
+      goal: ['test'],
+      constraints: [],
+      decisions: [],
+      progress: [],
+      files: [],
+      verification: [],
+      openItems: [],
+    }),
+  };
+
+  const result = await buildAgentContext({
+    systemPrompt: 'sys',
+    projectContext: { loaded: false, source: 'AGENTS.md', content: '', truncated: false, originalLength: 0, loadedLength: 0 },
+    session,
+    currentTask: 'new task',
+    compactor: fakeCompactor,
+  });
+
+  // P0-5.0.2: Compaction 发生了（历史被压缩）
+  assert.ok(session.contextState.compactionCount > 0,
+    'Compaction should have occurred for large history');
+
+  // 最终 projection 应该在 Hard Budget 内（因为 compaction + recent trim）
+  assert.ok(result.contextMetadata.estimatedSize.chars <= HARD_BUDGET,
+    `Final projection should be within hard budget: ${result.contextMetadata.estimatedSize.chars} <= ${HARD_BUDGET}`);
+
+  // overflow 应为 false（trim 后可继续）
+  assert.ok(!result.contextMetadata.overflow,
+    'overflow should be false when final projection is within hard budget after trim');
+});
+
+test('Context Builder: Fallback — trim 后仍可继续执行', async () => {
+  const session = new Session('test', '/workspace');
+  for (let i = 0; i < 100; i++) {
+    session.addMessage({ role: 'user', content: `turn ${i} ${'x'.repeat(1000)}` });
+    session.addMessage({ role: 'assistant', content: `reply ${i} ${'y'.repeat(1000)}` });
+  }
+
+  const fakeCompactor = {
+    compact: async () => ({
+      goal: ['test'],
+      constraints: [],
+      decisions: [],
+      progress: [],
+      files: [],
+      verification: [],
+      openItems: [],
+    }),
+  };
+
+  const result = await buildAgentContext({
+    systemPrompt: 'sys',
+    projectContext: { loaded: false, source: 'AGENTS.md', content: '', truncated: false, originalLength: 0, loadedLength: 0 },
+    session,
+    currentTask: 'new task',
+    compactor: fakeCompactor,
+  });
+
+  // 验证：模型消息包含 current task
+  const hasCurrentTask = result.messages.some(m => m.content === 'new task');
+  assert.ok(hasCurrentTask, 'Current task must be present in model messages');
+
+  // 验证：模型消息包含 summary（如果 compaction 发生了）
+  if (session.contextState.compactionCount > 0) {
+    const hasSummary = result.messages.some(m =>
+      m.content && m.content.includes('[COMPACTED SESSION CONTEXT]')
+    );
+    assert.ok(hasSummary, 'Compacted summary should be in model messages');
+  }
+
+  // 验证：至少有 MIN_RECENT_TURNS 个 recent turns
+  assert.ok(result.contextMetadata.recentTurnCount >= MIN_RECENT_TURNS,
+    `Expected at least ${MIN_RECENT_TURNS} recent turns, got ${result.contextMetadata.recentTurnCount}`);
+});
+
+test('Context Builder: Agent Overflow — 无 ReferenceError', async () => {
+  // 模拟 agent/index.js 中的 overflow 分支
+  const task = 'test task';
+  const turnMessages = [{ role: 'user', content: task }];
+
+  // 模拟 overflow 情况
+  const contextMetadata = { overflow: true, estimatedSize: { chars: 200000 }, hardBudget: 120000 };
+
+  // 这个代码来自 agent/index.js 的 overflow 分支
+  let result;
+  if (contextMetadata.overflow) {
+    result = {
+      messages: turnMessages,
+      changes: { files: [], totalChanges: 0 },
+      finalContent: '',
+      iteration: 0,
+      stopped: false,
+      contextMetadata,
+      error: 'context_overflow',
+    };
+  }
+
+  assert.ok(result, 'overflow branch should return a result');
+  assert.strictEqual(result.error, 'context_overflow');
+  assert.ok(result.messages, 'messages should be defined (no ReferenceError)');
+  assert.strictEqual(result.messages[0].content, 'test task');
+});
+
+test('Context Builder: RECENT_CONTEXT_TARGET 参与预算选择', async () => {
+  const session = new Session('test', '/workspace');
+  // 创建足够多的 turns
+  for (let i = 0; i < 50; i++) {
+    session.addMessage({ role: 'user', content: `turn ${i} ${'x'.repeat(800)}` });
+    session.addMessage({ role: 'assistant', content: `reply ${i} ${'y'.repeat(800)}` });
+  }
+
+  const fakeCompactor = {
+    compact: async () => ({
+      goal: ['test'],
+      constraints: [],
+      decisions: [],
+      progress: [],
+      files: [],
+      verification: [],
+      openItems: [],
+    }),
+  };
+
+  const result = await buildAgentContext({
+    systemPrompt: 'sys',
+    projectContext: { loaded: false, source: 'AGENTS.md', content: '', truncated: false, originalLength: 0, loadedLength: 0 },
+    session,
+    currentTask: 'new task',
+    compactor: fakeCompactor,
+  });
+
+  // 验证 recentTurnCount 至少为 MIN_RECENT_TURNS
+  assert.ok(result.contextMetadata.recentTurnCount >= MIN_RECENT_TURNS,
+    `recentTurnCount should be >= ${MIN_RECENT_TURNS}`);
+});

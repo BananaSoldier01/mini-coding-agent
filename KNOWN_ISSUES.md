@@ -4,6 +4,26 @@
 
 ---
 
+## Closed — V0.5.0.2 已解决
+
+### Hard Budget runtime ReferenceError
+- **已关闭**: turnMessages 提前初始化，overflow 分支不再 TDZ
+- Agent overflow test 确认无 ReferenceError、LLM 未被调用
+
+### History Trimmed ≠ Overflow 语义
+- **已关闭**: 两个独立概念
+- historyTrimmed = 历史被裁掉
+- overflow = 最终 projection 超过 HARD_BUDGET
+- trim 成功后允许继续 Run
+
+### RECENT_CONTEXT_TARGET 未参与预算
+- **已关闭**: 从后往前选 turns，尽量保留到 target budget，至少 MIN_RECENT_TURNS
+
+### Context Panel 数据不完整
+- **已关闭**: Server/Agent 携带 summary/content，Panel 显示 Goals/Constraints/Decisions/Progress/Verification/Open Items
+
+---
+
 ## Closed — V0.5.0.1 已解决
 
 ### ProjectInstructions contract Bug

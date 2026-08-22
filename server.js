@@ -443,6 +443,7 @@ const server = http.createServer(async (req, resp) => {
               truncated: projectContext.truncated,
               originalLength: projectContext.originalLength,
               loadedLength: projectContext.loadedLength,
+              content: projectContext.content,
             },
           });
         }

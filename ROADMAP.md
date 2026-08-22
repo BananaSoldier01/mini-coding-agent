@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.5.0.1 — Context Integrity Closure**（已完成）
+**V0.5.0.2 — Context Runtime Closure**（已完成）
 
 **Next: V0.5.1 — Plan Mode & Plan → Execute Integrity（TBD after milestone review）**
 
@@ -126,6 +126,16 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.5.0.2 — Context Runtime Closure
+- P0: 修 turnMessages TDZ — 提前初始化，overflow 分支不再 ReferenceError
+- P0: 修 Recent Tail / Overflow 语义 — historyTrimmed ≠ overflow，trim 后可继续
+- P1: RECENT_CONTEXT_TARGET 真正参与预算选择（从后往前选，至少 MIN_RECENT_TURNS）
+- P1: Context Panel 真闭环 — Server/Agent 携带 summary/content，Panel 显示结构化 Summary
+- P1: context_compacted 携带 summary + status + lastCompactedAt
+- P1: context_loaded 携带 Project Instructions content
+- Tests: 真实 ProjectInstructions.load() contract + overflow 无 ReferenceError + fallback trim
 - 状态：已完成
 
 ### V0.5.0.1 — Context Integrity Closure

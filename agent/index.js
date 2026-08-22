@@ -99,6 +99,10 @@ async function runAgent(opts) {
     },
   } : null;
 
+  // P0-5.0.2: 提前初始化 turnMessages，避免 overflow 分支 TDZ
+  const turnMessages = [];
+  turnMessages.push({ role: 'user', content: task });
+
   const { messages: modelMessages, contextMetadata } = await buildAgentContext({
     systemPrompt,
     projectContext,
@@ -114,6 +118,9 @@ async function runAgent(opts) {
       type: 'context_compacted',
       compactionCount: contextMetadata.contextState.compactionCount,
       compactedThrough: contextMetadata.contextState.compactedThrough,
+      summary: contextMetadata.contextState.summary,
+      status: contextMetadata.contextState.status,
+      lastCompactedAt: contextMetadata.contextState.lastCompactedAt,
     });
   }
 
@@ -121,6 +128,7 @@ async function runAgent(opts) {
     emit(onEvent, {
       type: 'context_warning',
       message: 'Compaction 失败，已回退到原始历史上下文',
+      contextState: contextMetadata.contextState,
     });
   }
 
@@ -142,10 +150,6 @@ async function runAgent(opts) {
       error: 'context_overflow',
     };
   }
-
-  // 本轮消息（turn boundary），用于 canonical transcript
-  const turnMessages = [];
-  turnMessages.push({ role: 'user', content: task });
 
   // 从 modelMessages 中提取本轮新增的 assistant/tool 消息
   // modelMessages = system + project + summary + recent turns + current task

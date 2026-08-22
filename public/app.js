@@ -1302,17 +1302,29 @@ function handleEvent(event) {
     case 'context_compacted':
       state.context = state.context || {};
       state.context.compactionCount = event.compactionCount;
-      state.context.lastCompactedAt = Date.now();
+      state.context.lastCompactedAt = event.lastCompactedAt || Date.now();
+      state.context.status = event.status || 'compacted';
+      if (event.summary) {
+        state.context.summary = event.summary;
+      }
       appendSystemMessage(`📦 Context compacted · ${event.compactionCount} 次压缩 · 已压缩到第 ${event.compactedThrough} 轮`);
       updateContextIndicator();
       break;
     case 'context_warning':
       appendSystemMessage('⚠️ ' + event.message);
+      if (event.contextState) {
+        state.context = state.context || {};
+        state.context.status = event.contextState.status;
+      }
       updateContextIndicator();
       break;
     case 'context_overflow':
       appendSystemMessage('🚫 ' + event.message);
       setStatus('error', 'error');
+      if (event.estimatedSize) {
+        state.context = state.context || {};
+        state.context.estimatedSize = event.estimatedSize;
+      }
       updateContextIndicator();
       break;
   }
@@ -1360,7 +1372,11 @@ function openContextPanel() {
     if (pi.truncated) {
       html += `<div class="ctx-meta">Loaded: ${pi.loadedLength} / ${pi.originalLength} chars</div>`;
     }
-    html += `<div class="ctx-content">${escapeHtml((pi.content || '').slice(0, 500))}</div>`;
+    if (pi.content) {
+      html += `<div class="ctx-content">${escapeHtml(pi.content.slice(0, 500))}</div>`;
+    } else {
+      html += '<div class="ctx-meta">Content not available</div>';
+    }
   } else {
     html += '<div class="ctx-meta">No AGENTS.md</div>';
   }
@@ -1375,6 +1391,9 @@ function openContextPanel() {
   }
   const status = ctx.status || (ctx.compactionCount > 0 ? 'compacted' : 'fresh');
   html += `<div class="ctx-meta">Status: ${status}</div>`;
+  if (ctx.estimatedSize) {
+    html += `<div class="ctx-meta">Context: ~${Math.round(ctx.estimatedSize.chars / 4)} estimated tokens</div>`;
+  }
   html += '</div>';
 
   // Summary
@@ -1387,12 +1406,15 @@ function openContextPanel() {
       { key: 'constraints', label: 'Constraints' },
       { key: 'decisions', label: 'Decisions' },
       { key: 'progress', label: 'Progress' },
+      { key: 'files', label: 'Files' },
       { key: 'verification', label: 'Verification' },
       { key: 'openItems', label: 'Open Items' },
     ];
+    let hasItems = false;
     for (const { key, label } of sections) {
       const items = summary[key] || [];
       if (items.length > 0) {
+        hasItems = true;
         html += `<div class="ctx-summary-group"><strong>${label}:</strong>`;
         for (const item of items) {
           html += `<div class="ctx-summary-item">• ${escapeHtml(item)}</div>`;
@@ -1400,6 +1422,14 @@ function openContextPanel() {
         html += '</div>';
       }
     }
+    if (!hasItems) {
+      html += '<div class="ctx-meta">No summary items</div>';
+    }
+    html += '</div>';
+  } else {
+    html += '<div class="ctx-section">';
+    html += '<h4>Summary</h4>';
+    html += '<div class="ctx-meta">No summary available</div>';
     html += '</div>';
   }
 
