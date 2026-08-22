@@ -90,6 +90,22 @@ export function createProvider(scenarios) {
 
       return encodeSSE(response, toolCalls);
     },
+    async chatSimple(prompt) {
+      // V0.5.0: Compaction support — deterministic structured summary
+      // Check if this is a compaction prompt
+      if (prompt.includes('[COMPACTED SESSION CONTEXT]') || prompt.includes('Existing Summary')) {
+        return JSON.stringify({
+          goal: ['Complete the coding task'],
+          constraints: ['Use ESM only', 'Do not modify app.js'],
+          decisions: ['Changes use Run Net Diff'],
+          progress: ['Previous work completed'],
+          files: ['package.json'],
+          verification: ['npm test → PASS'],
+          openItems: ['Continue with current task'],
+        });
+      }
+      return 'OK';
+    },
   };
 }
 
@@ -172,6 +188,42 @@ export const E2E_SCENARIOS = {
         { id: 'tc-r-read', name: 'read_file', args: { path: 'package.json' } },
       ],
       [], // Round 1: final response
+    ],
+  },
+
+  // ── Agent E2E H: Project Instructions ──────────────
+  'TEST_PROJECT_INSTRUCTIONS': {
+    responses: ['I see AGENTS.md. I will set description to FROM_AGENTS.', 'Done.'],
+    toolCalls: [
+      [
+        { id: 'tc-h-edit', name: 'edit_file', args: { path: 'package.json', oldString: '"description": "Test workspace for E2E"', newString: '"description": "FROM_AGENTS"' } },
+      ],
+      [],
+    ],
+  },
+
+  // ── Agent E2E I: Long Session Compaction ───────────
+  'TEST_LONG_SESSION': {
+    responses: ['Reading files.', 'Working on task.', 'Done.'],
+    toolCalls: [
+      [
+        { id: 'tc-i-read', name: 'read_file', args: { path: 'package.json' } },
+      ],
+      [
+        { id: 'tc-i-read2', name: 'read_file', args: { path: 'README.md' } },
+      ],
+      [],
+    ],
+  },
+
+  // ── Agent E2E J: Constraint Survives Compaction ────
+  'TEST_CONSTRAINT_SURVIVES': {
+    responses: ['I remember not to modify app.js. I will edit README instead.', 'Done.'],
+    toolCalls: [
+      [
+        { id: 'tc-j-edit', name: 'edit_file', args: { path: 'README.md', oldString: 'Version: 0.4.2', newString: 'Version: 0.5.0' } },
+      ],
+      [],
     ],
   },
 };

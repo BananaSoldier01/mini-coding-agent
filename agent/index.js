@@ -19,6 +19,8 @@ import { evaluate } from '../policy.js';
 import { evaluateShell } from '../shellpolicy.js';
 import { mergePermission } from '../permission.js';
 import { RunStatus, RUN_STATUS } from '../runstatus.js';
+import { buildAgentContext, CONTEXT_BUDGET, COMPACTION_TRIGGER_RATIO } from '../context/builder.js';
+import { estimateContextSize } from '../context/estimator.js';
 
 const MAX_ITERATIONS = 20;
 const MAX_TOOL_OUTPUT_CHARS = 4000;
@@ -54,7 +56,7 @@ const TOOL_SCHEMAS = {
 };
 
 async function runAgent(opts) {
-  const { task, workspace, config, session, run, onEvent, signals, provider } = opts;
+  const { task, workspace, config, session, run, onEvent, signals, provider, projectContext, contextBuilder } = opts;
   const sandbox = new Sandbox(workspace);
   const tracker = new ChangeTracker();
   const providerInstance = provider || createProvider(config);
@@ -72,19 +74,64 @@ async function runAgent(opts) {
 
   const toolMap = new Map(toolDefs.map((t) => [t.name, t]));
 
-  const systemPrompt = buildSystemPrompt(sandbox);
+  const systemPrompt = buildSystemPrompt(sandbox, projectContext);
 
-  // 从 session 获取历史上下文（排除旧 system prompt）
-  const sessionMessages = session ? session.messages.filter((m) => m.role !== 'system') : [];
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    ...sessionMessages,
-  ];
+  // ── V0.5.0: 使用 ContextBuilder 构建 Model Context ──
+  // Compactor: 调用 LLM 做结构化摘要（不调用 Coding Tools）
+  const compactor = providerInstance ? {
+    compact: async (existingSummary, newMessages) => {
+      const { buildCompactionPrompt } = await import('../context/compactor.js');
+      const prompt = buildCompactionPrompt(existingSummary, newMessages, 0);
+      const result = await providerInstance.chatSimple(prompt);
+      let summary;
+      try {
+        summary = JSON.parse(result);
+      } catch {
+        // 尝试提取 JSON 块
+        const match = result.match(/\{[\s\S]*\}/);
+        if (match) {
+          try { summary = JSON.parse(match[0]); } catch { summary = null; }
+        } else {
+          summary = null;
+        }
+      }
+      return summary;
+    },
+  } : null;
 
-  // 本轮消息（turn boundary），不依赖 content 匹配
+  const { messages: modelMessages, contextMetadata } = await buildAgentContext({
+    systemPrompt,
+    projectContext,
+    session,
+    currentTask: task,
+    compactor,
+    contextBuilder,
+  });
+
+  // Emit context events
+  if (contextMetadata.compactionTriggered) {
+    emit(onEvent, {
+      type: 'context_compacted',
+      compactionCount: contextMetadata.contextState.compactionCount,
+      compactedThrough: contextMetadata.contextState.compactedThrough,
+    });
+  }
+
+  if (contextMetadata.contextState.status === 'degraded') {
+    emit(onEvent, {
+      type: 'context_warning',
+      message: 'Compaction 失败，已回退到原始历史上下文',
+    });
+  }
+
+  // 本轮消息（turn boundary），用于 canonical transcript
   const turnMessages = [];
   turnMessages.push({ role: 'user', content: task });
-  messages.push(...turnMessages);
+
+  // 从 modelMessages 中提取本轮新增的 assistant/tool 消息
+  // modelMessages = system + project + summary + recent turns + current task
+  // 我们只需要在 tool loop 中新产生的消息
+  let messages = [...modelMessages];
 
   let iteration = 0;
   let finalContent = '';
@@ -103,6 +150,15 @@ async function runAgent(opts) {
       emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label });
       emit(onEvent, { type: 'error', message: '任务被用户取消' });
       break;
+    }
+
+    // ── 每轮 LLM 前检查 Context Pressure ──
+    const currentSize = estimateContextSize(messages);
+    if (currentSize.chars > CONTEXT_BUDGET * 1.2) {
+      emit(onEvent, {
+        type: 'context_warning',
+        message: `Context 压力过大 (~${Math.round(currentSize.chars / CONTEXT_BUDGET * 100)}%)，尝试压缩历史`,
+      });
     }
 
     emit(onEvent, { type: 'iteration', iteration, max: MAX_ITERATIONS });
@@ -243,14 +299,13 @@ async function runAgent(opts) {
               result: { error: '用户拒绝执行', cancelled: true },
             });
             messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: '用户拒绝执行' }) });
-          turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: '用户拒绝执行' }) });
+            turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: '用户拒绝执行' }) });
             continue;
           }
         }
 
         // ── 执行工具 ────────────────────────────────
         let result;
-        process.stderr.write('[AGENT] executing tool: ' + toolName + '\n');
         try {
           if (toolName === 'run_command') {
             result = await shellToolDef.run_command.execute(args, { sandbox, tracker, workspace, run });
@@ -269,11 +324,9 @@ async function runAgent(opts) {
               result = await method(args);
             }
           }
-          process.stderr.write('[AGENT] tool: ' + toolName + ' result.path=' + (result.path || 'NONE') + ' result.error=' + (result.error || 'NONE') + '\n');
 
           // 记录变更到 tracker（使用真实 before/after 内容）
           if (result.path && (toolName === 'write_file' || toolName === 'edit_file' || toolName === 'delete_file')) {
-            process.stderr.write('[AGENT] tracker.record: ' + toolName + ' ' + result.path + ' before===after:' + (result.before === result.after) + '\n');
             tracker.record({
               type: toolName === 'write_file' ? (result.action === 'created' ? 'create' : 'modify')
                 : toolName === 'delete_file' ? 'delete' : 'modify',
@@ -361,6 +414,7 @@ async function runAgent(opts) {
     finalContent,
     iteration,
     stopped,
+    contextMetadata,
   };
 }
 
@@ -437,8 +491,8 @@ async function callLLMStream(provider, messages, toolDefs, onEvent, signals) {
   return assistantMsg;
 }
 
-function buildSystemPrompt(sandbox) {
-  return `你是 Mini Coding Agent，一个在本地 workspace 中执行编码任务的自主 Agent。
+function buildSystemPrompt(sandbox, projectContext) {
+  let prompt = `你是 Mini Coding Agent，一个在本地 workspace 中执行编码任务的自主 Agent。
 
 ## 工具
 - list_directory: 查看目录结构
@@ -464,6 +518,15 @@ function buildSystemPrompt(sandbox) {
 - 遇到错误分析并修复
 - 不读取 .env、密钥等敏感文件
 - 不执行读取敏感环境变量的命令`;
+
+  // V0.5.0: Project Instructions (AGENTS.md)
+  if (projectContext && projectContext.loaded) {
+    prompt += `\n\n## PROJECT INSTRUCTIONS
+Source: ${projectContext.source}${projectContext.truncated ? ' (partial)' : ''}
+${projectContext.content}`;
+  }
+
+  return prompt;
 }
 
 function emit(onEvent, event) {

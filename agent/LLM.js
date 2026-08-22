@@ -111,6 +111,19 @@ class LLMProvider {
       },
     }));
   }
+
+  /**
+   * chatSimple — 简单调用（无 tools，非流式）。
+   * 用于 Compaction 等内部场景。
+   * 返回 string content。
+   */
+  async chatSimple(prompt) {
+    const result = await this.chat({
+      messages: [{ role: 'user', content: prompt }],
+      tools: [],
+    });
+    return result.content || '';
+  }
 }
 
 /** 工厂函数：根据配置创建 Provider */

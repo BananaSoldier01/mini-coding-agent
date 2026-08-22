@@ -331,3 +331,77 @@ test('Agent E2E G — Session Switch Race Prevention', async ({ page }) => {
   }
   await expect(page.locator('.cmd-card-command')).toContainText('echo hello-agent');
 });
+
+// ═══════════════════════════════════════════════════════
+// Agent E2E H — Project Instructions (AGENTS.md)
+// ═══════════════════════════════════════════════════════
+
+test('Agent E2E H — Project Instructions', async ({ page }) => {
+  // Write AGENTS.md
+  fs.writeFileSync(path.join(TEST_WORKSPACE, 'AGENTS.md'),
+    '# Project Instructions\n\nWhen editing package.json, set description to "FROM_AGENTS".\n');
+
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_PROJECT_INSTRUCTIONS');
+
+  // Verify: edit happened (package.json description changed)
+  await page.waitForFunction(() => {
+    const cs = document.getElementById('completionSummary');
+    return cs && cs.style.display !== 'none';
+  }, { timeout: 15000 });
+
+  // Verify: Changes panel shows package.json modified
+  await page.locator('.inspector-tab[data-tab="changes"]').click();
+  await expect(page.locator('.diff-file-name').first()).toContainText('package.json', { timeout: 5000 });
+
+  // Cleanup
+  try { fs.unlinkSync(path.join(TEST_WORKSPACE, 'AGENTS.md')); } catch {}
+});
+
+// ═══════════════════════════════════════════════════════
+// Agent E2E I — Long Session Compaction
+// ═══════════════════════════════════════════════════════
+
+test('Agent E2E I — Long Session Compaction', async ({ page }) => {
+  await setMode(page, 'full_access');
+
+  // Send a task that produces multiple turns
+  await sendTask(page, 'TEST_LONG_SESSION');
+  await page.waitForFunction(() => {
+    const cs = document.getElementById('completionSummary');
+    return cs && cs.style.display !== 'none';
+  }, { timeout: 15000 });
+
+  // Verify: completion summary is visible (agent completed)
+  await expect(page.locator('#completionSummary')).toBeVisible({ timeout: 5000 });
+});
+
+// ═══════════════════════════════════════════════════════
+// Agent E2E J — Constraint Survives Compaction
+// ═══════════════════════════════════════════════════════
+
+test('Agent E2E J — Constraint Survives Compaction', async ({ page }) => {
+  // Write AGENTS.md with constraint
+  fs.writeFileSync(path.join(TEST_WORKSPACE, 'AGENTS.md'),
+    '# Project Instructions\n\nDo not modify app.js.\n');
+
+  // Also create a README.md for the agent to edit
+  fs.writeFileSync(path.join(TEST_WORKSPACE, 'README.md'),
+    '# Test Workspace\n\nVersion: 0.4.2\n');
+
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_CONSTRAINT_SURVIVES');
+
+  await page.waitForFunction(() => {
+    const cs = document.getElementById('completionSummary');
+    return cs && cs.style.display !== 'none';
+  }, { timeout: 15000 });
+
+  // Verify: agent edited README.md (not app.js)
+  await page.locator('.inspector-tab[data-tab="changes"]').click();
+  await expect(page.locator('.diff-file-name').first()).toContainText('README.md', { timeout: 5000 });
+
+  // Cleanup
+  try { fs.unlinkSync(path.join(TEST_WORKSPACE, 'AGENTS.md')); } catch {}
+  try { fs.unlinkSync(path.join(TEST_WORKSPACE, 'README.md')); } catch {}
+});

@@ -4,6 +4,22 @@
 
 ---
 
+## Closed — V0.5.0 已解决
+
+### Destructive Session Prune
+- **已关闭**: `Session.prune()` 改为 no-op，Canonical Transcript 永远保留
+
+### Message-Count-Only Context Limit
+- **已关闭**: Context Budget 使用字符估算（~4 chars/token），不再只看 message count
+
+### No Formal Project Instruction Mechanism
+- **已关闭**: AGENTS.md 加载（context/project.js），通过 WorkspaceFileService 读取
+
+### Long Session Context Loss
+- **已关闭**: Structured Summary + Incremental Compaction + Recent Turn 保留
+
+---
+
 ## Closed — V0.4.2.1 已解决
 
 ### Browser E2E Not Introduced
@@ -56,6 +72,21 @@
 - 仅 `E2E_FAKE_LLM=1` 控制的是 Server 端的 Fake LLM Provider 注入，不影响前端 test hook
 - 不应视为产品 API
 - **放**: 未来可用 build-time 条件编译或独立 test harness 替代
+
+### Nested AGENTS.md
+- V0.5.0 只支持 workspace 根目录 `/AGENTS.md`
+- 不支持 `/src/AGENTS.md` 等 directory-scoped 指令
+- **放**: V0.5.1+ 根据实际使用反馈决定
+
+### Context Estimation
+- Context size 是估算值（~4 chars/token），不是 tokenizer-exact
+- UI 不显示虚假精确 token 数
+- **放**: 如果需要精确 token 计数，未来可接入 tokenizer
+
+### Summary Fidelity
+- Compaction 是 LLM 生成的衍生上下文，可能不完美地总结历史
+- Canonical Transcript 始终保留，可用于审计
+- **放**: 这是设计取舍，不是 bug
 
 ### Permission Mode Category Names
 - `policy.js` 使用 `file_destructive` 而 `permission.js` 使用 `file_edit` / `file_delete`

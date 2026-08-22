@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.4 Product Experience — Completed**（V0.4.0 → V0.4.1 → V0.4.2 → V0.4.2.1 → V0.4.2.2）
+**V0.5.0 — Project Context & Session Compaction**（已完成）
 
-**Next: V0.5 — TBD after milestone review**
+**Next: V0.5.1 — Plan Mode & Plan → Execute Integrity（TBD after milestone review）**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,21 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.5.0 — Project Context & Session Compaction
+- Canonical Transcript ≠ Model Context 分离（messages = truth，contextState = derived）
+- 移除 destructive Session.prune（改为 no-op）
+- Context Budget 估算（字符基础，非 message count）
+- Context Builder 模块（context/builder.js）
+- AGENTS.md Project Instructions 加载（context/project.js）
+- Structured Summary Schema（goal/constraints/decisions/progress/files/verification/openItems）
+- Incremental Compaction（只总结新增消息）
+- Recent Turn 保留（Turn Boundary 保护）
+- Compaction Failure Fallback（degraded 状态）
+- Context SSE events（context_loaded / context_compacted / context_warning）
+- Fake Provider Compaction 支持（chatSimple）
+- Agent E2E H/I/J：Project Instructions / Long Session / Constraint Survives
 - 状态：已完成
 
 ### V0.4.2.2 — Session Boundary Closure

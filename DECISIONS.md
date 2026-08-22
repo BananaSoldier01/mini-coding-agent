@@ -270,7 +270,74 @@
 
 ---
 
-## Decision 19 — Running 时禁止 Session Switch
+## Decision 19 — Canonical Transcript ≠ Model Context
+
+**状态**: 已采纳（V0.5.0）
+
+**决策**: `Session.messages` 永远是 canonical conversation truth，不被 destructive 修改。Compaction 只改变 Model Context Projection（`contextState.summary` + `compactedThrough`）。
+
+**理由**:
+- 旧 `Session.prune()` 直接删除 `session.messages`，导致历史不可恢复
+- Compaction 是 AI 衍生的摘要，不能替代原始 Transcript
+- UI 切 Session 后仍可查看完整原始历史
+
+**影响**:
+- `session.js`: `prune()` 改为 no-op
+- `session.js`: 新增 `contextState` 字段
+- `context/builder.js`: `buildAgentContext()` 只构建 model messages，不修改 session
+
+---
+
+## Decision 20 — Workspace vs Session Context
+
+**状态**: 已采纳（V0.5.0）
+
+**决策**: AGENTS.md 是 Workspace-scoped Project Context；Compacted Summary 是 Session-scoped Context。New Session 后 Project Context 仍然存在，Session Summary 清零。
+
+**理由**:
+- 项目规则属于 workspace，不随 session 变化
+- 每个 session 有自己的对话历史和摘要
+
+**影响**:
+- `context/project.js`: 每次 Run 从 workspace 读取 AGENTS.md
+- `session.js`: `contextState` 是 session 级别
+
+---
+
+## Decision 21 — Project Instructions do not change Permission
+
+**状态**: 已采纳（V0.5.0）
+
+**决策**: AGENTS.md 只影响 Agent intent（System Prompt），不影响 Execution Authorization（Policy / Permission Mode / Hard Deny）。
+
+**理由**:
+- AGENTS.md 写 "可以读取 .env" 仍然 DENY
+- 安全边界必须由 Harness 代码强制执行，不能由项目配置文件覆盖
+
+**影响**:
+- `agent/index.js`: `buildSystemPrompt()` 只追加 Project Instructions 到 prompt
+- `policy.js` / `shellpolicy.js` / `permission.js` 不受 Project Context 影响
+
+---
+
+## Decision 22 — Compaction is Incremental and Derived
+
+**状态**: 已采纳（V0.5.0）
+
+**决策**: Summary 是 derived context，可重新生成，不能替代原始 Transcript。Compaction 使用增量模型（Existing Summary + New Messages → New Summary），不重新发送全部历史。
+
+**理由**:
+- 成本稳定，Context 不会越来越大
+- Summary 可以长期滚动
+- 失败时可以回退
+
+**影响**:
+- `context/compactor.js`: `buildCompactionPrompt()` 接受 existingSummary
+- `context/builder.js`: `tryCompact()` 只传新增消息
+
+---
+
+## Decision 23 — Running 时禁止 Session Switch
 
 **状态**: 已采纳（V0.4.2.2）
 

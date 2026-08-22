@@ -427,6 +427,26 @@ const server = http.createServer(async (req, resp) => {
       }
 
       try {
+        // ── V0.5.0: 加载 Project Instructions ──────────
+        const { ProjectInstructions } = await import('./context/project.js');
+        const { buildAgentContext } = await import('./context/builder.js');
+        const fileService = new (await import('./fileservice.js')).WorkspaceFileService(ws);
+        const projectLoader = new ProjectInstructions(fileService);
+        const projectContext = projectLoader.load(ws);
+
+        if (projectContext.loaded) {
+          sendRunEvent({
+            type: 'context_loaded',
+            projectInstructions: {
+              source: projectContext.source,
+              loaded: true,
+              truncated: projectContext.truncated,
+              originalLength: projectContext.originalLength,
+              loadedLength: projectContext.loadedLength,
+            },
+          });
+        }
+
         const result = await runAgent({
           task,
           workspace: ws,
@@ -436,6 +456,8 @@ const server = http.createServer(async (req, resp) => {
           onEvent: sendRunEvent,
           signals: { signal: controller.signal },
           provider: fakeProvider || undefined,
+          projectContext,
+          contextBuilder: { buildAgentContext },
         });
 
         // ── 由 Agent Runner 提交真实 Transcript ──────
@@ -443,8 +465,7 @@ const server = http.createServer(async (req, resp) => {
         for (const msg of result.messages) {
           session.addMessage(msg);
         }
-        // 上下文裁剪
-        session.prune();
+        // V0.5.0: 不再 destructive prune，Canonical Transcript 永远保留
 
         sendRunEvent({
           type: 'agent_done',

@@ -11,23 +11,26 @@ test('Session: 创建和消息添加', () => {
   assert.strictEqual(s.messages[0].role, 'user');
 });
 
-test('Session: prune 保留 system prompt', () => {
+test('Session: prune 是 no-op（Canonical Transcript 不被修改）', () => {
   const s = new Session('test3', '/workspace');
   s.addMessage({ role: 'system', content: 'system prompt' });
   for (let i = 0; i < 50; i++) {
     s.addMessage({ role: 'user', content: `msg ${i}` });
     s.addMessage({ role: 'assistant', content: `reply ${i}` });
   }
+  const beforeLen = s.messages.length;
   s.prune(10);
+  // V0.5.0: prune 是 no-op，Canonical Transcript 保持原样
+  assert.strictEqual(s.messages.length, beforeLen,
+    `prune 不应修改 Canonical Transcript，期望 ${beforeLen}，实际 ${s.messages.length}`);
   assert.strictEqual(s.messages[0].role, 'system');
-  assert.ok(s.messages.length <= 10, `裁剪后应 <= 10 条，实际 ${s.messages.length}`);
 });
 
 test('Session: prune 不产生 orphan tool message', () => {
   const s = new Session('test-orphan', '/workspace');
   s.addMessage({ role: 'system', content: 'sys' });
 
-  // 构建多轮带 tool_calls 的 transcript，超过 MAX_SESSION_MESSAGES
+  // 构建多轮带 tool_calls 的 transcript
   for (let round = 0; round < 20; round++) {
     s.addMessage({
       role: 'assistant',
@@ -43,10 +46,14 @@ test('Session: prune 不产生 orphan tool message', () => {
     s.addMessage({ role: 'assistant', content: `round ${round} done` });
   }
 
-  // 裁剪
+  const beforeLen = s.messages.length;
   s.prune(30);
 
-  // 校验：无 orphan tool message
+  // V0.5.0: prune 是 no-op，消息数不变
+  assert.strictEqual(s.messages.length, beforeLen,
+    `prune 不应修改 Canonical Transcript，期望 ${beforeLen}，实际 ${s.messages.length}`);
+
+  // 校验：无 orphan tool message（原始 transcript 本来就合法）
   const toolCallIds = new Set();
   for (const m of s.messages) {
     if (m.role === 'assistant' && m.tool_calls) {
@@ -102,4 +109,28 @@ test('Session: 序列化和反序列化', () => {
   assert.strictEqual(s2.workspace, '/workspace');
   assert.strictEqual(s2.messages.length, 1);
   assert.strictEqual(s2.messages[0].content, 'hello');
+  // V0.5.0: contextState 序列化/反序列化
+  assert.ok(s2.contextState, 'contextState 应存在');
+  assert.strictEqual(s2.contextState.status, 'fresh');
+  assert.strictEqual(s2.contextState.compactionCount, 0);
+});
+
+test('Session: contextState 默认值', () => {
+  const s = new Session('test6', '/workspace');
+  assert.ok(s.contextState);
+  assert.strictEqual(s.contextState.summary, null);
+  assert.strictEqual(s.contextState.compactedThrough, 0);
+  assert.strictEqual(s.contextState.compactionCount, 0);
+  assert.strictEqual(s.contextState.status, 'fresh');
+});
+
+test('Session: list 按 workspace 过滤', () => {
+  const sm = new SessionManager();
+  sm.create('/workspace-a');
+  sm.create('/workspace-a');
+  sm.create('/workspace-b');
+  assert.strictEqual(sm.list('/workspace-a').length, 2);
+  assert.strictEqual(sm.list('/workspace-b').length, 1);
+  assert.strictEqual(sm.list().length, 3);
+  assert.strictEqual(sm.list('/workspace-c').length, 0);
 });

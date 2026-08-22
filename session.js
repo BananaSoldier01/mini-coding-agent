@@ -21,6 +21,15 @@ class Session {
     this.title = 'New Session';
     // V0.4.0: Session-scoped Permission Mode
     this.permissionMode = 'standard';
+    // V0.5.0: Session Context State (derived, NOT canonical transcript)
+    this.contextState = {
+      summary: null,
+      compactedThrough: 0,
+      compactionCount: 0,
+      lastCompactedAt: null,
+      status: 'fresh',
+      sourceRange: { start: 0, end: 0 },
+    };
   }
 
   /** 别名：与 API 返回字段对齐 */
@@ -45,81 +54,12 @@ class Session {
   }
 
   /**
-   * 上下文裁剪：
-   *   - 保留 system prompt
-   *   - 保留最近 N 条消息
-   *   - 确保裁剪后结构合法：
-   *     - 无 orphan tool message（每个 tool 的 tool_call_id 都有对应的 assistant tool_calls）
-   *     - 每个 assistant tool_call 都有对应的 tool result
-   *     - user context 不丢
+   * V0.5.0: prune 已废弃。
+   * Canonical Transcript 永远不被 destructive 修改。
+   * Context 压缩由 ContextBuilder / Compactor 负责，只改变 Model Context Projection。
    */
-  prune(maxMessages = MAX_SESSION_MESSAGES) {
-    if (this.messages.length <= maxMessages) return;
-
-    const system = this.messages.find((m) => m.role === 'system');
-    const rest = this.messages.filter((m) => m.role !== 'system');
-
-    // 从后往前扫描，构建合法的 message 序列
-    const kept = [];
-    const keptToolCallIds = new Set(); // 已保留的 tool result 的 tool_call_id
-    const neededToolCallIds = new Set(); // assistant tool_calls 中还没找到 result 的
-
-    for (let i = rest.length - 1; i >= 0 && kept.length < maxMessages - (system ? 1 : 0); i--) {
-      const msg = rest[i];
-
-      if (msg.role === 'tool') {
-        // 检查这个 tool 是否有对应的 assistant tool_calls
-        const hasAssistant = rest.some((m) =>
-          m.role === 'assistant' && m.tool_calls?.some((tc) => tc.id === msg.tool_call_id)
-        );
-        if (!hasAssistant) continue; // orphan tool，跳过
-        kept.unshift(msg);
-        keptToolCallIds.add(msg.tool_call_id);
-      } else if (msg.role === 'assistant' && msg.tool_calls) {
-        const toolCallIds = new Set(msg.tool_calls.map((tc) => tc.id));
-        // 检查是否所有 tool_calls 都有对应的 tool result
-        const allHaveResults = [...toolCallIds].every((id) => keptToolCallIds.has(id));
-        if (!allHaveResults) {
-          // 有 tool_call 还没找到对应的 tool result，继续往前找
-          for (let j = i - 1; j >= 0; j--) {
-            const prev = rest[j];
-            if (prev.role === 'tool' && toolCallIds.has(prev.tool_call_id)) {
-              if (!kept.includes(prev)) {
-                kept.unshift(prev);
-                keptToolCallIds.add(prev.tool_call_id);
-                toolCallIds.delete(prev.tool_call_id);
-              }
-              if (toolCallIds.size === 0) break;
-            }
-          }
-          // 如果还有未找到的，跳过这个 assistant（避免 orphan tool_call）
-          if (toolCallIds.size > 0) continue;
-        }
-        kept.unshift(msg);
-      } else {
-        // user / assistant (无 tool_calls)
-        kept.unshift(msg);
-      }
-    }
-
-    // 最终校验：确保没有 orphan tool message
-    const finalToolIds = new Set();
-    for (const m of kept) {
-      if (m.role === 'tool' && m.tool_call_id) finalToolIds.add(m.tool_call_id);
-    }
-    const finalAssistantToolCallIds = new Set();
-    for (const m of kept) {
-      if (m.role === 'assistant' && m.tool_calls) {
-        for (const tc of m.tool_calls) finalAssistantToolCallIds.add(tc.id);
-      }
-    }
-    // 移除没有对应 assistant tool_calls 的 tool message
-    const validated = kept.filter((m) => {
-      if (m.role === 'tool') return finalAssistantToolCallIds.has(m.tool_call_id);
-      return true;
-    });
-
-    this.messages = system ? [system, ...validated] : validated;
+  prune(_maxMessages) {
+    // No-op: canonical transcript is preserved
   }
 
   serialize() {
@@ -129,6 +69,7 @@ class Session {
       messages: this.messages,
       createdAt: this.createdAt,
       lastActivity: this.lastActivity,
+      contextState: this.contextState,
     };
   }
 
@@ -137,6 +78,14 @@ class Session {
     s.messages = data.messages || [];
     s.createdAt = data.createdAt || Date.now();
     s.lastActivity = data.lastActivity || Date.now();
+    s.contextState = data.contextState || {
+      summary: null,
+      compactedThrough: 0,
+      compactionCount: 0,
+      lastCompactedAt: null,
+      status: 'fresh',
+      sourceRange: { start: 0, end: 0 },
+    };
     return s;
   }
 }
