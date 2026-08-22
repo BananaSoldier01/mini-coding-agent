@@ -1397,6 +1397,33 @@ function handleEvent(event) {
       if (state.plan) state.plan.status = 'failed';
       appendSystemMessage('💥 计划失败: ' + (event.error || '未知错误'));
       break;
+
+    // V0.5.2: Plan Step Update
+    case 'plan_step_update':
+      if (state.plan && event.steps) {
+        for (const s of event.steps) {
+          const step = state.plan.steps.find(st => st.id === s.id);
+          if (step) {
+            step.status = s.status;
+            if (s.completedAt) step.completedAt = s.completedAt;
+          }
+        }
+      }
+      updatePlanIndicator();
+      break;
+
+    // V0.5.2: Plan Drift
+    case 'plan_drift':
+      if (state.plan) {
+        state.plan._drift = {
+          unexpected: event.unexpected,
+          missing: event.missing,
+        };
+        appendSystemMessage('⚠️ 执行偏离计划: ' +
+          (event.unexpected || []).map(f => f).join(', '));
+      }
+      updatePlanIndicator();
+      break;
   }
 }
 

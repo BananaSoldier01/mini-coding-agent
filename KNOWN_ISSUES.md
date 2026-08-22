@@ -4,6 +4,20 @@
 
 ---
 
+## V0.5.2 — 已完成
+
+### Plan Workspace UI
+- Plan Panel: goal/steps/risks/files/status 可视化
+- Plan Approval: approve/reject 按钮
+- Plan Timeline: plan events 进入 timeline
+- Plan Step ↔ ToolCall Mapping
+- Plan Execution Progress: 实时步骤状态
+- Plan Drift Detection: 意外文件修改检测
+- Session Restore: plan state 恢复
+- 10 Plan UI Integration Tests
+
+---
+
 ## V0.5.1.1 — 已完成
 
 ### Plan Lifecycle Closure

@@ -1,12 +1,14 @@
 /**
  * agent/plan.js — Plan Lifecycle & Execution Integrity
  *
- * V0.5.1.1
+ * V0.5.2
  * - Plan Object: structured plan with steps, risks, files, runId
  * - Plan Mode: plan-only vs plan-execute
  * - Plan Approval Gate: user must approve plan before execution
  * - Plan ↔ Execution Binding: planId → runId → toolCalls
  * - Full lifecycle: DRAFT → AWAITING_APPROVAL → APPROVED → EXECUTING → COMPLETED/FAILED/CANCELLED
+ * - Step Tracking: per-step status, completedAt, toolCalls
+ * - Plan Drift Detection: detect unexpected file modifications
  */
 
 // ── Plan Status ────────────────────────────────────────
@@ -46,11 +48,26 @@ const EXECUTION_MODE = {
  */
 function createPlan(opts = {}) {
   const { goal, steps, risks, files, context, runId, executionMode } = opts;
+  // V0.5.2: Initialize step tracking fields
+  const enrichedSteps = Array.isArray(steps)
+    ? steps.map(s => ({
+        id: s.id,
+        description: s.description || s.title || '',
+        title: s.title || s.description || '',
+        type: s.type || 'modify',
+        files: Array.isArray(s.files) ? s.files : [],
+        risks: Array.isArray(s.risks) ? s.risks : [],
+        status: 'pending',
+        completedAt: null,
+        toolCalls: [],
+      }))
+    : [];
+
   return {
     id: `plan_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     status: PLAN_STATUS.DRAFT,
     goal: goal || '',
-    steps: Array.isArray(steps) ? steps : [],
+    steps: enrichedSteps,
     risks: Array.isArray(risks) ? risks : [],
     files: Array.isArray(files) ? files : [],
     context: context || {},
@@ -128,6 +145,108 @@ function bindToolCall(plan, runId, toolCallId, toolName, args) {
     timestamp: Date.now(),
   });
   plan.updatedAt = Date.now();
+
+  // V0.5.2: Update step status based on tool call
+  updateStepFromToolCall(plan, toolName, args);
+}
+
+/**
+ * V0.5.2: Update step status from tool call.
+ * Maps tool calls to plan steps by file path.
+ */
+function updateStepFromToolCall(plan, toolName, args) {
+  if (!plan || !Array.isArray(plan.steps)) return;
+
+  const filePath = args?.path || args?.file;
+  if (!filePath) return;
+
+  for (const step of plan.steps) {
+    if (!step.toolCalls) step.toolCalls = [];
+    if (!step.status) step.status = 'pending';
+    if (!step.completedAt) step.completedAt = null;
+
+    // Check if this step touches the same file
+    const stepFiles = step.files || [];
+    if (stepFiles.some(f => filePath.includes(f) || f.includes(filePath))) {
+      step.toolCalls.push({
+        toolName,
+        toolCallId: args._toolCallId,
+        filePath,
+        timestamp: Date.now(),
+      });
+
+      // Update step status
+      if (step.status === 'pending') {
+        step.status = 'running';
+      }
+      if (toolName === 'write_file' || toolName === 'edit_file' || toolName === 'delete_file') {
+        step.status = 'completed';
+        step.completedAt = Date.now();
+      }
+    }
+  }
+}
+
+/**
+ * V0.5.2: Mark a step as completed.
+ */
+function completeStep(plan, stepId) {
+  if (!plan || !Array.isArray(plan.steps)) return;
+  const step = plan.steps.find(s => s.id === stepId);
+  if (step) {
+    step.status = 'completed';
+    step.completedAt = Date.now();
+    plan.updatedAt = Date.now();
+  }
+}
+
+/**
+ * V0.5.2: Mark a step as failed.
+ */
+function failStep(plan, stepId, error) {
+  if (!plan || !Array.isArray(plan.steps)) return;
+  const step = plan.steps.find(s => s.id === stepId);
+  if (step) {
+    step.status = 'failed';
+    step.error = error;
+    step.completedAt = Date.now();
+    plan.updatedAt = Date.now();
+  }
+}
+
+/**
+ * V0.5.2: Plan Drift Detection.
+ * Compares approved plan files with actual modified files.
+ */
+function detectPlanDrift(plan, actualFiles) {
+  if (!plan) return { drift: false, unexpected: [], missing: [] };
+
+  const approvedFiles = new Set(
+    (plan.files || []).map(f => f.toLowerCase())
+  );
+  const actualFileSet = new Set(
+    (actualFiles || []).map(f => f.toLowerCase())
+  );
+
+  const unexpected = [];
+  for (const f of actualFileSet) {
+    if (!approvedFiles.has(f)) {
+      unexpected.push(f);
+    }
+  }
+
+  const missing = [];
+  for (const f of approvedFiles) {
+    if (!actualFileSet.has(f)) {
+      missing.push(f);
+    }
+  }
+
+  return {
+    drift: unexpected.length > 0,
+    unexpected,
+    missing,
+  };
 }
 
 /**
@@ -212,6 +331,10 @@ export {
   validatePlan,
   transitionPlanStatus,
   bindToolCall,
+  updateStepFromToolCall,
+  completeStep,
+  failStep,
+  detectPlanDrift,
   buildPlanPrompt,
   formatPlanForApproval,
 };

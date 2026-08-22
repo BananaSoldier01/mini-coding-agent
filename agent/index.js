@@ -451,7 +451,7 @@ async function runAgent(opts) {
 
         // P0: Plan ↔ Execution Binding
         if (activePlan) {
-          const { bindToolCall, transitionPlanStatus, PLAN_STATUS } = await import('./plan.js');
+          const { bindToolCall, transitionPlanStatus, PLAN_STATUS, detectPlanDrift } = await import('./plan.js');
           bindToolCall(activePlan, run?.runId || activePlan.runId, tc.id, toolName, args);
 
           // APPROVED → EXECUTING on first tool execution
@@ -459,6 +459,20 @@ async function runAgent(opts) {
             transitionPlanStatus(activePlan, PLAN_STATUS.EXECUTING);
             session.planState = activePlan;
             emit(onEvent, { type: 'plan_executing', planId: activePlan.id, status: activePlan.status });
+          }
+
+          // V0.5.2: Emit step status update
+          const updatedSteps = activePlan.steps.filter(s => s.status === 'running' || s.status === 'completed');
+          if (updatedSteps.length > 0) {
+            emit(onEvent, {
+              type: 'plan_step_update',
+              planId: activePlan.id,
+              steps: activePlan.steps.map(s => ({
+                id: s.id,
+                status: s.status,
+                completedAt: s.completedAt,
+              })),
+            });
           }
         }
 
@@ -622,7 +636,7 @@ async function runAgent(opts) {
 
   // ── V0.5.1.1: Plan Lifecycle Closure ──────────────────
   if (activePlan) {
-    const { transitionPlanStatus, PLAN_STATUS } = await import('./plan.js');
+    const { transitionPlanStatus, PLAN_STATUS, detectPlanDrift } = await import('./plan.js');
 
     if (stopped) {
       transitionPlanStatus(activePlan, PLAN_STATUS.CANCELLED);
@@ -632,12 +646,34 @@ async function runAgent(opts) {
       transitionPlanStatus(activePlan, PLAN_STATUS.COMPLETED);
     }
 
+    // V0.5.2: Plan Drift Detection
+    const actualFiles = [...new Set(
+      activePlan.toolCallBindings
+        .filter(b => b.toolName === 'write_file' || b.toolName === 'edit_file' || b.toolName === 'delete_file')
+        .map(b => b.args?.path || b.args?.file)
+        .filter(Boolean)
+    )];
+    const drift = detectPlanDrift(activePlan, actualFiles);
+    if (drift.drift) {
+      emit(onEvent, {
+        type: 'plan_drift',
+        planId: activePlan.id,
+        unexpected: drift.unexpected,
+        missing: drift.missing,
+      });
+    }
+
     session.planState = activePlan;
     emit(onEvent, {
       type: 'plan_completed',
       planId: activePlan.id,
       status: activePlan.status,
       toolCallCount: activePlan.toolCallBindings.length,
+      steps: activePlan.steps.map(s => ({
+        id: s.id,
+        status: s.status,
+        completedAt: s.completedAt,
+      })),
     });
   }
 

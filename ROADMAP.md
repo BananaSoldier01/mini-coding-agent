@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.5.1.1 — Plan Lifecycle Closure**（已完成）
+**V0.5.2 — Plan Workspace UI**（已完成）
 
-**Next: V0.5.2 — Plan Workspace UI**
+**Next: V0.6 — Verification / Skills / Extensibility**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,17 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.5.2 — Plan Workspace UI
+- P0: Plan Panel — goal/steps/risks/files/status 可视化
+- P0: Plan Approval UI — approve/reject 按钮
+- P0: Plan Timeline Integration — plan events 进入 timeline
+- P0: Plan Step ↔ ToolCall Mapping — 点击步骤查看关联 tool calls
+- P1: Plan Execution Progress — 实时步骤状态更新
+- P1: Plan Drift Detection — 检测意外文件修改
+- P1: Session Restore — plan state 恢复
+- Tests: 10 Plan UI Integration Tests（241/241 PASS）
 - 状态：已完成
 
 ### V0.5.1.1 — Plan Lifecycle Closure

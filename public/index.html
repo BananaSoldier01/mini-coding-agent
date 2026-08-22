@@ -37,6 +37,7 @@
           </select>
         </div>
         <button class="btn btn-ghost" id="contextIndicator" title="Context" aria-label="Context" style="display:none">Context</button>
+          <button class="btn btn-ghost" id="planIndicator" title="Plan" aria-label="Plan" style="display:none" onclick="openPlanPanel()">📋 Plan</button>
         <button class="btn btn-ghost" id="sessionListBtn" title="Sessions" aria-label="Sessions">Sessions</button>
         <button class="btn btn-ghost" id="newSessionBtn" title="新 Session" aria-label="新 Session">＋</button>
         <button class="btn btn-ghost" id="configBtn" title="配置" aria-label="配置">⚙</button>
@@ -218,6 +219,25 @@
     </div>
   </div>
 
+  <!-- V0.5.2: Plan Panel -->
+  <div id="planPanel" class="modal" style="display:none">
+    <div class="modal-backdrop" data-close onclick="closePlanPanel()"></div>
+    <div class="modal-content plan-panel-modal">
+      <div class="modal-header">
+        <h2>Execution Plan</h2>
+      </div>
+      <div class="modal-body">
+        <div id="planPanelBody">
+          <div class="plan-empty">No plan available</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closePlanPanel()">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
+  <script src="/plan-panel.js"></script>
 </body>
 </html>
