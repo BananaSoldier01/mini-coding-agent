@@ -22,6 +22,7 @@ import { RunStatus, RUN_STATUS } from '../runstatus.js';
 import { buildAgentContext, CONTEXT_BUDGET, COMPACTION_TRIGGER_RATIO, HARD_BUDGET } from '../context/builder.js';
 import { estimateContextSize } from '../context/estimator.js';
 import { createPlan, validatePlan, transitionPlanStatus, PLAN_STATUS, PLAN_TRANSITIONS, EXECUTION_MODE, buildPlanPrompt, formatPlanForApproval } from './plan.js';
+import { createVerificationFromStep, runVerification, VERIFICATION_STATUS } from './verification.js';
 
 const MAX_ITERATIONS = 20;
 const MAX_TOOL_OUTPUT_CHARS = 4000;
@@ -474,6 +475,35 @@ async function runAgent(opts) {
               })),
             });
           }
+
+          // V0.6.0: Auto-trigger verification for completed steps
+          for (const step of activePlan.steps) {
+            if (step.status === 'completed' && step.expectedOutcome && !step.verificationState) {
+              step.verificationState = createVerificationFromStep(activePlan, step);
+              emit(onEvent, {
+                type: 'verification_started',
+                planId: activePlan.id,
+                stepId: step.id,
+                verificationId: step.verificationState.id,
+              });
+
+              // Run verification
+              runVerification(step.verificationState, { workspace }).then((vs) => {
+                emit(onEvent, {
+                  type: 'verification_completed',
+                  planId: activePlan.id,
+                  stepId: step.id,
+                  verificationId: vs.id,
+                  status: vs.status,
+                  checks: vs.checks.map(c => ({
+                    id: c.id,
+                    status: c.status,
+                    result: c.result,
+                  })),
+                });
+              });
+            }
+          }
         }
 
         // 更新 Run Status
@@ -643,7 +673,22 @@ async function runAgent(opts) {
     } else if (runStatus.status === RUN_STATUS.FAILED || contextMetadata.overflow) {
       transitionPlanStatus(activePlan, PLAN_STATUS.FAILED);
     } else if (activePlan.status === PLAN_STATUS.APPROVED || activePlan.status === PLAN_STATUS.EXECUTING) {
-      transitionPlanStatus(activePlan, PLAN_STATUS.COMPLETED);
+      // V0.6.0: Check verification results before completing
+      const stepsWithVerification = activePlan.steps.filter(s => s.verificationState);
+      const allVerificationPassed = stepsWithVerification.every(
+        s => s.verificationState.status === VERIFICATION_STATUS.PASSED || s.verificationState.status === VERIFICATION_STATUS.PENDING
+      );
+      const anyVerificationFailed = stepsWithVerification.some(
+        s => s.verificationState.status === VERIFICATION_STATUS.FAILED
+      );
+
+      if (anyVerificationFailed) {
+        transitionPlanStatus(activePlan, PLAN_STATUS.FAILED);
+      } else if (stepsWithVerification.length > 0) {
+        transitionPlanStatus(activePlan, PLAN_STATUS.COMPLETED);
+      } else {
+        transitionPlanStatus(activePlan, PLAN_STATUS.COMPLETED);
+      }
     }
 
     // V0.5.2: Plan Drift Detection
@@ -673,6 +718,14 @@ async function runAgent(opts) {
         id: s.id,
         status: s.status,
         completedAt: s.completedAt,
+        verification: s.verificationState ? {
+          status: s.verificationState.status,
+          checks: s.verificationState.checks.map(c => ({
+            id: c.id,
+            status: c.status,
+            result: c.result,
+          })),
+        } : null,
       })),
     });
   }

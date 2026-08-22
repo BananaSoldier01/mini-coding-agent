@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.5.2 — Plan Workspace UI**（已完成）
+**V0.6.0 — Verification Foundation**（已完成）
 
-**Next: V0.6 — Verification / Skills / Extensibility**
+**Next: V0.7 — Skills / Extensibility**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,18 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.6.0 — Verification Foundation
+- P0: Verification Object — verificationState + checks 数据模型
+- P0: Plan Step Verification — expectedOutcome + verificationState per step
+- P0: Verification Lifecycle — EXECUTING → VERIFYING → PASSED/FAILED → COMPLETED
+- P0: Basic Verification Runner — command/file/git verification
+- P1: Automatic Post Execution Verification — step 完成后自动触发
+- P1: Verification Timeline Integration — verification_started/completed
+- P1: Plan Completion Rules — verification failed → FAILED, not Completed
+- P1: Verification UI — Plan Panel 显示验证结果
+- Tests: 13 Verification Tests（254/254 PASS）
 - 状态：已完成
 
 ### V0.5.2 — Plan Workspace UI

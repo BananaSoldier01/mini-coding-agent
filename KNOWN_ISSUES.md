@@ -4,6 +4,21 @@
 
 ---
 
+## V0.6.0 — 已完成
+
+### Verification Foundation
+- Verification Object: verificationState + checks
+- Plan Step Verification: expectedOutcome + verificationState
+- Verification Lifecycle: EXECUTING → VERIFYING → PASSED/FAILED
+- Verification Runner: command/file/git
+- Auto Post-Execution Verification
+- Verification Timeline Integration
+- Plan Completion Rules: verification failed → FAILED
+- Verification UI in Plan Panel
+- 13 Verification Tests
+
+---
+
 ## V0.5.2 — 已完成
 
 ### Plan Workspace UI

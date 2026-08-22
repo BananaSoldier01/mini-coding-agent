@@ -1424,6 +1424,39 @@ function handleEvent(event) {
       }
       updatePlanIndicator();
       break;
+
+    // V0.6.0: Verification Events
+    case 'verification_started':
+      if (state.plan && event.stepId) {
+        const step = state.plan.steps.find(s => s.id === event.stepId);
+        if (step) {
+          step.verificationState = step.verificationState || {
+            id: event.verificationId,
+            status: 'running',
+            checks: [],
+          };
+        }
+      }
+      appendSystemMessage('🔍 验证开始: ' + (event.stepId || ''));
+      updatePlanIndicator();
+      break;
+
+    case 'verification_completed':
+      if (state.plan && event.stepId) {
+        const step = state.plan.steps.find(s => s.id === event.stepId);
+        if (step && step.verificationState) {
+          step.verificationState.status = event.status;
+          step.verificationState.checks = (event.checks || []).map(c => ({
+            id: c.id,
+            status: c.status,
+            result: c.result,
+          }));
+        }
+      }
+      const verifyStatus = event.status === 'passed' ? '✅' : '❌';
+      appendSystemMessage(`${verifyStatus} 验证完成: ${event.status}`);
+      updatePlanIndicator();
+      break;
   }
 }
 

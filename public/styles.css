@@ -1146,3 +1146,28 @@ html, body {
   font-size: 11px;
   color: var(--text-dim);
 }
+
+/* ── V0.6.0: Verification Styles ────────────────────── */
+.step-verification {
+  margin: 4px 0 0 28px;
+  font-size: 12px;
+  padding: 4px 8px;
+  background: var(--bg-hover);
+  border-radius: 4px;
+}
+
+.vs-icon {
+  margin-right: 4px;
+}
+
+.vs-checks {
+  margin: 4px 0 0 16px;
+  list-style: none;
+  padding: 0;
+}
+
+.vs-check {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 2px 0;
+}

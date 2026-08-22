@@ -1,7 +1,7 @@
 /**
  * agent/plan.js — Plan Lifecycle & Execution Integrity
  *
- * V0.5.2
+ * V0.6.0
  * - Plan Object: structured plan with steps, risks, files, runId
  * - Plan Mode: plan-only vs plan-execute
  * - Plan Approval Gate: user must approve plan before execution
@@ -9,6 +9,7 @@
  * - Full lifecycle: DRAFT → AWAITING_APPROVAL → APPROVED → EXECUTING → COMPLETED/FAILED/CANCELLED
  * - Step Tracking: per-step status, completedAt, toolCalls
  * - Plan Drift Detection: detect unexpected file modifications
+ * - Step Verification: expectedOutcome + verificationState per step
  */
 
 // ── Plan Status ────────────────────────────────────────
@@ -48,7 +49,7 @@ const EXECUTION_MODE = {
  */
 function createPlan(opts = {}) {
   const { goal, steps, risks, files, context, runId, executionMode } = opts;
-  // V0.5.2: Initialize step tracking fields
+  // V0.6.0: Initialize step tracking + verification fields
   const enrichedSteps = Array.isArray(steps)
     ? steps.map(s => ({
         id: s.id,
@@ -60,6 +61,9 @@ function createPlan(opts = {}) {
         status: 'pending',
         completedAt: null,
         toolCalls: [],
+        // V0.6.0: Verification fields
+        expectedOutcome: s.expectedOutcome || null,
+        verificationState: s.verificationState || null,
       }))
     : [];
 
