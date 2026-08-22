@@ -316,6 +316,7 @@ const server = http.createServer(async (req, resp) => {
           status: 'fresh',
           sourceRange: { start: 0, end: 0 },
         },
+        planState: session.planState || null,
       });
     }
 
@@ -365,7 +366,7 @@ const server = http.createServer(async (req, resp) => {
       const mv = validateMutation(req);
       if (!mv.ok) return sendError(resp, mv.status, mv.reason);
       const body = JSON.parse(await readBody(req));
-      const { task, workspace, sessionId, config: clientConfig, title, planMode } = body;
+      const { task, workspace, sessionId, config: clientConfig, title, planMode, executionMode } = body;
       const ws = workspace || config.workspace;
 
       // 验证 workspace
@@ -468,6 +469,7 @@ const server = http.createServer(async (req, resp) => {
           projectContext,
           contextBuilder: { buildAgentContext },
           planMode: planMode || false,
+          executionMode: executionMode || 'plan-execute',
         });
 
         // ── 由 Agent Runner 提交真实 Transcript ──────

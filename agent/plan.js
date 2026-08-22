@@ -1,11 +1,12 @@
 /**
- * agent/plan.js — Plan Mode & Execution Integrity
+ * agent/plan.js — Plan Lifecycle & Execution Integrity
  *
- * V0.5.1
- * - Plan Object: structured plan with steps, risks, files
- * - Plan Mode: analysis-only, no tool execution
+ * V0.5.1.1
+ * - Plan Object: structured plan with steps, risks, files, runId
+ * - Plan Mode: plan-only vs plan-execute
  * - Plan Approval Gate: user must approve plan before execution
  * - Plan ↔ Execution Binding: planId → runId → toolCalls
+ * - Full lifecycle: DRAFT → AWAITING_APPROVAL → APPROVED → EXECUTING → COMPLETED/FAILED/CANCELLED
  */
 
 // ── Plan Status ────────────────────────────────────────
@@ -20,13 +21,31 @@ const PLAN_STATUS = {
   CANCELLED: 'cancelled',
 };
 
+// Valid status transitions
+const PLAN_TRANSITIONS = {
+  [PLAN_STATUS.DRAFT]: [PLAN_STATUS.AWAITING_APPROVAL],
+  [PLAN_STATUS.AWAITING_APPROVAL]: [PLAN_STATUS.APPROVED, PLAN_STATUS.REJECTED],
+  [PLAN_STATUS.APPROVED]: [PLAN_STATUS.EXECUTING, PLAN_STATUS.FAILED, PLAN_STATUS.CANCELLED],
+  [PLAN_STATUS.EXECUTING]: [PLAN_STATUS.COMPLETED, PLAN_STATUS.FAILED, PLAN_STATUS.CANCELLED],
+  [PLAN_STATUS.COMPLETED]: [],
+  [PLAN_STATUS.REJECTED]: [],
+  [PLAN_STATUS.FAILED]: [],
+  [PLAN_STATUS.CANCELLED]: [],
+};
+
+// ── Execution Mode ─────────────────────────────────────
+const EXECUTION_MODE = {
+  PLAN_ONLY: 'plan-only',
+  PLAN_EXECUTE: 'plan-execute',
+};
+
 // ── Plan Object ────────────────────────────────────────
 /**
  * 创建 Plan State。
- * 返回结构化的 plan 对象。
+ * 返回结构化的 plan 对象，包含完整生命周期字段。
  */
 function createPlan(opts = {}) {
-  const { goal, steps, risks, files, context } = opts;
+  const { goal, steps, risks, files, context, runId, executionMode } = opts;
   return {
     id: `plan_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     status: PLAN_STATUS.DRAFT,
@@ -35,12 +54,13 @@ function createPlan(opts = {}) {
     risks: Array.isArray(risks) ? risks : [],
     files: Array.isArray(files) ? files : [],
     context: context || {},
+    runId: runId || null,
+    executionMode: executionMode || EXECUTION_MODE.PLAN_EXECUTE,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     approvedAt: null,
     executedAt: null,
     completedAt: null,
-    runId: null,
     toolCallBindings: [],
   };
 }
@@ -71,28 +91,37 @@ function validatePlan(plan) {
   if (!Array.isArray(plan.files)) {
     errors.push('Plan.files must be an array');
   }
+  if (plan.runId !== null && typeof plan.runId !== 'string') {
+    errors.push('Plan.runId must be a string or null');
+  }
   return { valid: errors.length === 0, errors };
 }
 
 /**
- * 更新 Plan 状态。
+ * 状态机转换 —— 拒绝非法转换。
  */
-function updatePlanStatus(plan, status) {
-  if (!plan) return null;
-  plan.status = status;
+function transitionPlanStatus(plan, newStatus) {
+  if (!plan) return false;
+  const allowed = PLAN_TRANSITIONS[plan.status] || [];
+  if (!allowed.includes(newStatus)) {
+    return false;
+  }
+  plan.status = newStatus;
   plan.updatedAt = Date.now();
-  if (status === PLAN_STATUS.APPROVED) plan.approvedAt = Date.now();
-  if (status === PLAN_STATUS.EXECUTING) plan.executedAt = Date.now();
-  if (status === PLAN_STATUS.COMPLETED) plan.completedAt = Date.now();
-  return plan;
+  if (newStatus === PLAN_STATUS.APPROVED) plan.approvedAt = Date.now();
+  if (newStatus === PLAN_STATUS.EXECUTING) plan.executedAt = Date.now();
+  if (newStatus === PLAN_STATUS.COMPLETED) plan.completedAt = Date.now();
+  return true;
 }
 
 /**
  * 绑定 Plan → Run → Tool Calls。
  */
-function bindToolCall(plan, toolCallId, toolName, args) {
+function bindToolCall(plan, runId, toolCallId, toolName, args) {
   if (!plan) return;
   plan.toolCallBindings.push({
+    planId: plan.id,
+    runId: runId || plan.runId,
     toolCallId,
     toolName,
     args,
@@ -177,9 +206,11 @@ function formatPlanForApproval(plan) {
 
 export {
   PLAN_STATUS,
+  PLAN_TRANSITIONS,
+  EXECUTION_MODE,
   createPlan,
   validatePlan,
-  updatePlanStatus,
+  transitionPlanStatus,
   bindToolCall,
   buildPlanPrompt,
   formatPlanForApproval,

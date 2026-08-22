@@ -21,7 +21,7 @@ import { mergePermission } from '../permission.js';
 import { RunStatus, RUN_STATUS } from '../runstatus.js';
 import { buildAgentContext, CONTEXT_BUDGET, COMPACTION_TRIGGER_RATIO, HARD_BUDGET } from '../context/builder.js';
 import { estimateContextSize } from '../context/estimator.js';
-import { createPlan, validatePlan, updatePlanStatus, PLAN_STATUS, buildPlanPrompt, formatPlanForApproval } from './plan.js';
+import { createPlan, validatePlan, transitionPlanStatus, PLAN_STATUS, PLAN_TRANSITIONS, EXECUTION_MODE, buildPlanPrompt, formatPlanForApproval } from './plan.js';
 
 const MAX_ITERATIONS = 20;
 const MAX_TOOL_OUTPUT_CHARS = 4000;
@@ -152,8 +152,9 @@ async function runAgent(opts) {
     };
   }
 
-  // ── V0.5.1: Plan Mode ──────────────────────────────────
+  // ── V0.5.1.1: Plan Mode ──────────────────────────────────
   const planMode = opts.planMode || false;
+  const executionMode = opts.executionMode || EXECUTION_MODE.PLAN_EXECUTE;
   let activePlan = null;
 
   if (planMode) {
@@ -182,22 +183,49 @@ async function runAgent(opts) {
           risks: planData.risks,
           files: planData.files,
           context: { estimatedChanges: planData.estimatedChanges },
+          runId: run?.runId || null,
+          executionMode,
         });
 
         const validation = validatePlan(activePlan);
         if (validation.valid) {
           session.planState = activePlan;
+
+          // DRAFT → AWAITING_APPROVAL
+          transitionPlanStatus(activePlan, PLAN_STATUS.AWAITING_APPROVAL);
+          session.planState = activePlan;
+
           emit(onEvent, {
             type: 'plan_generated',
             plan: {
               id: activePlan.id,
+              runId: activePlan.runId,
               goal: activePlan.goal,
               steps: activePlan.steps,
               risks: activePlan.risks,
               files: activePlan.files,
               estimatedChanges: activePlan.context.estimatedChanges,
+              executionMode: activePlan.executionMode,
+              status: activePlan.status,
             },
           });
+
+          // plan-only 模式：不等待审批，直接结束
+          if (executionMode === EXECUTION_MODE.PLAN_ONLY) {
+            emit(onEvent, {
+              type: 'plan_completed',
+              planId: activePlan.id,
+              message: '计划已生成（仅查看模式，未执行）',
+            });
+            return {
+              messages: turnMessages,
+              changes: { files: [], totalChanges: 0 },
+              finalContent: formatPlanForApproval(activePlan),
+              iteration: 0,
+              stopped: false,
+              plan: activePlan,
+            };
+          }
 
           // 等待用户审批计划
           runStatus.transition(RUN_STATUS.WAITING_APPROVAL, 'plan');
@@ -211,8 +239,10 @@ async function runAgent(opts) {
           const approved = await approvalRegistry.register(run?.runId || 'default', `plan_${activePlan.id}`);
 
           if (!approved) {
-            updatePlanStatus(activePlan, PLAN_STATUS.REJECTED);
-            emit(onEvent, { type: 'plan_rejected', planId: activePlan.id });
+            // AWAITING_APPROVAL → REJECTED
+            transitionPlanStatus(activePlan, PLAN_STATUS.REJECTED);
+            session.planState = activePlan;
+            emit(onEvent, { type: 'plan_rejected', planId: activePlan.id, status: activePlan.status });
             emit(onEvent, {
               type: 'error',
               message: '计划被用户拒绝',
@@ -227,23 +257,57 @@ async function runAgent(opts) {
             };
           }
 
-          updatePlanStatus(activePlan, PLAN_STATUS.APPROVED);
+          // AWAITING_APPROVAL → APPROVED
+          transitionPlanStatus(activePlan, PLAN_STATUS.APPROVED);
           session.planState = activePlan;
-          emit(onEvent, { type: 'plan_approved', planId: activePlan.id });
+          emit(onEvent, { type: 'plan_approved', planId: activePlan.id, status: activePlan.status });
         } else {
-          // Plan validation failed — continue without plan
+          // P0-5.1.1: Plan Mode 下不允许静默 fallback
           emit(onEvent, {
-            type: 'context_warning',
-            message: '计划生成失败，直接执行任务',
+            type: 'error',
+            message: '计划生成失败：' + validation.errors.join('; ') + '。Plan Mode 下不允许直接执行。',
           });
+          return {
+            messages: turnMessages,
+            changes: { files: [], totalChanges: 0 },
+            finalContent: '计划生成失败，无法继续。',
+            iteration: 0,
+            stopped: false,
+            plan: activePlan,
+            error: 'plan_validation_failed',
+          };
         }
+      } else {
+        // P0-5.1.1: Plan Mode 下不允许静默 fallback
+        emit(onEvent, {
+          type: 'error',
+          message: '无法从 LLM 响应中解析计划。Plan Mode 下不允许直接执行。',
+        });
+        return {
+          messages: turnMessages,
+          changes: { files: [], totalChanges: 0 },
+          finalContent: '计划生成失败，无法继续。',
+          iteration: 0,
+          stopped: false,
+          plan: null,
+          error: 'plan_parse_failed',
+        };
       }
     } catch (err) {
-      // Plan generation failed — continue without plan
+      // P0-5.1.1: Plan Mode 下不允许静默 fallback
       emit(onEvent, {
-        type: 'context_warning',
-        message: '计划生成失败，直接执行任务: ' + err.message,
+        type: 'error',
+        message: '计划生成失败: ' + err.message + '。Plan Mode 下不允许直接执行。',
       });
+      return {
+        messages: turnMessages,
+        changes: { files: [], totalChanges: 0 },
+        finalContent: '计划生成失败，无法继续。',
+        iteration: 0,
+        stopped: false,
+        plan: null,
+        error: 'plan_generation_failed',
+      };
     }
   }
 
@@ -387,8 +451,15 @@ async function runAgent(opts) {
 
         // P0: Plan ↔ Execution Binding
         if (activePlan) {
-          const { bindToolCall } = await import('./plan.js');
-          bindToolCall(activePlan, tc.id, toolName, args);
+          const { bindToolCall, transitionPlanStatus, PLAN_STATUS } = await import('./plan.js');
+          bindToolCall(activePlan, run?.runId || activePlan.runId, tc.id, toolName, args);
+
+          // APPROVED → EXECUTING on first tool execution
+          if (activePlan.status === PLAN_STATUS.APPROVED) {
+            transitionPlanStatus(activePlan, PLAN_STATUS.EXECUTING);
+            session.planState = activePlan;
+            emit(onEvent, { type: 'plan_executing', planId: activePlan.id, status: activePlan.status });
+          }
         }
 
         // 更新 Run Status
@@ -486,6 +557,13 @@ async function runAgent(opts) {
           }
         } catch (err) {
           result = { error: err.message };
+          // P0-5.1.1: tool error → plan FAILED
+          if (activePlan && (activePlan.status === PLAN_STATUS.EXUTING || activePlan.status === PLAN_STATUS.APPROVED)) {
+            const { transitionPlanStatus, PLAN_STATUS } = await import('./plan.js');
+            transitionPlanStatus(activePlan, PLAN_STATUS.FAILED);
+            session.planState = activePlan;
+            emit(onEvent, { type: 'plan_failed', planId: activePlan.id, status: activePlan.status, error: err.message });
+          }
         }
 
         // 截断过大的 tool output
@@ -540,6 +618,27 @@ async function runAgent(opts) {
     runStatus.transition(RUN_STATUS.FAILED, 'max_iterations');
     emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label });
     emit(onEvent, { type: 'error', message: `已达到最大迭代次数 (${MAX_ITERATIONS})` });
+  }
+
+  // ── V0.5.1.1: Plan Lifecycle Closure ──────────────────
+  if (activePlan) {
+    const { transitionPlanStatus, PLAN_STATUS } = await import('./plan.js');
+
+    if (stopped) {
+      transitionPlanStatus(activePlan, PLAN_STATUS.CANCELLED);
+    } else if (runStatus.status === RUN_STATUS.FAILED || contextMetadata.overflow) {
+      transitionPlanStatus(activePlan, PLAN_STATUS.FAILED);
+    } else if (activePlan.status === PLAN_STATUS.APPROVED || activePlan.status === PLAN_STATUS.EXECUTING) {
+      transitionPlanStatus(activePlan, PLAN_STATUS.COMPLETED);
+    }
+
+    session.planState = activePlan;
+    emit(onEvent, {
+      type: 'plan_completed',
+      planId: activePlan.id,
+      status: activePlan.status,
+      toolCallCount: activePlan.toolCallBindings.length,
+    });
   }
 
   // 计算净变更

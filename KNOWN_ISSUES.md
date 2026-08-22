@@ -4,7 +4,19 @@
 
 ---
 
-## V0.5.1 — 开发中
+## V0.5.1.1 — 已完成
+
+### Plan Lifecycle Closure
+- Plan State Machine: DRAFT → AWAITING_APPROVAL → APPROVED → EXECUTING → COMPLETED/FAILED/CANCELLED
+- Plan ↔ Run Binding: runId 在 Plan 和 toolCallBindings 中
+- Plan Persistence: 序列化/反序列化/switch/new session 全覆盖
+- Plan Mode Semantics: plan-only vs plan-execute
+- Plan Failure Policy: plan mode 不允许静默 fallback
+- 18 Plan Regression Tests
+
+---
+
+## V0.5.1 — 已完成
 
 ### Plan Mode
 - Plan Object (session.planState) 已定义

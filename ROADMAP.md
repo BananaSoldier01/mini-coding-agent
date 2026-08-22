@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.5.1 — Plan Mode & Execution Integrity**（开发中）
+**V0.5.1.1 — Plan Lifecycle Closure**（已完成）
 
-**Next: V0.5.2 — TBD after milestone review**
+**Next: V0.5.2 — Plan Workspace UI**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -128,7 +128,16 @@
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
 - 状态：已完成
 
-### V0.5.1 — Plan Mode & Execution Integrity（开发中）
+### V0.5.1.1 — Plan Lifecycle Closure
+- P0: 完整 Plan State Machine — DRAFT → AWAITING_APPROVAL → APPROVED → EXECUTING → COMPLETED/FAILED/CANCELLED
+- P0: Plan ↔ Run Binding — plan.runId + toolCallBindings.runId
+- P0: Plan Persistence Closure — 序列化/反序列化/switch/new session
+- P1: Plan Mode Semantics — plan-only vs plan-execute
+- P1: Plan Failure Policy — plan mode 不允许静默 fallback
+- Tests: 18 Plan Regression Tests（229/229 PASS）
+- 状态：已完成
+
+### V0.5.1 — Plan Mode & Execution Integrity（已完成）
 - Plan Object: session.planState（goal/steps/risks/files/status）
 - Plan Mode: chat vs plan 模式切换，plan 模式下只分析不执行
 - Plan Approval Gate: 生成计划 → 用户审批 → 才执行

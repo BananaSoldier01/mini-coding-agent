@@ -392,6 +392,9 @@ async function switchSession(sessionId) {
     }
     updateContextIndicator();
 
+    // P0-5.1.1: 恢复 Plan State
+    state.plan = data.planState || null;
+
     $('#timeline').innerHTML = '';
     $('#completionSummary').style.display = 'none';
     $('#diffPanel').innerHTML = '<div class="diff-empty">文件修改将在此显示</div>';
@@ -438,6 +441,8 @@ async function newSession() {
       status: 'fresh',
       summary: null,
     };
+    // P0-5.1.1: New Session 重置 Plan State
+    state.plan = null;
     updateContextIndicator();
 
     $('#timeline').innerHTML = '';
@@ -1357,6 +1362,40 @@ function handleEvent(event) {
         state.context.estimatedSize = event.estimatedSize;
       }
       updateContextIndicator();
+      break;
+
+    // ── V0.5.1.1: Plan Events ──────────────────────────
+    case 'plan_generated':
+      state.plan = event.plan;
+      appendSystemMessage('📋 计划已生成: ' + event.plan.goal);
+      break;
+
+    case 'plan_approved':
+      if (state.plan) state.plan.status = 'approved';
+      appendSystemMessage('✅ 计划已批准');
+      break;
+
+    case 'plan_rejected':
+      if (state.plan) state.plan.status = 'rejected';
+      appendSystemMessage('❌ 计划被拒绝');
+      break;
+
+    case 'plan_executing':
+      if (state.plan) state.plan.status = 'executing';
+      appendSystemMessage('⚡ 开始执行计划');
+      break;
+
+    case 'plan_completed':
+      if (state.plan) {
+        state.plan.status = event.status || 'completed';
+        state.plan.toolCallCount = event.toolCallCount || 0;
+      }
+      appendSystemMessage('🏁 计划完成');
+      break;
+
+    case 'plan_failed':
+      if (state.plan) state.plan.status = 'failed';
+      appendSystemMessage('💥 计划失败: ' + (event.error || '未知错误'));
       break;
   }
 }
