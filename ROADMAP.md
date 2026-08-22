@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.5.0 — Project Context & Session Compaction**（已完成）
+**V0.5.0.1 — Context Integrity Closure**（已完成）
 
 **Next: V0.5.1 — Plan Mode & Plan → Execute Integrity（TBD after milestone review）**
 
@@ -126,6 +126,17 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.5.0.1 — Context Integrity Closure
+- P0-1: 修 ProjectInstructions contract — 正确读取 readFile().content
+- P0-2: 修 Turn grouping — Turn 内保持 canonical 原始消息顺序
+- P0-3: 保留 Recent Raw Turns — 只 compact 最老 historical turns
+- P0-4: Hard Budget Closure — 超限 emit context_overflow，不调用 LLM
+- P1: Context Observability — indicator + panel + frontend event handlers
+- P1: Project Instructions 只注入一次（buildSystemPrompt 内，builder 不重复）
+- P1: SUMMARY_MAX_CHARS 真 enforce（超限 degraded）
+- Context Unit Tests: 30 tests（estimator / compactor / turn grouping / builder / session）
 - 状态：已完成
 
 ### V0.5.0 — Project Context & Session Compaction

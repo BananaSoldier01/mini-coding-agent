@@ -1,10 +1,11 @@
 /**
  * context/project.js — Project Instructions (AGENTS.md) 加载
  *
- * V0.5.0
+ * V0.5.0.1
  * - 只支持 workspace 根目录 /AGENTS.md
  * - 通过 WorkspaceFileService 读取（遵守 workspace boundary / symlink / binary / size）
  * - 每 Run 重新解析，不做 cache
+ * - 正确读取 readFile().content（readFile 返回对象，不是字符串）
  */
 
 const AGENTS_FILE = 'AGENTS.md';
@@ -20,7 +21,7 @@ class ProjectInstructions {
    * 返回 { loaded, source, content, truncated, originalLength, loadedLength }
    */
   load(workspace) {
-    let result = {
+    const result = {
       loaded: false,
       source: AGENTS_FILE,
       content: '',
@@ -36,8 +37,15 @@ class ProjectInstructions {
         return result;
       }
 
-      // 读取内容
-      const content = this.fileService.readFile(AGENTS_FILE);
+      // 读取内容 — readFile() 返回 { path, size, content, totalLines, ... }
+      const fileData = this.fileService.readFile(AGENTS_FILE);
+
+      // P0-1: 正确提取 content 字段
+      if (!fileData || typeof fileData !== 'object') {
+        return result;
+      }
+
+      const content = fileData.content;
       if (content == null || content === '') {
         return result;
       }

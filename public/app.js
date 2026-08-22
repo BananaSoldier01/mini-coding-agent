@@ -540,6 +540,7 @@ async function init() {
   $('#configBtn').addEventListener('click', openConfig);
   $('#sessionListBtn').addEventListener('click', openSessionList);
   $('#newSessionBtn').addEventListener('click', newSession);
+  $('#contextIndicator').addEventListener('click', openContextPanel);
   $('#newSessionFromList').addEventListener('click', () => {
     $('#sessionListModal').classList.remove('open');
     newSession();
@@ -1286,11 +1287,136 @@ function handleEvent(event) {
         setStatus('error', 'error');
       }
       break;
+    // ── V0.5.0.1: Context Events ──
+    case 'context_loaded':
+      state.context = state.context || {};
+      state.context.projectInstructions = {
+        loaded: event.projectInstructions.loaded,
+        source: event.projectInstructions.source,
+        truncated: event.projectInstructions.truncated,
+        originalLength: event.projectInstructions.originalLength,
+        loadedLength: event.projectInstructions.loadedLength,
+      };
+      updateContextIndicator();
+      break;
+    case 'context_compacted':
+      state.context = state.context || {};
+      state.context.compactionCount = event.compactionCount;
+      state.context.lastCompactedAt = Date.now();
+      appendSystemMessage(`📦 Context compacted · ${event.compactionCount} 次压缩 · 已压缩到第 ${event.compactedThrough} 轮`);
+      updateContextIndicator();
+      break;
+    case 'context_warning':
+      appendSystemMessage('⚠️ ' + event.message);
+      updateContextIndicator();
+      break;
+    case 'context_overflow':
+      appendSystemMessage('🚫 ' + event.message);
+      setStatus('error', 'error');
+      updateContextIndicator();
+      break;
   }
 }
 
 /* ── Approval ───────────────────────────────────────── */
 let pendingApproval = null;
+
+/* ── Context Indicator ──────────────────────────────── */
+function updateContextIndicator() {
+  const indicator = $('#contextIndicator');
+  if (!indicator) return;
+
+  const ctx = state.context || {};
+  const parts = [];
+
+  if (ctx.projectInstructions && ctx.projectInstructions.loaded) {
+    const pi = ctx.projectInstructions;
+    parts.push(`AGENTS.md${pi.truncated ? ' · partial' : ''}`);
+  }
+
+  if (ctx.compactionCount && ctx.compactionCount > 0) {
+    parts.push(`compaction ${ctx.compactionCount}`);
+  }
+
+  if (parts.length > 0) {
+    indicator.textContent = 'Context · ' + parts.join(' · ');
+    indicator.style.display = '';
+  } else {
+    indicator.style.display = 'none';
+  }
+}
+
+function openContextPanel() {
+  const ctx = state.context || {};
+  const pi = ctx.projectInstructions || {};
+
+  let html = '<div class="context-panel">';
+
+  // Project Instructions
+  html += '<div class="ctx-section">';
+  html += '<h4>Project Instructions</h4>';
+  if (pi.loaded) {
+    html += `<div class="ctx-meta">Source: ${pi.source}${pi.truncated ? ' · partial' : ''}</div>`;
+    if (pi.truncated) {
+      html += `<div class="ctx-meta">Loaded: ${pi.loadedLength} / ${pi.originalLength} chars</div>`;
+    }
+    html += `<div class="ctx-content">${escapeHtml((pi.content || '').slice(0, 500))}</div>`;
+  } else {
+    html += '<div class="ctx-meta">No AGENTS.md</div>';
+  }
+  html += '</div>';
+
+  // Session Context
+  html += '<div class="ctx-section">';
+  html += '<h4>Session Context</h4>';
+  html += `<div class="ctx-meta">Compactions: ${ctx.compactionCount || 0}</div>`;
+  if (ctx.lastCompactedAt) {
+    html += `<div class="ctx-meta">Last compacted: ${new Date(ctx.lastCompactedAt).toLocaleTimeString()}</div>`;
+  }
+  const status = ctx.status || (ctx.compactionCount > 0 ? 'compacted' : 'fresh');
+  html += `<div class="ctx-meta">Status: ${status}</div>`;
+  html += '</div>';
+
+  // Summary
+  const summary = ctx.summary;
+  if (summary) {
+    html += '<div class="ctx-section">';
+    html += '<h4>Summary</h4>';
+    const sections = [
+      { key: 'goal', label: 'Goals' },
+      { key: 'constraints', label: 'Constraints' },
+      { key: 'decisions', label: 'Decisions' },
+      { key: 'progress', label: 'Progress' },
+      { key: 'verification', label: 'Verification' },
+      { key: 'openItems', label: 'Open Items' },
+    ];
+    for (const { key, label } of sections) {
+      const items = summary[key] || [];
+      if (items.length > 0) {
+        html += `<div class="ctx-summary-group"><strong>${label}:</strong>`;
+        for (const item of items) {
+          html += `<div class="ctx-summary-item">• ${escapeHtml(item)}</div>`;
+        }
+        html += '</div>';
+      }
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  html += '<div class="modal-footer"><button onclick="closeContextPanel()">Close</button></div>';
+
+  const modal = $('#contextPanel');
+  if (modal) {
+    modal.innerHTML = html;
+    modal.classList.add('open');
+  }
+}
+
+function closeContextPanel() {
+  const modal = $('#contextPanel');
+  if (modal) modal.classList.remove('open');
+}
 
 function respondApproval(approved) {
   $('#approvalModal').classList.remove('open');

@@ -1,47 +1,48 @@
 /**
  * context/builder.js — Context Builder
  *
- * V0.5.0
+ * V0.5.0.1
  * - 统一构建 Model Context（不散落在 runAgent 里）
  * - 返回 modelMessages + contextMetadata
  * - 负责 Project Instructions / Summary / Recent Raw Turns / Current Task
+ * - Turn 内保持 canonical 原始消息顺序，永不重排
+ * - 只 compact 最老的 historical turns，保留 Recent Raw Turns
+ * - Hard Budget 真正 enforce
  */
 
 import { estimateContextSize, CHARS_PER_TOKEN } from './estimator.js';
+import { buildCompactionPrompt, validateSummary, SUMMARY_MAX_CHARS } from './compactor.js';
 
 // ── Context Budget ──────────────────────────────────────
-const CONTEXT_BUDGET = 80000;        // estimated chars budget
-const COMPACTION_TRIGGER_RATIO = 0.75; // compact at 75%
-const RECENT_CONTEXT_TARGET = 0.5;    // after compaction, target ~50%
-const HARD_BUDGET = 120000;           // hard limit
+const CONTEXT_BUDGET = 80000;
+const COMPACTION_TRIGGER_RATIO = 0.75;
+const RECENT_CONTEXT_TARGET = 0.5;
+const HARD_BUDGET = 120000;
+const MIN_RECENT_TURNS = 2; // 至少保留 2 个完整 Turn
 
 /**
  * 将消息数组按 Turn 分组。
- * 一个 Turn = user + assistant(tool_calls) + tool_results + assistant(final)
+ * P0-2: Turn 内保持 canonical 原始消息顺序，永不重排。
+ * 一个 Turn = user 开始，到下一个 user 之前结束。
+ * Turn 内可能包含多轮 assistant→tool 交替。
  */
 function groupSessionTurns(messages) {
   const turns = [];
   let current = null;
 
-  for (const msg of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
     if (msg.role === 'user') {
       if (current) turns.push(current);
-      current = { user: msg, assistant: [], tools: [], final: null };
-    } else if (msg.role === 'assistant') {
+      current = { startIndex: i, endIndex: i, messages: [msg] };
+    } else {
       if (!current) {
-        // orphan assistant before any user — treat as own turn
-        current = { user: null, assistant: [], tools: [], final: null };
-      }
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        current.assistant.push(msg);
+        // orphan before any user — create a synthetic turn
+        current = { startIndex: i, endIndex: i, messages: [msg] };
       } else {
-        current.final = msg;
+        current.messages.push(msg);
+        current.endIndex = i;
       }
-    } else if (msg.role === 'tool') {
-      if (!current) {
-        current = { user: null, assistant: [], tools: [], final: null };
-      }
-      current.tools.push(msg);
     }
   }
   if (current) turns.push(current);
@@ -50,15 +51,30 @@ function groupSessionTurns(messages) {
 }
 
 /**
- * 将 Turn 转平为消息数组（保留 turn 边界信息）。
+ * P0-2: Turn 内消息已经是 canonical 顺序，直接返回。
+ * 不再重排 assistant/tool。
  */
 function turnToMessages(turn) {
-  const msgs = [];
-  if (turn.user) msgs.push(turn.user);
-  for (const a of turn.assistant) msgs.push(a);
-  for (const t of turn.tools) msgs.push(t);
-  if (turn.final) msgs.push(turn.final);
-  return msgs;
+  return turn.messages;
+}
+
+/**
+ * 估算一组 Turn 的大小。
+ */
+function estimateTurnsSize(turns) {
+  let chars = 0;
+  for (const turn of turns) {
+    for (const m of turn.messages) {
+      if (m.content && typeof m.content === 'string') chars += m.content.length;
+      if (m.tool_calls) {
+        for (const tc of m.tool_calls) {
+          if (tc.function?.arguments) chars += tc.function.arguments.length;
+          if (tc.function?.name) chars += tc.function.name.length;
+        }
+      }
+    }
+  }
+  return { chars, estimatedTokens: Math.ceil(chars / CHARS_PER_TOKEN) };
 }
 
 /**
@@ -66,21 +82,15 @@ function turnToMessages(turn) {
  *
  * opts: {
  *   systemPrompt,
- *   projectContext,   // { loaded, content, ... }
- *   session,          // Session object with .messages and .contextState
- *   currentTask,      // string
- *   compactor,        // { compact: (existing, newMessages) => Promise<summary> }
+ *   projectContext,
+ *   session,
+ *   currentTask,
+ *   compactor,
  * }
  *
  * 返回: {
- *   messages: [...],       // model-ready messages
- *   contextMetadata: {
- *     projectInstructions: {...},
- *     contextState: {...},
- *     estimatedSize: {...},
- *     compactionTriggered: bool,
- *     compactionCount: number,
- *   }
+ *   messages: [...],
+ *   contextMetadata: {...}
  * }
  */
 async function buildAgentContext(opts) {
@@ -112,6 +122,7 @@ async function buildAgentContext(opts) {
 
   const triggerThreshold = CONTEXT_BUDGET * COMPACTION_TRIGGER_RATIO;
   let compactionTriggered = false;
+  let overflow = false;
 
   // ── Step 2: Compaction if needed ──
   if (projectedSize.estimatedTokens * CHARS_PER_TOKEN > triggerThreshold && allMessages.length > 0) {
@@ -132,10 +143,34 @@ async function buildAgentContext(opts) {
     });
   }
 
-  // Add recent raw turns (not yet compacted)
+  // P0-3: Add recent raw turns (not yet compacted), preserving canonical order
   const compactedThrough = contextState.compactedThrough;
   const recentTurns = turns.slice(compactedThrough);
-  for (const turn of recentTurns) {
+
+  // P0-3: Check if recent turns alone exceed budget
+  const recentSize = estimateTurnsSize(recentTurns);
+  const recentChars = recentSize.chars +
+    (systemAndProject.reduce((s, m) => s + (m.content?.length || 0), 0)) +
+    currentTurnMsgs[0].content.length;
+
+  let finalRecentTurns = recentTurns;
+
+  // P0-4: Hard Budget Closure — if still over budget, reduce historical raw tail
+  if (recentChars > HARD_BUDGET) {
+    // Keep only the most recent turns that fit
+    let kept = [];
+    let keptChars = 0;
+    for (let i = recentTurns.length - 1; i >= 0; i--) {
+      const turnSize = estimateTurnsSize([recentTurns[i]]);
+      if (keptChars + turnSize.chars + recentChars - turnSize.chars > HARD_BUDGET) break;
+      kept.unshift(recentTurns[i]);
+      keptChars += turnSize.chars;
+    }
+    finalRecentTurns = kept.length > 0 ? kept : recentTurns.slice(-MIN_RECENT_TURNS);
+    overflow = finalRecentTurns.length < recentTurns.length;
+  }
+
+  for (const turn of finalRecentTurns) {
     const msgs = turnToMessages(turn);
     for (const m of msgs) {
       modelMessages.push(m);
@@ -145,8 +180,13 @@ async function buildAgentContext(opts) {
   // Add current task
   modelMessages.push({ role: 'user', content: currentTask });
 
-  // ── Step 4: Final size check ──
+  // ── Step 4: Final size check & overflow enforcement ──
   const finalSize = estimateContextSize(modelMessages);
+
+  // P0-4: Hard Budget enforcement
+  if (finalSize.chars > HARD_BUDGET) {
+    overflow = true;
+  }
 
   // ── Step 5: Build metadata ──
   const contextMetadata = {
@@ -161,48 +201,62 @@ async function buildAgentContext(opts) {
     },
     estimatedSize: finalSize,
     compactionTriggered,
+    overflow,
     budget: CONTEXT_BUDGET,
     hardBudget: HARD_BUDGET,
-    usageRatio: finalSize.estimatedTokens * CHARS_PER_TOKEN / CONTEXT_BUDGET,
+    usageRatio: finalSize.chars / CONTEXT_BUDGET,
+    recentTurnCount: finalRecentTurns.length,
   };
 
   return { messages: modelMessages, contextMetadata };
 }
 
 /**
- * 尝试增量 Compaction。
- * 返回 true 如果 compaction 成功执行。
+ * P0-3: 增量 Compaction — 只 compact 最老的 historical turns。
+ * 保留最近 N 个完整 Turn 作为 Recent Raw Context。
  */
 async function tryCompact(session, turns, contextState, compactor) {
   if (!compactor) return false;
 
   const compactedThrough = contextState.compactedThrough;
-  const newTurns = turns.slice(compactedThrough);
+  const remainingTurns = turns.slice(compactedThrough);
 
-  if (newTurns.length === 0) return false;
+  if (remainingTurns.length <= MIN_RECENT_TURNS) return false;
 
-  // 收集新消息（从 compactedThrough 到最后一条）
+  // P0-3: 只 compact 除了最近 MIN_RECENT_TURNS 之外的历史 turns
+  const turnsToCompact = remainingTurns.slice(0, remainingTurns.length - MIN_RECENT_TURNS);
+  if (turnsToCompact.length === 0) return false;
+
+  // 收集要 compact 的消息
   const newMessages = [];
-  for (const turn of newTurns) {
+  for (const turn of turnsToCompact) {
     const msgs = turnToMessages(turn);
     for (const m of msgs) newMessages.push(m);
   }
 
   try {
     const newSummary = await compactor.compact(contextState.summary, newMessages);
-    const validation = validateSummaryInline(newSummary);
+    const validation = validateSummary(newSummary);
     if (!validation.valid) {
+      contextState.status = 'degraded';
+      return false;
+    }
+
+    // P1: Summary Size Protection — check if summary needs recompaction
+    if (JSON.stringify(newSummary).length > SUMMARY_MAX_CHARS) {
+      // Try to compact the summary itself by asking LLM to merge
+      // For now, mark as degraded and keep old summary
       contextState.status = 'degraded';
       return false;
     }
 
     // 更新 contextState
     contextState.summary = newSummary;
-    contextState.compactedThrough = turns.length;
+    contextState.compactedThrough = compactedThrough + turnsToCompact.length;
     contextState.compactionCount += 1;
     contextState.lastCompactedAt = Date.now();
     contextState.status = contextState.compactionCount > 0 ? 'compacted' : 'fresh';
-    contextState.sourceRange = { start: 0, end: turns.length };
+    contextState.sourceRange = { start: 0, end: contextState.compactedThrough };
 
     return true;
   } catch (err) {
@@ -211,31 +265,12 @@ async function tryCompact(session, turns, contextState, compactor) {
   }
 }
 
-function validateSummaryInline(summary) {
-  // inline to avoid circular import
-  const keys = ['goal', 'constraints', 'decisions', 'progress', 'files', 'verification', 'openItems'];
-  if (!summary || typeof summary !== 'object') return { valid: false, errors: ['not an object'] };
-  const errors = [];
-  for (const key of keys) {
-    if (!(key in summary)) { errors.push(`Missing: ${key}`); continue; }
-    if (!Array.isArray(summary[key])) { errors.push(`${key} not array`); continue; }
-    for (const item of summary[key]) {
-      if (typeof item !== 'string') { errors.push(`${key} non-string item`); }
-    }
-  }
-  return { valid: errors.length === 0, errors };
-}
-
 function buildSystemAndProjectMessages(systemPrompt, projectContext) {
   const messages = [];
   messages.push({ role: 'system', content: systemPrompt });
 
-  if (projectContext.loaded) {
-    messages.push({
-      role: 'system',
-      content: `[PROJECT INSTRUCTIONS]\nSource: ${projectContext.source}\n${projectContext.truncated ? '(partial)' : '(complete)'}\n\n${projectContext.content}`,
-    });
-  }
+  // P1: Project Instructions 只注入一次（已在 buildSystemPrompt 中包含）
+  // 这里不再重复注入，避免双重注入
 
   return messages;
 }
@@ -244,8 +279,10 @@ export {
   buildAgentContext,
   groupSessionTurns,
   turnToMessages,
+  estimateTurnsSize,
   CONTEXT_BUDGET,
   COMPACTION_TRIGGER_RATIO,
   RECENT_CONTEXT_TARGET,
   HARD_BUDGET,
+  MIN_RECENT_TURNS,
 };

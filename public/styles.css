@@ -869,3 +869,70 @@ html, body {
   .terminal-panel { max-height: 40%; }
   .ws-path { max-width: 400px; }
 }
+
+/* ── Context Panel ──────────────────────────────────── */
+.context-panel-modal {
+  width: 600px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.context-panel .ctx-section {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.context-panel .ctx-section:last-child {
+  border-bottom: none;
+}
+
+.context-panel h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.context-panel .ctx-meta {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.context-panel .ctx-content {
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-elev);
+  border-radius: 6px;
+  padding: 12px;
+  white-space: pre-wrap;
+  max-height: 300px;
+  overflow-y: auto;
+  margin: 0;
+}
+
+.context-panel .ctx-summary-group {
+  margin-bottom: 12px;
+}
+
+.context-panel .ctx-summary-group strong {
+  font-size: 12px;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.context-panel .ctx-summary-item {
+  font-size: 13px;
+  color: var(--text);
+  padding-left: 16px;
+  margin-bottom: 4px;
+}
+
+.ctx-empty {
+  color: var(--text-dim);
+  text-align: center;
+  padding: 40px;
+}

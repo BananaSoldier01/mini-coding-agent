@@ -4,6 +4,35 @@
 
 ---
 
+## Closed — V0.5.0.1 已解决
+
+### ProjectInstructions contract Bug
+- **已关闭**: 正确读取 `readFile().content`（readFile 返回对象，不是字符串）
+- AGENTS.md 正文真实进入 modelMessages
+
+### Turn grouping 改变消息顺序
+- **已关闭**: Turn 内保持 canonical 原始消息顺序，永不重排 assistant/tool
+- 新增多轮 tool iteration regression test
+
+### Compaction 后无 Recent Raw Turns
+- **已关闭**: 只 compact 最老 historical turns，保留最近完整 Turn
+- `MIN_RECENT_TURNS = 2` 真正参与预算
+
+### Hard Budget 未 enforce
+- **已关闭**: 超限 emit `context_overflow`，不调用 LLM
+- Agent Loop 内也检查 hard budget
+
+### Context Observability 缺失
+- **已关闭**: Context indicator + panel + frontend event handlers（context_loaded/compacted/warning/overflow）
+
+### Project Instructions 重复注入
+- **已关闭**: 只在 buildSystemPrompt 中注入一次，builder 不重复
+
+### SUMMARY_MAX_CHARS 未 enforce
+- **已关闭**: 超限 degraded，不推进 compactedThrough
+
+---
+
 ## Closed — V0.5.0 已解决
 
 ### Destructive Session Prune

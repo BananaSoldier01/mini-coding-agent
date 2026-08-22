@@ -19,7 +19,7 @@ import { evaluate } from '../policy.js';
 import { evaluateShell } from '../shellpolicy.js';
 import { mergePermission } from '../permission.js';
 import { RunStatus, RUN_STATUS } from '../runstatus.js';
-import { buildAgentContext, CONTEXT_BUDGET, COMPACTION_TRIGGER_RATIO } from '../context/builder.js';
+import { buildAgentContext, CONTEXT_BUDGET, COMPACTION_TRIGGER_RATIO, HARD_BUDGET } from '../context/builder.js';
 import { estimateContextSize } from '../context/estimator.js';
 
 const MAX_ITERATIONS = 20;
@@ -124,6 +124,25 @@ async function runAgent(opts) {
     });
   }
 
+  // P0-4: Hard Budget Closure — overflow 时不能继续调用 LLM
+  if (contextMetadata.overflow) {
+    emit(onEvent, {
+      type: 'context_overflow',
+      message: `Context 超过 Hard Budget (${contextMetadata.estimatedSize.chars} chars)，无法继续执行。请开启新 Session 或减少历史上下文。`,
+      estimatedSize: contextMetadata.estimatedSize,
+      hardBudget: contextMetadata.hardBudget,
+    });
+    return {
+      messages: turnMessages,
+      changes: { files: [], totalChanges: 0 },
+      finalContent: '',
+      iteration: 0,
+      stopped: false,
+      contextMetadata,
+      error: 'context_overflow',
+    };
+  }
+
   // 本轮消息（turn boundary），用于 canonical transcript
   const turnMessages = [];
   turnMessages.push({ role: 'user', content: task });
@@ -157,8 +176,22 @@ async function runAgent(opts) {
     if (currentSize.chars > CONTEXT_BUDGET * 1.2) {
       emit(onEvent, {
         type: 'context_warning',
-        message: `Context 压力过大 (~${Math.round(currentSize.chars / CONTEXT_BUDGET * 100)}%)，尝试压缩历史`,
+        message: `Context 压力过大 (~${Math.round(currentSize.chars / CONTEXT_BUDGET * 100)}%)`,
+        estimatedSize: currentSize,
       });
+    }
+
+    // P0-4: Hard Budget — 超过硬限制则不调用 LLM
+    if (currentSize.chars > HARD_BUDGET) {
+      emit(onEvent, {
+        type: 'context_overflow',
+        message: `Context 超过 Hard Budget (${currentSize.chars} chars)，当前轮无法继续。`,
+        estimatedSize: currentSize,
+        hardBudget: HARD_BUDGET,
+      });
+      runStatus.transition(RUN_STATUS.FAILED, 'context_overflow');
+      emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label });
+      break;
     }
 
     emit(onEvent, { type: 'iteration', iteration, max: MAX_ITERATIONS });

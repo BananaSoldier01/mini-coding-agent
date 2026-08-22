@@ -36,6 +36,7 @@
             <option value="full_access">Full Access</option>
           </select>
         </div>
+        <button class="btn btn-ghost" id="contextIndicator" title="Context" aria-label="Context" style="display:none">Context</button>
         <button class="btn btn-ghost" id="sessionListBtn" title="Sessions" aria-label="Sessions">Sessions</button>
         <button class="btn btn-ghost" id="newSessionBtn" title="新 Session" aria-label="新 Session">＋</button>
         <button class="btn btn-ghost" id="configBtn" title="配置" aria-label="配置">⚙</button>
@@ -195,6 +196,24 @@
       <div class="modal-footer">
         <button class="btn btn-ghost" id="rejectApproval">拒绝</button>
         <button class="btn btn-primary" id="approveApproval">允许一次</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Context Panel Modal -->
+  <div id="contextPanel" class="modal" style="display:none">
+    <div class="modal-backdrop" data-close onclick="closeContextPanel()"></div>
+    <div class="modal-content context-panel-modal">
+      <div class="modal-header">
+        <h2>Context</h2>
+      </div>
+      <div class="modal-body">
+        <div id="contextPanelBody">
+          <div class="ctx-empty">No context data</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closeContextPanel()">Close</button>
       </div>
     </div>
   </div>
