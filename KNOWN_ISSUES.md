@@ -52,7 +52,8 @@
 - **放**: V1 高自主能力之前的架构 Milestone
 
 ### Test Hook Technical Debt
-- `window.__dshTest` 仅在 `E2E_FAKE_LLM=1` 时可用
+- `window.__dshTest` 在所有 Production Browser 中都会暴露（ unconditional `window.__dshTest = {...}`）
+- 仅 `E2E_FAKE_LLM=1` 控制的是 Server 端的 Fake LLM Provider 注入，不影响前端 test hook
 - 不应视为产品 API
 - **放**: 未来可用 build-time 条件编译或独立 test harness 替代
 

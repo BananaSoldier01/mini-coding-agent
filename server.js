@@ -280,7 +280,8 @@ const server = http.createServer(async (req, resp) => {
 
     // ── API: Session 列表 ─────────────────────────────
     if (pathname === '/api/sessions' && method === 'GET') {
-      const sessions = sessionManager.list();
+      const ws = parsedUrl.query.workspace || config.workspace;
+      const sessions = sessionManager.list(ws);
       return sendJson(resp, {
         sessions: sessions.map(s => ({
           id: s.id,
@@ -356,7 +357,7 @@ const server = http.createServer(async (req, resp) => {
       const mv = validateMutation(req);
       if (!mv.ok) return sendError(resp, mv.status, mv.reason);
       const body = JSON.parse(await readBody(req));
-      const { task, workspace, sessionId, config: clientConfig } = body;
+      const { task, workspace, sessionId, config: clientConfig, title } = body;
       const ws = workspace || config.workspace;
 
       // 验证 workspace
@@ -374,8 +375,10 @@ const server = http.createServer(async (req, resp) => {
       }
       if (!session) {
         session = sessionManager.create(ws);
-        // 用第一条 task 作为 Session title
-        if (task) session.setTitle(task.slice(0, 60));
+      }
+      // P1: 第一条 task 自动设置 Session title（newSession() 创建的默认标题需被覆盖）
+      if (task && session.title === 'New Session') {
+        session.setTitle(title ? title.slice(0, 60) : task.slice(0, 60));
       }
 
       const llmConfig = clientConfig?.llm || config.llm;

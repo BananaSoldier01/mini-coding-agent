@@ -23,6 +23,11 @@ class Session {
     this.permissionMode = 'standard';
   }
 
+  /** 别名：与 API 返回字段对齐 */
+  get updatedAt() {
+    return this.lastActivity;
+  }
+
   setTitle(title) {
     this.title = (title || 'New Session').slice(0, 60);
     this.lastActivity = Date.now();
@@ -152,7 +157,10 @@ class SessionManager {
     return this.sessions.get(id);
   }
 
-  list() {
+  list(workspace) {
+    if (workspace) {
+      return Array.from(this.sessions.values()).filter(s => s.workspace === workspace);
+    }
     return Array.from(this.sessions.values());
   }
 

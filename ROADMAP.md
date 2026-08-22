@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.4 Product Experience — Completed**（V0.4.0 → V0.4.1 → V0.4.2 → V0.4.2.1）
+**V0.4 Product Experience — Completed**（V0.4.0 → V0.4.1 → V0.4.2 → V0.4.2.1 → V0.4.2.2）
 
 **Next: V0.5 — TBD after milestone review**
 
@@ -126,6 +126,15 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.4.2.2 — Session Boundary Closure
+- Running 时禁用 Session List 按钮（setRunningUi 统一 lifecycle）
+- switchSession() 增加 state.running 保护，运行时禁止切换
+- Session title 第一条 task 自动设置（/api/run 传 title，Server 兜底）
+- Session List 按 workspace 过滤（/api/sessions?workspace=）
+- Session.updatedAt 字段与 lastActivity 对齐
+- Agent E2E G — Session Switch Race Prevention
 - 状态：已完成
 
 ### V0.4.2.1 — Release & E2E Integrity Closure

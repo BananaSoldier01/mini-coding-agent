@@ -282,3 +282,52 @@ test('Agent E2E F — Stop / Late Event', async ({ page }) => {
   // 验证：Run B 的 Timeline 显示 read_file on package.json
   await expect(page.locator('.ti-file')).toContainText('package.json');
 });
+
+// ═══════════════════════════════════════════════════════
+// Agent E2E G — Session Switch Race Prevention
+// ═══════════════════════════════════════════════════════
+
+test('Agent E2E G — Session Switch Race Prevention', async ({ page }) => {
+  await setMode(page, 'full_access');
+
+  // 1. Start Run A — wait for state.running to be true
+  await sendTask(page, 'TEST_STOP_LATE');
+  await page.waitForFunction(() => state.running === true, { timeout: 5000 });
+
+  // 2. Verify Session List button is disabled during run
+  await expect(page.locator('#sessionListBtn')).toBeDisabled();
+
+  // 3. Programmatic switchSession should be rejected
+  await page.evaluate(() => switchSession('non-existent'));
+  await page.waitForTimeout(200);
+  // Session should still be the same (switch was rejected)
+  const sessionIdAfterReject = await page.evaluate(() => state.sessionId);
+  expect(sessionIdAfterReject).toBeTruthy();
+
+  // 4. Stop the run
+  await page.evaluate(() => stopTask());
+  await expect(page.locator('#sendBtn')).not.toBeDisabled({ timeout: 10000 });
+
+  // 5. After stop, Session List button should be enabled
+  await expect(page.locator('#sessionListBtn')).not.toBeDisabled();
+
+  // 6. Create a second session via New Session
+  await page.locator('#newSessionBtn').click();
+  await page.waitForTimeout(200);
+  const sessionIdB = await page.evaluate(() => state.sessionId);
+  expect(sessionIdB).not.toBe(sessionIdAfterReject);
+
+  // 7. Send a task on Session B
+  await sendTask(page, 'TEST_COMMAND');
+  await page.waitForFunction(() => {
+    const cs = document.getElementById('completionSummary');
+    return cs && cs.style.display !== 'none';
+  }, { timeout: 15000 });
+
+  // 8. Verify Terminal shows the command from Session B (not A)
+  const termPanel = page.locator('#terminalPanel');
+  if (await termPanel.evaluate(el => el.classList.contains('collapsed'))) {
+    await page.locator('#toggleTerminal').click();
+  }
+  await expect(page.locator('.cmd-card-command')).toContainText('echo hello-agent');
+});

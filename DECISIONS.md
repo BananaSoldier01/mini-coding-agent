@@ -270,7 +270,24 @@
 
 ---
 
-## Decision 18 — Release Gate 必须 100% Green
+## Decision 19 — Running 时禁止 Session Switch
+
+**状态**: 已采纳（V0.4.2.2）
+
+**决策**: Run 运行期间（`state.running === true`），Session List 按钮禁用，`switchSession()` 直接拒绝。Run 结束后恢复。
+
+**理由**:
+- Session A 运行中切到 B，A 的 SSE event 可能写入 B 的 UI（Timeline/Changes/Terminal/Completion）
+- Stop 时 `state.sessionId` 已变为 B，但 `abortController` 仍是 A，导致 Stop 错误目标
+- 与 New Session race 本质相同
+
+**影响**:
+- `public/app.js`: `setRunningUi()` 禁用 `#sessionListBtn`
+- `public/app.js`: `switchSession()` 开头 `if (state.running) return;`
+
+---
+
+## Decision 20 — Release Gate 必须 100% Green
 
 **状态**: 已采纳（V0.4.2.1）
 

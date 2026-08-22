@@ -284,6 +284,7 @@ function setRunningUi(running) {
   $('#sendBtn').disabled = running;
   $('#stopBtn').disabled = !running;
   $('#newSessionBtn').disabled = running;
+  $('#sessionListBtn').disabled = running;
   if (running) {
     setStatus('running', 'running');
   } else {
@@ -294,7 +295,7 @@ function setRunningUi(running) {
 /* ── Session List ──────────────────────────────────── */
 async function openSessionList() {
   try {
-    const data = await api('/api/sessions');
+    const data = await api('/api/sessions?workspace=' + encodeURIComponent(state.workspace));
     const list = $('#sessionList');
     if (data.sessions.length === 0) {
       list.innerHTML = '<div class="fv-empty">暂无 Session</div>';
@@ -321,6 +322,11 @@ async function openSessionList() {
 }
 
 async function switchSession(sessionId) {
+  // P0: Running 时禁止切换 Session，防止 SSE event 污染目标 Session UI
+  if (state.running) {
+    appendSystemMessage('⚠️ 当前有正在运行的任务，请先停止再切换 Session。');
+    return;
+  }
   $('#sessionListModal').classList.remove('open');
   try {
     const data = await api('/api/session/switch', {
@@ -1142,6 +1148,8 @@ async function sendMessage() {
         task,
         workspace: state.workspace,
         sessionId: state.sessionId,
+        // P1: 第一条 task 自动设置 Session title
+        title: task.slice(0, 60),
       }),
       signal: controller.signal,
     });
