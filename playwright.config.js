@@ -10,9 +10,9 @@ export default defineConfig({
     viewport: { width: 1440, height: 900 },
   },
   webServer: {
-    command: 'node server.js',
+    command: 'E2E_FAKE_LLM=1 node server.js',
     url: 'http://127.0.0.1:38212/api/config',
     timeout: 10000,
-    reuseExistingDestination: true,
+    reuseExistingServer: true,
   },
 });

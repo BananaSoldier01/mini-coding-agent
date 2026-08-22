@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.4.2 — Product Hardening**（已完成）
+**V0.4 Product Experience — Completed**（V0.4.0 → V0.4.1 → V0.4.2 → V0.4.2.1）
 
 **Next: V0.5 — TBD after milestone review**
 
@@ -119,13 +119,31 @@
 - 状态：已完成
 
 ### V0.4.2 — Product Hardening
-- Browser E2E / Playwright（10 scenarios 全绿）
+- Browser E2E / Playwright（11 scenarios 全绿）
 - Session List（/api/sessions + /api/session/switch）
 - Terminal/Timeline output hardening（truncation 保护）
 - Accessibility（icon-only 按钮 aria-labels）
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.4.2.1 — Release & E2E Integrity Closure
+- Run Identity 单一事实源：Server ActiveRun.runId 为唯一真值，Frontend 不再自行生成
+- 所有实时 SSE Event 统一携带 runId（sendRunEvent 包装层）
+- Frontend Run Event Filter：run_started 建立身份后，旧 Run late event 自动忽略
+- Fake LLM Provider 真正注入 runAgent（E2E_FAKE_LLM=1），支持多轮 Tool Loop
+- Agent Browser E2E 六项：Standard Edit / Safe Approval / Reject / Command→Terminal / Directory Delete / Stop & Late Event
+- Browser UI Tests 与 Agent E2E 分层（Layer A: UI Interaction / Layer B: Real Agent）
+- Session title 第一条 task 自动设置（POST /api/session 传 title + /api/run 兜底）
+- Session switch 恢复 canonical transcript（user + assistant 消息）
+- Session List 按 workspace 过滤
+- Output hardening：Terminal stdout/stderr 各 4000 字符截断，Timeline args/result 各 500 字符截断
+- Accessibility：全部 icon-only 按钮 aria-label
+- Responsive：1280/1024/720/1440/1920 断点
+- 残留 openDiffViewer dead code 删除
+- CI：npm ci + playwright install --with-deps chromium + test:all 100% PASS
+- package / package-lock / README / ROADMAP / Tag 版本一致
 - 状态：已完成
 
 ## 长期方向

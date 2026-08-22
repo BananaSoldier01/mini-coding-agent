@@ -332,10 +332,22 @@ async function switchSession(sessionId) {
     $('#modeSelect').value = state.permissionMode;
     updateModeLabel(state.permissionMode);
 
-    // 恢复 transcript
+    // 恢复 canonical transcript
     const chat = $('#chatMessages');
     chat.innerHTML = '';
-    if (data.title) {
+
+    // 渲染历史消息（user + assistant，跳过 system 和 tool）
+    if (data.messages && data.messages.length > 0) {
+      for (const msg of data.messages) {
+        if (msg.role === 'system') continue;
+        if (msg.role === 'tool') continue;
+        if (msg.role === 'user') {
+          appendMessage('user', escapeHtml(msg.content));
+        } else if (msg.role === 'assistant') {
+          appendMessage('assistant', escapeHtml(msg.content || ''));
+        }
+      }
+    } else if (data.title) {
       const welcome = document.createElement('div');
       welcome.className = 'welcome';
       welcome.innerHTML = `<div class="welcome-logo">◆</div><h1>Mini Coding Agent</h1><p class="welcome-sub">${escapeHtml(data.title)}</p>`;
@@ -1070,10 +1082,10 @@ function toggleTerminal() {
 
 /* ── Status ─────────────────────────────────────────── */
 function setStatus(status, text) {
-  const dot = $('#statusIndicator .status-dot');
-  const txt = $('#statusIndicator .status-text');
-  dot.className = 'status-dot ' + status;
-  txt.textContent = text;
+  const dot = $('#runStatus .status-dot');
+  const txt = $('#statusText');
+  if (dot) dot.className = 'status-dot ' + status;
+  if (txt) txt.textContent = text;
 }
 
 /* ── Send Message ───────────────────────────────────── */
@@ -1089,7 +1101,7 @@ async function sendMessage() {
   if (welcome) welcome.remove();
 
   appendMessage('user', escapeHtml(task));
-  state.activeRunId = 'run-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+  // Run Identity 由 Server ActiveRun.runId 提供（通过 run_started SSE event）
   setRunningUi(true);
   state.runStartTime = Date.now();
   state.timeline = [];
@@ -1100,7 +1112,7 @@ async function sendMessage() {
     try {
       const data = await api('/api/session', {
         method: 'POST',
-        body: { workspace: state.workspace, permissionMode: state.permissionMode },
+        body: { workspace: state.workspace, permissionMode: state.permissionMode, title: task.slice(0, 60) },
       });
       state.sessionId = data.sessionId;
       // 使用 Server 返回的 permissionMode 真值
@@ -1134,6 +1146,7 @@ async function sendMessage() {
       signal: controller.signal,
     });
 
+    console.log('[DSH] fetch response status:', res.status, 'ok:', res.ok);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
     const reader = res.body.getReader();
@@ -1142,7 +1155,10 @@ async function sendMessage() {
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        console.log('[DSH] stream done');
+        break;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -1157,10 +1173,13 @@ async function sendMessage() {
         let event;
         try { event = JSON.parse(data); } catch { continue; }
 
+        console.log('[DSH SSE]', event.type, event.runId);
+
         handleEvent(event);
       }
     }
   } catch (err) {
+    console.log('[DSH] error:', err.message);
     if (err.name === 'AbortError') {
       appendSystemMessage('任务已停止。');
     } else {
@@ -1170,6 +1189,7 @@ async function sendMessage() {
     setRunningUi(false);
     state.currentAssistant = null;
     state.currentThinking = null;
+    state.activeRunId = null;
   }
 }
 
@@ -1191,11 +1211,16 @@ function stopTask() {
 
 /* ── Event Handler ──────────────────────────────────── */
 function handleEvent(event) {
+  console.log('[DSH EVENT]', event.type, event.runId ? 'runId=' + event.runId : '');
   // Run identity filter: ignore late events from old runs
-  if (state.activeRunId && event.runId && event.runId !== state.activeRunId) {
+  // run_started is exempt — it establishes the identity
+  if (event.type !== 'run_started' && state.activeRunId && event.runId && event.runId !== state.activeRunId) {
     return;
   }
   switch (event.type) {
+    case 'run_started':
+      state.activeRunId = event.runId;
+      break;
     case 'assistant_start':
       startAssistantMessage();
       break;
@@ -1238,6 +1263,7 @@ function handleEvent(event) {
       setStatus('done', 'done');
       break;
     case 'agent_done':
+      console.log('[DSH] agent_done received, changes:', event.result?.changes ? JSON.stringify(event.result.changes).slice(0, 200) : 'NO CHANGES');
       if (event.result && event.result.changes) {
         renderNetDiff(event.result.changes);
       }
@@ -1596,4 +1622,8 @@ function showApproval(event) {
 }
 
 /* ── Init ───────────────────────────────────────────── */
+window.addEventListener('error', (e) => {
+  console.error('[DSH ERROR]', e.message, e.error?.stack);
+});
+
 document.addEventListener('DOMContentLoaded', init);

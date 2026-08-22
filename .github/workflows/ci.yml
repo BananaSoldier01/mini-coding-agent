@@ -17,8 +17,11 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install dependencies (npm ci)
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Unit tests
         run: npm run test:unit
@@ -26,5 +29,8 @@ jobs:
       - name: Integration tests
         run: npm run test:integration
 
-      - name: All tests
+      - name: Browser E2E tests
+        run: npm run test:e2e
+
+      - name: All tests (gate)
         run: npm run test:all

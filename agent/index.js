@@ -54,10 +54,10 @@ const TOOL_SCHEMAS = {
 };
 
 async function runAgent(opts) {
-  const { task, workspace, config, session, run, onEvent, signals } = opts;
+  const { task, workspace, config, session, run, onEvent, signals, provider } = opts;
   const sandbox = new Sandbox(workspace);
   const tracker = new ChangeTracker();
-  const provider = createProvider(config);
+  const providerInstance = provider || createProvider(config);
   const fileTools = new FileTools(workspace);
 
   const toolDefs = [
@@ -109,7 +109,7 @@ async function runAgent(opts) {
 
     let assistantMsg;
     try {
-      assistantMsg = await callLLMStream(provider, messages, toolDefs, onEvent, signals);
+      assistantMsg = await callLLMStream(providerInstance, messages, toolDefs, onEvent, signals);
     } catch (err) {
       if (run?.isStopped() || err.name === 'AbortError') {
         stopped = true;
@@ -250,6 +250,7 @@ async function runAgent(opts) {
 
         // ── 执行工具 ────────────────────────────────
         let result;
+        process.stderr.write('[AGENT] executing tool: ' + toolName + '\n');
         try {
           if (toolName === 'run_command') {
             result = await shellToolDef.run_command.execute(args, { sandbox, tracker, workspace, run });
@@ -268,10 +269,11 @@ async function runAgent(opts) {
               result = await method(args);
             }
           }
+          process.stderr.write('[AGENT] tool: ' + toolName + ' result.path=' + (result.path || 'NONE') + ' result.error=' + (result.error || 'NONE') + '\n');
 
           // 记录变更到 tracker（使用真实 before/after 内容）
           if (result.path && (toolName === 'write_file' || toolName === 'edit_file' || toolName === 'delete_file')) {
-            // 主文件
+            process.stderr.write('[AGENT] tracker.record: ' + toolName + ' ' + result.path + ' before===after:' + (result.before === result.after) + '\n');
             tracker.record({
               type: toolName === 'write_file' ? (result.action === 'created' ? 'create' : 'modify')
                 : toolName === 'delete_file' ? 'delete' : 'modify',

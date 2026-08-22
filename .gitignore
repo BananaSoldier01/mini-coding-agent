@@ -12,3 +12,8 @@ test-workspace/node_modules/
 
 # OS
 .DS_Store
+
+# Playwright artifacts
+test-results/
+playwright-report/
+.playwright/

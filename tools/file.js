@@ -60,23 +60,27 @@ class FileTools {
 
   async editFile(input) {
     const { path: filePath, oldString, newString } = input;
+    process.stderr.write('[FILETOOL] editFile input: ' + JSON.stringify(input) + '\n');
     if (!filePath) throw new Error('edit_file 缺少 path 参数');
     if (oldString === undefined || newString === undefined) throw new Error('edit_file 缺少 oldString / newString 参数');
 
     if (this.service.isSensitive(filePath)) throw new Error(`拒绝修改敏感文件: ${filePath}。`);
 
     const absolute = this.service.sandbox.resolve(filePath);
+    process.stderr.write('[FILETOOL] absolute: ' + absolute + '\n');
     if (!fs.existsSync(absolute)) throw new Error(`文件不存在: ${filePath}`);
     const stat = fs.statSync(absolute);
     if (!stat.isFile()) throw new Error(`不是文件: ${filePath}`);
 
     const content = fs.readFileSync(absolute, 'utf-8');
     const occurrences = content.split(oldString).length - 1;
+    process.stderr.write('[FILETOOL] occurrences: ' + occurrences + '\n');
     if (occurrences === 0) throw new Error(`oldString 未在文件中找到: ${filePath}`);
     if (occurrences > 1) throw new Error(`oldString 出现 ${occurrences} 次，不唯一。请提供更多上下文。`);
 
     const newContent = content.replace(oldString, newString);
     fs.writeFileSync(absolute, newContent, 'utf-8');
+    process.stderr.write('[FILETOOL] wrote file, before===after: ' + (content === newContent) + '\n');
 
     return {
       path: this.service.sandbox.relative(absolute),

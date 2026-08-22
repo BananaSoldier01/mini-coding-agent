@@ -214,3 +214,73 @@
 **影响**:
 - `server.js`: 新增 `/api/files/list` 端点
 - `app.js`: loadDirEntries() + mergeEntries() + findNode()
+
+---
+
+## Decision 15 — Server ActiveRun.runId 是唯一 Run Identity
+
+**状态**: 已采纳（V0.4.2.1）
+
+**决策**: Run ID 只由 Server `ActiveRun.runId` 生成，Frontend 不再自行创建随机 runId。Server 通过 `run_started` SSE event 将 runId 传给 Frontend，Frontend 将其设为 `state.activeRunId`。
+
+**理由**:
+- V0.4.2 之前 Frontend 自行生成 `run-<timestamp>-<random>`，与 Server 的 `run_<timestamp><random>` 不一致
+- 前端的 runId filter 会错误过滤掉真实的 `approval_needed` event，导致 Agent 卡死
+- Server 是唯一能生成正确 runId 的位置
+
+**影响**:
+- `server.js`: `sendRunEvent` 包装层统一给所有 SSE event 携带 `runId: activeRun.runId`
+- `server.js`: 第一个 event 是 `run_started`，携带 `activeRun.runId`
+- `public/app.js`: `handleEvent` 中 `run_started` case 设置 `state.activeRunId = event.runId`
+- `public/app.js`: `sendMessage()` 不再自行生成 runId
+
+---
+
+## Decision 16 — Browser Test 分层
+
+**状态**: 已采纳（V0.4.2.1）
+
+**决策**: Browser E2E 分为两层：Layer A（UI Interaction Tests，可用 `window.__dshTest` 注入状态）和 Layer B（Real Agent Browser E2E，必须经过 Browser → HTTP → Server → Session → RunManager → Fake LLM → runAgent → Policy → Tool → ChangeTracker → SSE → UI 完整链路）。
+
+**理由**:
+- Layer A 测试 UI 渲染、导航、交互，不需要真实 Agent
+- Layer B 测试真实 Agent 行为（Approval、Tool 执行、Change Tracking、Stop 等）
+- 混在一起会导致测试语义不清，无法区分"UI 对了"和"Agent 对了"
+
+**影响**:
+- `test/e2e/websocket-flow.test.js`: Layer A（11 tests）
+- `test/e2e/agent-e2e.test.js`: Layer B（6 tests）
+
+---
+
+## Decision 17 — Session State 分离
+
+**状态**: 已采纳（V0.4.2.1）
+
+**决策**: `Session.messages` 是 canonical conversation truth；Timeline / Changes / Terminal 是 current Run observation state。切 Session 时恢复 transcript（title + messages），清空 Run observation。
+
+**理由**:
+- Transcript 是持久化的真实对话记录
+- Run observation 是临时的，随 Run 结束而消失
+- 混在一起会导致切 Session 后历史和当前状态互相污染
+
+**影响**:
+- `server.js`: `/api/session/switch` 返回 `messages: session.messages`
+- `public/app.js`: `switchSession()` 渲染 user + assistant 消息，清空 timeline/changes/terminal
+
+---
+
+## Decision 18 — Release Gate 必须 100% Green
+
+**状态**: 已采纳（V0.4.2.1）
+
+**决策**: `npm run test:all`（unit + integration + browser E2E）必须在 Release Commit 上 100% PASS，才能打 Tag。CI 必须安装 Playwright Chromium binary。
+
+**理由**:
+- 测试是 Release 的唯一客观证据
+- 没有 100% green 的测试，Tag 就没有可信度
+- Playwright binary 不是 npm install 的一部分，CI 必须显式安装
+
+**影响**:
+- `.github/workflows/ci.yml`: `npm ci` + `npx playwright install --with-deps chromium` + 三步测试 + `test:all`
+- `package.json`: `test:all` = `test:unit && test:integration && test:e2e`

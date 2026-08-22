@@ -154,6 +154,7 @@ const server = http.createServer(async (req, resp) => {
         port: config.port,
         localToken: LOCAL_SESSION_TOKEN,
         trustedWorkspaces: workspaceRegistry.list(),
+        testMode: process.env.E2E_FAKE_LLM === '1',
       });
     }
 
@@ -305,6 +306,7 @@ const server = http.createServer(async (req, resp) => {
         permissionMode: session.permissionMode || 'standard',
         title: session.title || 'New Session',
         workspace: session.workspace,
+        messages: session.messages,
       });
     }
 
@@ -399,6 +401,28 @@ const server = http.createServer(async (req, resp) => {
       const activeRun = runManager.create(session.id);
       const controller = activeRun.controller;
 
+      // ── 统一 Run Identity：Server ActiveRun.runId 是唯一真值 ──
+      // 所有实时 Event 通过 sendRunEvent 携带 runId，避免遗忘
+      const sendRunEvent = (event) => {
+        sendEvent({ ...event, runId: activeRun.runId });
+      };
+
+      // 第一个 Event：建立 Frontend Run Identity
+      sendRunEvent({ type: 'run_started', runId: activeRun.runId });
+
+      // ── Fake LLM Provider 注入（仅测试环境） ──────────
+      let fakeProvider = null;
+      if (process.env.E2E_FAKE_LLM === '1') {
+        try {
+          const mod = await import('./test/fake-llm.js');
+          const scenarios = mod.E2E_SCENARIOS || {};
+          fakeProvider = mod.createProvider(scenarios);
+          console.error('[server] Fake LLM provider injected');
+        } catch (err) {
+          console.error('[server] Fake LLM import failed:', err.message);
+        }
+      }
+
       try {
         const result = await runAgent({
           task,
@@ -406,8 +430,9 @@ const server = http.createServer(async (req, resp) => {
           config: finalConfig,
           session,
           run: activeRun,
-          onEvent: sendEvent,
+          onEvent: sendRunEvent,
           signals: { signal: controller.signal },
+          provider: fakeProvider || undefined,
         });
 
         // ── 由 Agent Runner 提交真实 Transcript ──────
@@ -418,7 +443,7 @@ const server = http.createServer(async (req, resp) => {
         // 上下文裁剪
         session.prune();
 
-        sendEvent({
+        sendRunEvent({
           type: 'agent_done',
           result: {
             changes: result.changes,
@@ -427,10 +452,12 @@ const server = http.createServer(async (req, resp) => {
           },
         });
       } catch (err) {
+        console.error('[server] runAgent error:', err.message);
+        console.error('[server] runAgent stack:', err.stack);
         if (activeRun.isStopped()) {
-          sendEvent({ type: 'error', message: '任务被用户取消' });
+          sendRunEvent({ type: 'error', message: '任务被用户取消' });
         } else {
-          sendEvent({ type: 'error', message: err.message });
+          sendRunEvent({ type: 'error', message: err.message });
         }
       } finally {
         runManager.remove(session.id, activeRun);
