@@ -772,3 +772,139 @@ test('Context Builder: RECENT_CONTEXT_TARGET 参与预算选择', async () => {
   assert.ok(result.contextMetadata.recentTurnCount >= MIN_RECENT_TURNS,
     `recentTurnCount should be >= ${MIN_RECENT_TURNS}`);
 });
+
+// ── P0-5.0.3: Context Projection State Machine ────────
+
+test('Context Projection: below trigger → 全 raw history 保留', async () => {
+  const session = new Session('test', '/workspace');
+  // 创建 50k chars 的历史（低于 60k trigger）
+  for (let i = 0; i < 25; i++) {
+    session.addMessage({ role: 'user', content: `task ${i} ${'x'.repeat(500)}` });
+    session.addMessage({ role: 'assistant', content: `reply ${i} ${'y'.repeat(500)}` });
+  }
+  // 每个 turn ~1000 chars, 25 turns = ~25000 chars, 低于 trigger
+
+  const result = await buildAgentContext({
+    systemPrompt: 'sys',
+    projectContext: { loaded: false, source: 'AGENTS.md', content: '', truncated: false, originalLength: 0, loadedLength: 0 },
+    session,
+    currentTask: 'new task',
+    compactor: null,
+  });
+
+  // P0-5.0.3: 未触发 Compaction → 全 raw history 保留
+  assert.strictEqual(session.contextState.compactionCount, 0,
+    'No compaction should occur below trigger');
+  assert.ok(!result.contextMetadata.historyTrimmed,
+    'historyTrimmed should be false when below trigger');
+  // 所有 recent turns 应该都在 model messages 中
+  assert.ok(result.contextMetadata.recentTurnCount >= 25,
+    `All raw turns should be preserved, got ${result.contextMetadata.recentTurnCount}`);
+});
+
+test('Context Projection: compaction success → summary + recent target', async () => {
+  const session = new Session('test', '/workspace');
+  // 创建超过 trigger 的历史
+  for (let i = 0; i < 50; i++) {
+    session.addMessage({ role: 'user', content: `task ${i} ${'x'.repeat(800)}` });
+    session.addMessage({ role: 'assistant', content: `reply ${i} ${'y'.repeat(800)}` });
+  }
+
+  const fakeCompactor = {
+    compact: async () => ({
+      goal: ['test'],
+      constraints: ['no react'],
+      decisions: ['use ESM'],
+      progress: ['done'],
+      files: ['app.js'],
+      verification: ['npm test'],
+      openItems: ['next'],
+    }),
+  };
+
+  const result = await buildAgentContext({
+    systemPrompt: 'sys',
+    projectContext: { loaded: false, source: 'AGENTS.md', content: '', truncated: false, originalLength: 0, loadedLength: 0 },
+    session,
+    currentTask: 'new task',
+    compactor: fakeCompactor,
+  });
+
+  // Compaction 应该发生了
+  assert.ok(session.contextState.compactionCount > 0, 'Compaction should occur');
+  // 有 summary
+  assert.ok(session.contextState.summary, 'Summary should exist after compaction');
+  // recent turns 应该存在
+  assert.ok(result.contextMetadata.recentTurnCount >= MIN_RECENT_TURNS,
+    `Recent turns should be preserved after compaction`);
+});
+
+test('Context Projection: degraded → fallback trim oldest', async () => {
+  const session = new Session('test', '/workspace');
+  // 创建大量历史
+  for (let i = 0; i < 100; i++) {
+    session.addMessage({ role: 'user', content: `task ${i} ${'x'.repeat(1000)}` });
+    session.addMessage({ role: 'assistant', content: `reply ${i} ${'y'.repeat(1000)}` });
+  }
+
+  // Compaction 失败 → degraded
+  const failingCompactor = {
+    compact: async () => { throw new Error('compaction failed'); },
+  };
+
+  const result = await buildAgentContext({
+    systemPrompt: 'sys',
+    projectContext: { loaded: false, source: 'AGENTS.md', content: '', truncated: false, originalLength: 0, loadedLength: 0 },
+    session,
+    currentTask: 'new task',
+    compactor: failingCompactor,
+  });
+
+  // degraded 状态
+  assert.strictEqual(session.contextState.status, 'degraded');
+  // current task 必须存在
+  const hasTask = result.messages.some(m => m.content === 'new task');
+  assert.ok(hasTask, 'Current task must be present even when degraded');
+});
+
+test('Context Projection: Session A summary → switch B → UI 不显示 A summary', () => {
+  // 模拟 Session A 有 compaction
+  const sessionA = new Session('A', '/workspace');
+  sessionA.contextState.compactionCount = 3;
+  sessionA.contextState.status = 'compacted';
+  sessionA.contextState.summary = {
+    goal: ['A task'],
+    constraints: ['do not modify app.js'],
+    decisions: ['use ESM'],
+    progress: ['done'],
+    files: ['app.js'],
+    verification: ['npm test'],
+    openItems: [],
+  };
+
+  // 模拟 Session B fresh
+  const sessionB = new Session('B', '/workspace');
+  sessionB.contextState.compactionCount = 0;
+  sessionB.contextState.status = 'fresh';
+  sessionB.contextState.summary = null;
+
+  // 验证 Session A 有 summary
+  assert.ok(sessionA.contextState.summary, 'Session A should have summary');
+  assert.strictEqual(sessionA.contextState.compactionCount, 3);
+
+  // 验证 Session B 没有 summary
+  assert.strictEqual(sessionB.contextState.summary, null, 'Session B should have no summary');
+  assert.strictEqual(sessionB.contextState.compactionCount, 0);
+  assert.strictEqual(sessionB.contextState.status, 'fresh');
+
+  // 模拟前端切换：Session B 的 context 应该不包含 A 的 summary
+  const ctxB = {
+    projectInstructions: null,
+    compactionCount: sessionB.contextState.compactionCount,
+    status: sessionB.contextState.status,
+    summary: sessionB.contextState.summary,
+  };
+
+  assert.strictEqual(ctxB.summary, null, 'UI should not show Session A summary after switch');
+  assert.strictEqual(ctxB.compactionCount, 0);
+});

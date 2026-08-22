@@ -150,42 +150,75 @@ async function buildAgentContext(opts) {
   // Calculate fixed overhead: system + summary + current task
   let systemAndSummaryChars = systemAndProject.reduce((s, m) => s + (m.content?.length || 0), 0);
   if (contextState.summary) {
-    systemAndSummaryChars += JSON.stringify(contextState.summary).length + 50; // [COMPACTED...]\n wrapper
+    systemAndSummaryChars += JSON.stringify(contextState.summary).length + 50;
   }
   const currentTaskChars = currentTask.length;
   const fixedOverhead = systemAndSummaryChars + currentTaskChars;
 
-  // P0-5.0.2: 从后往前选 Recent Raw Turns
-  // 目标：尽量保留到 RECENT_CONTEXT_TARGET * CONTEXT_BUDGET，但至少 MIN_RECENT_TURNS
+  // P0-5.0.3: 三种场景分开处理
   const targetBudget = Math.floor(CONTEXT_BUDGET * RECENT_CONTEXT_TARGET);
   let historyTrimmed = false;
+  let finalRecentTurns;
 
-  let finalRecentTurns = [];
-  let keptChars = 0;
+  // 场景 1: 未触发 Compaction → 保留全部 historical raw turns
+  const compactionOccurred = contextState.compactionCount > 0;
+  const recentSize = estimateTurnsSize(recentTurns);
+  const recentOnlyChars = recentSize.chars + fixedOverhead;
 
-  for (let i = recentTurns.length - 1; i >= 0; i--) {
-    const turnSize = estimateTurnsSize([recentTurns[i]]);
-    const projectedTotal = fixedOverhead + keptChars + turnSize.chars;
+  if (!compactionOccurred) {
+    // 未 Compaction：保留全部 recent turns，不 trim
+    finalRecentTurns = recentTurns;
+    // 如果全部 recent turns 加上 fixed overhead 超过 Hard Budget，才需要 fallback trim
+    if (recentOnlyChars > HARD_BUDGET) {
+      // Fallback: 从后往前保留到 Hard Budget
+      let kept = [];
+      let keptChars = 0;
+      for (let i = recentTurns.length - 1; i >= 0; i--) {
+        const turnSize = estimateTurnsSize([recentTurns[i]]);
+        if (fixedOverhead + keptChars + turnSize.chars > HARD_BUDGET) {
+          historyTrimmed = true;
+          break;
+        }
+        kept.unshift(recentTurns[i]);
+        keptChars += turnSize.chars;
+      }
+      if (kept.length < MIN_RECENT_TURNS && recentTurns.length >= MIN_RECENT_TURNS) {
+        kept = recentTurns.slice(-MIN_RECENT_TURNS);
+        historyTrimmed = kept.length < recentTurns.length;
+      }
+      finalRecentTurns = kept;
+    }
+  } else {
+    // 场景 2 & 3: Compaction 已发生 → 使用 RECENT_CONTEXT_TARGET 限制 recent raw
+    let kept = [];
+    let keptChars = 0;
 
-    // 如果加上这个 turn 会超过 Hard Budget，停止（除非还没达到 MIN_RECENT_TURNS）
-    if (projectedTotal > HARD_BUDGET && finalRecentTurns.length >= MIN_RECENT_TURNS) {
-      historyTrimmed = true;
-      break;
+    for (let i = recentTurns.length - 1; i >= 0; i--) {
+      const turnSize = estimateTurnsSize([recentTurns[i]]);
+      const projectedTotal = fixedOverhead + keptChars + turnSize.chars;
+
+      // Hard Budget 检查
+      if (projectedTotal > HARD_BUDGET && kept.length >= MIN_RECENT_TURNS) {
+        historyTrimmed = true;
+        break;
+      }
+
+      kept.unshift(recentTurns[i]);
+      keptChars += turnSize.chars;
+
+      // 达到 target budget 且至少 MIN_RECENT_TURNS → 停止
+      if (fixedOverhead + keptChars >= targetBudget && kept.length >= MIN_RECENT_TURNS) {
+        break;
+      }
     }
 
-    finalRecentTurns.unshift(recentTurns[i]);
-    keptChars += turnSize.chars;
-
-    // 如果已经达到 target budget 且至少保留了 MIN_RECENT_TURNS，可以停止
-    if (fixedOverhead + keptChars >= targetBudget && finalRecentTurns.length >= MIN_RECENT_TURNS) {
-      break;
+    // 确保至少 MIN_RECENT_TURNS
+    if (kept.length < MIN_RECENT_TURNS && recentTurns.length >= MIN_RECENT_TURNS) {
+      kept = recentTurns.slice(-MIN_RECENT_TURNS);
+      historyTrimmed = kept.length < recentTurns.length;
     }
-  }
 
-  // 确保至少 MIN_RECENT_TURNS（如果有的话）
-  if (finalRecentTurns.length < MIN_RECENT_TURNS && recentTurns.length >= MIN_RECENT_TURNS) {
-    finalRecentTurns = recentTurns.slice(-MIN_RECENT_TURNS);
-    historyTrimmed = finalRecentTurns.length < recentTurns.length;
+    finalRecentTurns = kept;
   }
 
   for (const turn of finalRecentTurns) {
@@ -201,8 +234,7 @@ async function buildAgentContext(opts) {
   // ── Step 4: Final size check & overflow enforcement ──
   const finalSize = estimateContextSize(modelMessages);
 
-  // P0-5.0.2: overflow 只在最终 projection 超过 HARD_BUDGET 时为 true
-  // historyTrimmed 和 overflow 是两个独立概念
+  // P0-5.0.3: overflow 只在最终 projection 超过 HARD_BUDGET 时为 true
   if (finalSize.chars > HARD_BUDGET) {
     overflow = true;
   }

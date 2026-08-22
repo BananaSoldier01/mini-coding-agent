@@ -308,6 +308,14 @@ const server = http.createServer(async (req, resp) => {
         title: session.title || 'New Session',
         workspace: session.workspace,
         messages: session.messages,
+        contextState: session.contextState || {
+          summary: null,
+          compactedThrough: 0,
+          compactionCount: 0,
+          lastCompactedAt: null,
+          status: 'fresh',
+          sourceRange: { start: 0, end: 0 },
+        },
       });
     }
 

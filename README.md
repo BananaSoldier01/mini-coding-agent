@@ -2,7 +2,7 @@
 
 一个可在本地 workspace 中执行编码任务的轻量级 Agent Harness。
 
-**当前版本**: V0.5.0.2 — Context Runtime Closure
+**当前版本**: V0.5.0.3 — Context Projection Closure
 
 ## 特性
 

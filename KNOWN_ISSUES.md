@@ -4,6 +4,24 @@
 
 ---
 
+## Closed — V0.5.0.3 已解决
+
+### Below trigger 时也会偷偷裁掉历史
+- **已关闭**: 三种场景分开
+  - below trigger → 全 raw history 保留
+  - compaction success → summary + recent raw target
+  - degraded/fallback → trim oldest if necessary
+- historyTrimmed 真实反映是否丢 raw history
+
+### AGENTS.md content 前端丢失
+- **已关闭**: context_loaded 携带 content，前端保存
+
+### Context UI 不是 Session-scoped
+- **已关闭**: Server switch 返回 contextState，前端同步恢复
+- New Session reset Summary，Project Context 保留
+
+---
+
 ## Closed — V0.5.0.2 已解决
 
 ### Hard Budget runtime ReferenceError

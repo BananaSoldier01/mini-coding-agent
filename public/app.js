@@ -372,6 +372,26 @@ async function switchSession(sessionId) {
     state.fvPath = null;
     state.fvContent = null;
 
+    // P0-5.0.3: 恢复 Session-scoped Context State
+    if (data.contextState) {
+      state.context = {
+        projectInstructions: state.context?.projectInstructions || null,
+        compactionCount: data.contextState.compactionCount || 0,
+        lastCompactedAt: data.contextState.lastCompactedAt || null,
+        status: data.contextState.status || 'fresh',
+        summary: data.contextState.summary || null,
+      };
+    } else {
+      state.context = {
+        projectInstructions: state.context?.projectInstructions || null,
+        compactionCount: 0,
+        lastCompactedAt: null,
+        status: 'fresh',
+        summary: null,
+      };
+    }
+    updateContextIndicator();
+
     $('#timeline').innerHTML = '';
     $('#completionSummary').style.display = 'none';
     $('#diffPanel').innerHTML = '<div class="diff-empty">文件修改将在此显示</div>';
@@ -409,6 +429,16 @@ async function newSession() {
     state.fvPath = null;
     state.fvContent = null;
     state.fvView = 'current';
+
+    // P0-5.0.3: New Session 重置 Session Context（Project Context 保留）
+    state.context = {
+      projectInstructions: state.context?.projectInstructions || null,
+      compactionCount: 0,
+      lastCompactedAt: null,
+      status: 'fresh',
+      summary: null,
+    };
+    updateContextIndicator();
 
     $('#timeline').innerHTML = '';
     $('#completionSummary').style.display = 'none';
@@ -1296,6 +1326,7 @@ function handleEvent(event) {
         truncated: event.projectInstructions.truncated,
         originalLength: event.projectInstructions.originalLength,
         loadedLength: event.projectInstructions.loadedLength,
+        content: event.projectInstructions.content || '',
       };
       updateContextIndicator();
       break;

@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.5.0.2 — Context Runtime Closure**（已完成）
+**V0.5.0.3 — Context Projection Closure**（已完成）
 
 **Next: V0.5.1 — Plan Mode & Plan → Execute Integrity（TBD after milestone review）**
 
@@ -126,6 +126,17 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.5.0.3 — Context Projection Closure
+- P0: 修 Context Projection 状态机 — 三种场景分开
+  - below trigger → 全 raw history 保留
+  - compaction success → summary + recent raw target
+  - degraded/fallback → trim oldest if necessary
+- P1: AGENTS.md content 保存到前端（context_loaded 携带 content）
+- P1: Session switch 恢复 contextState（Server 返回 + Frontend 同步）
+- P1: New Session reset Summary（Project Context 保留）
+- Tests: 42 context tests（含 3 种场景 + Session isolation）
 - 状态：已完成
 
 ### V0.5.0.2 — Context Runtime Closure
