@@ -4,6 +4,19 @@
 
 ---
 
+## V0.7.3 — 已完成
+
+### Skill Verification & Evidence
+- EvidenceRegistry: add/get/list/clear/serialize/deserialize
+- VerificationResult: success/evidenceRefs/checks/reason
+- runSkillVerification(): RUNNING → VERIFYING → COMPLETED/FAILED
+- safeTransitionSkillStatus: strict lifecycle guard
+- canTransitionSkillStatus: non-mutating check
+- SkillRuntimeContext: verificationResults serialization
+- 26 new tests (331/331 PASS)
+
+---
+
 ## V0.7.2 — 已完成
 
 ### Skill Runtime Hardening

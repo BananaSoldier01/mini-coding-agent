@@ -458,6 +458,7 @@ class SkillRuntimeContext {
     this.permissions = new Map(); // skillId → allowedTools[]
     this.lifecycle = new Map();   // skillId → { state, transitions[] }
     this.evidenceRefs = new Map(); // skillId → [evidenceIds]
+    this.verificationResults = new Map(); // skillId → VerificationResult
     this.instructionBlocks = [];  // provenance-tracked instructions
   }
 
@@ -515,6 +516,20 @@ class SkillRuntimeContext {
   }
 
   /**
+   * V0.7.3: Store verification result for a skill.
+   */
+  setVerificationResult(skillId, result) {
+    this.verificationResults.set(skillId, result);
+  }
+
+  /**
+   * V0.7.3: Get verification result for a skill.
+   */
+  getVerificationResult(skillId) {
+    return this.verificationResults.get(skillId) || null;
+  }
+
+  /**
    * Get skills by status.
    */
   getSkillsByStatus(status) {
@@ -545,6 +560,7 @@ class SkillRuntimeContext {
       permissions: Object.fromEntries(this.permissions),
       lifecycle: Object.fromEntries(this.lifecycle),
       evidenceRefs: Object.fromEntries(this.evidenceRefs),
+      verificationResults: Object.fromEntries(this.verificationResults),
       instructionBlocks: this.instructionBlocks,
     };
   }
@@ -568,11 +584,239 @@ class SkillRuntimeContext {
         ctx.evidenceRefs.set(skillId, refs);
       }
     }
+    if (data.verificationResults) {
+      for (const [skillId, result] of Object.entries(data.verificationResults)) {
+        ctx.verificationResults.set(skillId, result);
+      }
+    }
     if (data.instructionBlocks) {
       ctx.instructionBlocks = data.instructionBlocks;
     }
     return ctx;
   }
+}
+
+// ── Evidence Registry ─────────────────────────────────────
+
+/**
+ * V0.7.3: Evidence Registry — records why a skill is considered complete.
+ * Evidence is the traceable proof that a skill's execution produced expected results.
+ */
+class EvidenceRegistry {
+  constructor() {
+    this.evidences = new Map(); // id → evidence
+    this.skillIndex = new Map(); // skillId → [evidenceIds]
+  }
+
+  /**
+   * Add evidence for a skill execution.
+   */
+  addEvidence(evidence) {
+    const ev = {
+      id: evidence.id || `ev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      skillId: evidence.skillId,
+      type: evidence.type || 'unknown',
+      timestamp: evidence.timestamp || Date.now(),
+      data: evidence.data || {},
+      ...evidence,
+    };
+    this.evidences.set(ev.id, ev);
+
+    if (!this.skillIndex.has(ev.skillId)) {
+      this.skillIndex.set(ev.skillId, []);
+    }
+    this.skillIndex.get(ev.skillId).push(ev.id);
+
+    return ev;
+  }
+
+  /**
+   * Get evidence by id.
+   */
+  getEvidence(evidenceId) {
+    return this.evidences.get(evidenceId) || null;
+  }
+
+  /**
+   * List all evidence for a skill.
+   */
+  listSkillEvidence(skillId) {
+    const ids = this.skillIndex.get(skillId) || [];
+    return ids.map(id => this.evidences.get(id)).filter(Boolean);
+  }
+
+  /**
+   * Get evidence count for a skill.
+   */
+  countSkillEvidence(skillId) {
+    return (this.skillIndex.get(skillId) || []).length;
+  }
+
+  /**
+   * Clear evidence for a skill (used when re-verifying).
+   */
+  clearSkillEvidence(skillId) {
+    const ids = this.skillIndex.get(skillId) || [];
+    for (const id of ids) {
+      this.evidences.delete(id);
+    }
+    this.skillIndex.delete(skillId);
+  }
+
+  /**
+   * Serialize for persistence.
+   */
+  serialize() {
+    return {
+      evidences: Object.fromEntries(this.evidences),
+      skillIndex: Object.fromEntries(this.skillIndex),
+    };
+  }
+
+  /**
+   * Deserialize from persistence.
+   */
+  static deserialize(data) {
+    const registry = new EvidenceRegistry();
+    if (data.evidences) {
+      for (const [id, ev] of Object.entries(data.evidences)) {
+        registry.evidences.set(id, ev);
+      }
+    }
+    if (data.skillIndex) {
+      for (const [skillId, ids] of Object.entries(data.skillIndex)) {
+        registry.skillIndex.set(skillId, ids);
+      }
+    }
+    return registry;
+  }
+}
+
+// ── Verification Result ───────────────────────────────────
+
+/**
+ * V0.7.3: VerificationResult — the outcome of a skill verification.
+ */
+function createVerificationResult(skillId, success, evidenceRefs, checks, reason) {
+  return {
+    skillId,
+    success,
+    verifiedAt: Date.now(),
+    evidenceRefs: evidenceRefs || [],
+    checks: checks || [],
+    reason: reason || (success ? 'Verification passed' : 'Verification failed'),
+  };
+}
+
+// ── Skill Verification Runtime ────────────────────────────
+
+/**
+ * V0.7.3: Run skill verification.
+ * Transitions: RUNNING → VERIFYING → COMPLETED/FAILED
+ * Skill cannot go directly from RUNNING to COMPLETED without verification.
+ *
+ * @param {SkillRegistry} registry - The skill registry
+ * @param {string} skillId - The skill to verify
+ * @param {EvidenceRegistry} evidenceRegistry - The evidence registry
+ * @param {object} opts - Options { checks, runtime }
+ * @returns {VerificationResult|null} - The verification result, or null if skill not in RUNNING state
+ */
+function runSkillVerification(registry, skillId, evidenceRegistry, opts = {}) {
+  const skill = registry.get(skillId);
+  if (!skill) return null;
+
+  // Must be in RUNNING state to start verification
+  if (skill.status !== SKILL_STATUS.RUNNING) {
+    return null;
+  }
+
+  // Transition to VERIFYING
+  transitionSkillStatus(skill, SKILL_STATUS.VERIFYING);
+
+  // Collect evidence
+  const evidenceRefs = [];
+  if (opts.checks) {
+    for (const check of opts.checks) {
+      const evidence = evidenceRegistry.addEvidence({
+        skillId,
+        type: check.type || 'custom',
+        data: check,
+      });
+      evidenceRefs.push(evidence.id);
+    }
+  }
+
+  // Determine verification result
+  const allChecksPassed = opts.checks ? opts.checks.every(c => c.passed !== false) : true;
+  const success = allChecksPassed && evidenceRefs.length > 0;
+
+  // Create verification result
+  const result = createVerificationResult(
+    skillId,
+    success,
+    evidenceRefs,
+    opts.checks || [],
+    success ? null : (opts.reason || 'No passing evidence collected')
+  );
+
+  // Transition to final state
+  if (success) {
+    transitionSkillStatus(skill, SKILL_STATUS.COMPLETED);
+  } else {
+    transitionSkillStatus(skill, SKILL_STATUS.FAILED);
+  }
+
+  return result;
+}
+
+// ── Lifecycle Constraint Enforcement ──────────────────────
+
+/**
+ * V0.7.3: Strict lifecycle transition guard.
+ * Prevents illegal transitions like AVAILABLE → COMPLETED directly.
+ * All status changes MUST go through this function.
+ */
+function safeTransitionSkillStatus(skill, newStatus) {
+  if (!skill) return false;
+  const allowed = SKILL_TRANSITIONS[skill.status] || [];
+
+  // V0.7.3: Additional constraint — must go through VERIFYING before COMPLETED
+  if (newStatus === SKILL_STATUS.COMPLETED && skill.status !== SKILL_STATUS.VERIFYING) {
+    console.warn(
+      `[Skill] Illegal transition: ${skill.status} → ${newStatus}. ` +
+      `Skill must go through VERIFYING before COMPLETED.`
+    );
+    return false;
+  }
+
+  // V0.7.3: Cannot transition from terminal states
+  if (skill.status === SKILL_STATUS.COMPLETED || skill.status === SKILL_STATUS.FAILED) {
+    console.warn(`[Skill] Cannot transition from terminal state: ${skill.status}`);
+    return false;
+  }
+
+  if (!allowed.includes(newStatus)) {
+    console.warn(`[Skill] Invalid transition: ${skill.status} → ${newStatus}`);
+    return false;
+  }
+
+  skill.status = newStatus;
+  skill.updatedAt = Date.now();
+  return true;
+}
+
+/**
+ * V0.7.3: Check if a skill transition is valid (without executing it).
+ */
+function canTransitionSkillStatus(skill, newStatus) {
+  if (!skill) return false;
+  if (newStatus === SKILL_STATUS.COMPLETED && skill.status !== SKILL_STATUS.VERIFYING) {
+    return false;
+  }
+  if (skill.status === SKILL_STATUS.COMPLETED || skill.status === SKILL_STATUS.FAILED) {
+    return false;
+  }
+  return (SKILL_TRANSITIONS[skill.status] || []).includes(newStatus);
 }
 
 // ── Skill ↔ Plan Binding ──────────────────────────────────
@@ -677,4 +921,10 @@ export {
   sortInstructionsByPriority,
   renderInstructionsToPrompt,
   SkillRuntimeContext,
+  // V0.7.3: Verification & Evidence
+  EvidenceRegistry,
+  createVerificationResult,
+  runSkillVerification,
+  safeTransitionSkillStatus,
+  canTransitionSkillStatus,
 };

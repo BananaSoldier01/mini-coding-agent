@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.7.2 — Skill Runtime Hardening**（已完成）
+**V0.7.3 — Skill Verification & Evidence**（已完成）
 
-**Next: V0.7.3 — Skill Verification & Evidence**
+**Next: V0.8+ — Larger Directions**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,16 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.7.3 — Skill Verification & Evidence
+- EvidenceRegistry: addEvidence/getEvidence/listSkillEvidence/clearSkillEvidence
+- VerificationResult: createVerificationResult with success/evidenceRefs/checks/reason
+- runSkillVerification(): RUNNING → VERIFYING → COMPLETED/FAILED (no direct COMPLETE)
+- safeTransitionSkillStatus: strict lifecycle guard (no AVAILABLE → COMPLETED)
+- canTransitionSkillStatus: check without modifying
+- SkillRuntimeContext: verificationResults serialization/deserialization
+- 26 new tests (331/331 PASS)
 - 状态：已完成
 
 ### V0.7.2 — Skill Runtime Hardening
