@@ -4,6 +4,17 @@
 
 ---
 
+## V0.8.2 — 已完成
+
+### Runtime Cleanup & Architecture Debt
+- Runtime 模块拆分: skill/ + runtime/ 目录结构
+- Runtime Event Bus: RuntimeEventEmitter (pub/sub)
+- Snapshot Migration Strict Mode: SnapshotCompatibilityError
+- Persistence Adapter Contract: exists() method
+- 21 new tests (400/400 PASS)
+
+---
+
 ## V0.8.1 — 已完成
 
 ### Runtime Hardening

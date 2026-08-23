@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.8.1 — Runtime Hardening**（已完成）
+**V0.8.2 — Runtime Cleanup & Architecture Debt**（已完成）
 
 **Next: V0.9 — Runtime Control Plane**
 
@@ -126,6 +126,14 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.8.2 — Runtime Cleanup & Architecture Debt
+- Runtime 模块拆分: agent/skill/ (model/lifecycle/registry/verification) + agent/runtime/ (events/context/snapshot/persistence)
+- Runtime Event Bus: RuntimeEventEmitter (pub/sub, decouples lifecycle from consumers)
+- Snapshot Migration Strict Mode: SnapshotCompatibilityError, rejects unknown future versions
+- Persistence Adapter Contract: exists() method added
+- 21 new tests (400/400 PASS)
 - 状态：已完成
 
 ### V0.8.1 — Runtime Hardening
