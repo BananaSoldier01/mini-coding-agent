@@ -375,10 +375,119 @@ function deserializePlan(data) {
   if (!data) return null;
   return {
     ...data,
-    // Ensure Date fields are numbers
     createdAt: data.createdAt || Date.now(),
     updatedAt: data.updatedAt || Date.now(),
   };
+}
+
+// ── Plan Revision ─────────────────────────────────────────
+
+/**
+ * V0.9.2: Create a new revision of a plan.
+ * Returns a new plan object with incremented revision number.
+ * Does NOT mutate the original.
+ *
+ * @param {object} plan - Current plan
+ * @param {object} changes - Changes to apply
+ * @returns {object} New plan with revision
+ */
+function revisePlan(plan, changes) {
+  if (!plan) return null;
+  return {
+    ...plan,
+    ...changes,
+    revision: (plan.revision || 1) + 1,
+    previousRevision: plan.revision || 1,
+    updatedAt: Date.now(),
+    // Preserve original creation time
+    createdAt: plan.createdAt,
+  };
+}
+
+// ── PlanRuntimeService ────────────────────────────────────
+
+/**
+ * V0.9.2: PlanRuntimeService — Event Sourcing style plan state projection.
+ *
+ * Responsible for:
+ * - Listening to Task events
+ * - Projecting Plan state from Task states
+ * - Advancing Plan lifecycle when appropriate
+ *
+ * This prevents Task from directly modifying Plan,
+ * keeping Plan state as a projection of Task states.
+ */
+class PlanRuntimeService {
+  constructor(plan, taskStatusMap, emitter) {
+    this.plan = plan;
+    this.taskStatusMap = taskStatusMap; // taskId → status
+    this.emitter = emitter;
+  }
+
+  /**
+   * V0.9.2: Project Plan state from current Task states.
+   * Called after any Task state change.
+   *
+   * Rules:
+   * - If all tasks COMPLETED → advance to VERIFYING (if in EXECUTING)
+   * - If any task FAILED → fail the plan
+   * - If any task CANCELLED → cancel the plan
+   */
+  projectPlanState() {
+    if (!this.plan) return this.plan?.status || null;
+
+    const statuses = Array.from(this.taskStatusMap.values());
+    if (statuses.length === 0) return this.plan.status;
+
+    const allCompleted = statuses.every(s => s === 'completed');
+    const anyFailed = statuses.some(s => s === 'failed');
+    const anyCancelled = statuses.some(s => s === 'cancelled');
+    const allTerminal = statuses.every(s =>
+      s === 'completed' || s === 'failed' || s === 'cancelled'
+    );
+
+    const currentStatus = this.plan.status;
+
+    // EXECUTING → VERIFYING when all tasks complete
+    if (currentStatus === 'executing' && allCompleted) {
+      startPlanVerification(this.plan, this.emitter);
+    }
+
+    // EXECUTING/VERIFYING → FAILED when any task fails
+    if ((currentStatus === 'executing' || currentStatus === 'verifying') && anyFailed) {
+      failPlan(this.plan, this.emitter, { reason: 'A task failed' });
+    }
+
+    // EXECUTING/VERIFYING → CANCELLED when any task cancelled
+    if ((currentStatus === 'executing' || currentStatus === 'verifying') && anyCancelled) {
+      cancelPlan(this.plan, this.emitter, { reason: 'A task was cancelled' });
+    }
+
+    return this.plan.status;
+  }
+
+  /**
+   * V0.9.2: Check if plan can transition to a given status.
+   */
+  canTransition(targetStatus) {
+    return canTransitionPlan(this.plan, targetStatus);
+  }
+
+  /**
+   * V0.9.2: Get task completion summary.
+   */
+  getTaskSummary() {
+    const statuses = Array.from(this.taskStatusMap.values());
+    return {
+      total: statuses.length,
+      completed: statuses.filter(s => s === 'completed').length,
+      running: statuses.filter(s => s === 'running').length,
+      pending: statuses.filter(s => s === 'pending').length,
+      verifying: statuses.filter(s => s === 'verifying').length,
+      failed: statuses.filter(s => s === 'failed').length,
+      cancelled: statuses.filter(s => s === 'cancelled').length,
+    };
+  }
 }
 
 export {
@@ -399,4 +508,7 @@ export {
   createSnapshotV2,
   serializePlan,
   deserializePlan,
+  // V0.9.2
+  revisePlan,
+  PlanRuntimeService,
 };

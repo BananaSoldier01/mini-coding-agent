@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.9.1 — Plan Runtime Foundation**（已完成）
+**V0.9.2 — Planner Interface & Execution Orchestration**（已完成）
 
-**Next: V0.9.2 — Planner Integration**
+**Next: V0.9.3 — Approval / Human-in-loop**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,14 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.9.2 — Planner Interface & Execution Orchestration
+- Planner Interface: Planner/MockPlanner/RuleBasedPlanner/createSimplePlanner
+- PlanRuntimeService: Event Sourcing 风格 Plan 状态投影
+- Plan Revision: revisePlan 版本控制
+- 系统不变量测试: Plan/Snapshot/Dependency invariant
+- 22 new tests (497/497 PASS)
 - 状态：已完成
 
 ### V0.9.1 — Plan Runtime Foundation
