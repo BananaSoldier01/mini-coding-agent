@@ -4,6 +4,17 @@
 
 ---
 
+## V0.9.1 — Plan Runtime Foundation（已完成）
+
+### Plan Runtime
+- Plan Object: Plan 生命周期 (DRAFT→APPROVED→EXECUTING→VERIFYING→COMPLETED/FAILED/CANCELLED)
+- Task Dependency: addTaskDependency/canTaskExecute/getExecutionOrder (拓扑排序)
+- Runtime Snapshot v2: Plan+Task+ToolExecution+Evidence 全状态快照
+- Runtime Contract: docs/runtime-contract.md
+- 27 new tests (470/470 PASS)
+
+---
+
 ## V0.9.0.1 — Runtime Consistency Patch（已完成）
 
 ### Consistency Fixes
