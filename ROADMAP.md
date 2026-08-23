@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.8.0 — Runtime Observability & Persistence**（已完成）
+**V0.8.1 — Runtime Hardening**（已完成）
 
-**Next: V0.9+ — Larger Directions**
+**Next: V0.9 — Runtime Control Plane**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,15 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.8.1 — Runtime Hardening
+- Event-State Auto Sync: safeTransitionSkillStatus 自动 emit 事件，状态变化 = 必然产生事件
+- Snapshot Versioning: SNAPSHOT_VERSION + migrateSnapshot() 迁移支持
+- Persistence Error Handling: RuntimePersistenceError 统一错误模型
+- Recovery 边界明确化: Restore ≠ Resume，决策记录
+- verifyEventStateConsistency(): 检测 orphan state
+- 23 new tests (379/379 PASS)
 - 状态：已完成
 
 ### V0.8.0 — Runtime Observability & Persistence

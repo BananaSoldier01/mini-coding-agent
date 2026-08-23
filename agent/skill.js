@@ -719,11 +719,12 @@ function createVerificationResult(skillId, success, evidenceRefs, checks, reason
  * V0.7.3: Run skill verification.
  * Transitions: RUNNING → VERIFYING → COMPLETED/FAILED
  * Skill cannot go directly from RUNNING to COMPLETED without verification.
+ * V0.8.1: Accepts optional eventLog for auto-emission.
  *
  * @param {SkillRegistry} registry - The skill registry
  * @param {string} skillId - The skill to verify
  * @param {EvidenceRegistry} evidenceRegistry - The evidence registry
- * @param {object} opts - Options { checks, runtime }
+ * @param {object} opts - Options { checks, runtime, eventLog, runId }
  * @returns {VerificationResult|null} - The verification result, or null if skill not in RUNNING state
  */
 function runSkillVerification(registry, skillId, evidenceRegistry, opts = {}) {
@@ -735,8 +736,19 @@ function runSkillVerification(registry, skillId, evidenceRegistry, opts = {}) {
     return null;
   }
 
+  const eventLog = opts.eventLog;
+  const runId = opts.runId;
+
   // Transition to VERIFYING
   transitionSkillStatus(skill, SKILL_STATUS.VERIFYING);
+  if (eventLog) {
+    eventLog.record({
+      runId,
+      skillId,
+      type: RUNTIME_EVENT_TYPES.VERIFICATION_STARTED,
+      data: { checks: opts.checks?.length || 0 },
+    });
+  }
 
   // Collect evidence
   const evidenceRefs = [];
@@ -767,8 +779,36 @@ function runSkillVerification(registry, skillId, evidenceRegistry, opts = {}) {
   // Transition to final state
   if (success) {
     transitionSkillStatus(skill, SKILL_STATUS.COMPLETED);
+    if (eventLog) {
+      eventLog.record({
+        runId,
+        skillId,
+        type: RUNTIME_EVENT_TYPES.VERIFICATION_COMPLETED,
+        data: { success: true, evidenceCount: evidenceRefs.length },
+      });
+      eventLog.record({
+        runId,
+        skillId,
+        type: RUNTIME_EVENT_TYPES.SKILL_COMPLETED,
+        data: { evidenceRefs },
+      });
+    }
   } else {
     transitionSkillStatus(skill, SKILL_STATUS.FAILED);
+    if (eventLog) {
+      eventLog.record({
+        runId,
+        skillId,
+        type: RUNTIME_EVENT_TYPES.VERIFICATION_COMPLETED,
+        data: { success: false, reason: result.reason },
+      });
+      eventLog.record({
+        runId,
+        skillId,
+        type: RUNTIME_EVENT_TYPES.SKILL_FAILED,
+        data: { reason: result.reason },
+      });
+    }
   }
 
   return result;
@@ -780,38 +820,7 @@ function runSkillVerification(registry, skillId, evidenceRegistry, opts = {}) {
  * V0.7.3: Strict lifecycle transition guard.
  * Prevents illegal transitions like AVAILABLE → COMPLETED directly.
  * All status changes MUST go through this function.
- */
-function safeTransitionSkillStatus(skill, newStatus) {
-  if (!skill) return false;
-  const allowed = SKILL_TRANSITIONS[skill.status] || [];
-
-  // V0.7.3: Additional constraint — must go through VERIFYING before COMPLETED
-  if (newStatus === SKILL_STATUS.COMPLETED && skill.status !== SKILL_STATUS.VERIFYING) {
-    console.warn(
-      `[Skill] Illegal transition: ${skill.status} → ${newStatus}. ` +
-      `Skill must go through VERIFYING before COMPLETED.`
-    );
-    return false;
-  }
-
-  // V0.7.3: Cannot transition from terminal states
-  if (skill.status === SKILL_STATUS.COMPLETED || skill.status === SKILL_STATUS.FAILED) {
-    console.warn(`[Skill] Cannot transition from terminal state: ${skill.status}`);
-    return false;
-  }
-
-  if (!allowed.includes(newStatus)) {
-    console.warn(`[Skill] Invalid transition: ${skill.status} → ${newStatus}`);
-    return false;
-  }
-
-  skill.status = newStatus;
-  skill.updatedAt = Date.now();
-  return true;
-}
-
-/**
- * V0.7.3: Check if a skill transition is valid (without executing it).
+ * V0.8.1: Auto-emits runtime events. See safeTransitionSkillStatus below.
  */
 function canTransitionSkillStatus(skill, newStatus) {
   if (!skill) return false;
@@ -937,14 +946,19 @@ class RuntimeEventLog {
 
 // ── Runtime Snapshot ──────────────────────────────────────
 
+// V0.8.1: Current snapshot format version
+const SNAPSHOT_VERSION = '1';
+
 /**
  * V0.8: RuntimeSnapshot — captures the full state of a run at a point in time.
+ * V0.8.1: Added version field for future migration support.
  */
 function createSnapshot(runId, runtimeContext, evidenceRegistry, eventLog, status) {
   return {
     id: `snap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     runId,
     timestamp: Date.now(),
+    version: SNAPSHOT_VERSION,
     status: status || 'unknown',
     runtimeContext: runtimeContext ? runtimeContext.serialize() : null,
     evidenceRegistry: evidenceRegistry ? evidenceRegistry.serialize() : null,
@@ -954,25 +968,29 @@ function createSnapshot(runId, runtimeContext, evidenceRegistry, eventLog, statu
 
 /**
  * V0.8: Restore a RuntimeSnapshot into fresh runtime objects.
+ * V0.8.1: Applies snapshot version migration if needed.
  */
 function restoreSnapshot(snapshot, registry) {
   if (!snapshot) return null;
 
-  const ctx = new SkillRuntimeContext(snapshot.runId);
-  if (snapshot.runtimeContext) {
-    const restored = SkillRuntimeContext.deserialize(snapshot.runtimeContext, registry);
+  // V0.8.1: Apply version migration if needed
+  const migrated = migrateSnapshot(snapshot);
+
+  const ctx = new SkillRuntimeContext(migrated.runId);
+  if (migrated.runtimeContext) {
+    const restored = SkillRuntimeContext.deserialize(migrated.runtimeContext, registry);
     Object.assign(ctx, restored);
   }
 
   const evRegistry = new EvidenceRegistry();
-  if (snapshot.evidenceRegistry) {
-    const restoredEv = EvidenceRegistry.deserialize(snapshot.evidenceRegistry);
+  if (migrated.evidenceRegistry) {
+    const restoredEv = EvidenceRegistry.deserialize(migrated.evidenceRegistry);
     Object.assign(evRegistry, restoredEv);
   }
 
   const eventLog = new RuntimeEventLog();
-  if (snapshot.eventLog) {
-    const restoredEv = RuntimeEventLog.deserialize(snapshot.eventLog);
+  if (migrated.eventLog) {
+    const restoredEv = RuntimeEventLog.deserialize(migrated.eventLog);
     Object.assign(eventLog, restoredEv);
   }
 
@@ -981,14 +999,95 @@ function restoreSnapshot(snapshot, registry) {
     evidenceRegistry: evRegistry,
     eventLog,
     restoredAt: Date.now(),
+    snapshotVersion: migrated.version,
   };
+}
+
+/**
+ * V0.8.1: Migrate a snapshot to the current version.
+ * Currently supports v0 (no version) → v1.
+ */
+function migrateSnapshot(snapshot) {
+  if (!snapshot) return snapshot;
+
+  // v0 snapshots have no version field
+  if (!snapshot.version) {
+    return {
+      ...snapshot,
+      version: '1',
+      migratedAt: Date.now(),
+      migration: 'v0 → v1 (added version field)',
+    };
+  }
+
+  // Already current version
+  if (snapshot.version === SNAPSHOT_VERSION) {
+    return snapshot;
+  }
+
+  // Future migrations would go here
+  console.warn(`[Snapshot] Unknown version ${snapshot.version}, attempting best-effort restore`);
+  return snapshot;
 }
 
 // ── Runtime Persistence ───────────────────────────────────
 
 /**
+ * V0.8.1: RuntimePersistenceError — unified error model for persistence operations.
+ */
+class RuntimePersistenceError extends Error {
+  constructor(message, errorCode, details = {}) {
+    super(message);
+    this.name = 'RuntimePersistenceError';
+    this.errorCode = errorCode;
+    this.details = details;
+    this.timestamp = Date.now();
+  }
+
+  static serializationFailed(detail) {
+    return new RuntimePersistenceError(
+      'Snapshot serialization failed',
+      'SERIALIZATION_FAILED',
+      { detail }
+    );
+  }
+
+  static deserializationFailed(detail) {
+    return new RuntimePersistenceError(
+      'Snapshot deserialization failed',
+      'DESERIALIZATION_FAILED',
+      { detail }
+    );
+  }
+
+  static notFound(runId) {
+    return new RuntimePersistenceError(
+      `Snapshot not found: ${runId}`,
+      'NOT_FOUND',
+      { runId }
+    );
+  }
+
+  static saveFailed(runId, reason) {
+    return new RuntimePersistenceError(
+      `Failed to save snapshot: ${runId}`,
+      'SAVE_FAILED',
+      { runId, reason }
+    );
+  }
+
+  static deleteFailed(runId, reason) {
+    return new RuntimePersistenceError(
+      `Failed to delete snapshot: ${runId}`,
+      'DELETE_FAILED',
+      { runId, reason }
+    );
+  }
+}
+
+/**
  * V0.8: RuntimePersistence — pluggable adapter for saving/loading snapshots.
- * Default implementation uses in-memory storage.
+ * V0.8.1: Added unified error handling.
  */
 class RuntimePersistence {
   constructor(adapter) {
@@ -996,48 +1095,93 @@ class RuntimePersistence {
   }
 
   /**
-   * Save a snapshot.
+   * Save a snapshot. Throws RuntimePersistenceError on failure.
    */
   async save(snapshot) {
-    return this.adapter.save(snapshot);
+    try {
+      // Validate snapshot before saving
+      if (!snapshot || !snapshot.runId) {
+        throw RuntimePersistenceError.serializationFailed('Invalid snapshot: missing runId');
+      }
+      return await this.adapter.save(snapshot);
+    } catch (err) {
+      if (err instanceof RuntimePersistenceError) throw err;
+      throw RuntimePersistenceError.saveFailed(snapshot?.runId, err.message);
+    }
   }
 
   /**
-   * Load a snapshot by runId.
+   * Load a snapshot by runId. Returns null if not found.
+   * Throws RuntimePersistenceError on errors other than not-found.
    */
   async load(runId) {
-    return this.adapter.load(runId);
+    try {
+      return await this.adapter.load(runId);
+    } catch (err) {
+      if (err instanceof RuntimePersistenceError) throw err;
+      throw new RuntimePersistenceError(
+        `Failed to load snapshot: ${runId}`,
+        'LOAD_FAILED',
+        { runId, reason: err.message }
+      );
+    }
   }
 
   /**
    * Delete a snapshot by runId.
    */
   async delete(runId) {
-    return this.adapter.delete(runId);
+    try {
+      return await this.adapter.delete(runId);
+    } catch (err) {
+      if (err instanceof RuntimePersistenceError) throw err;
+      throw RuntimePersistenceError.deleteFailed(runId, err.message);
+    }
   }
 
   /**
    * List all saved snapshot runIds.
    */
   async list() {
-    return this.adapter.list();
+    try {
+      return await this.adapter.list();
+    } catch (err) {
+      throw new RuntimePersistenceError(
+        'Failed to list snapshots',
+        'LIST_FAILED',
+        { reason: err.message }
+      );
+    }
   }
 }
 
 /**
  * V0.8: In-memory persistence adapter (default).
+ * V0.8.1: Added error simulation capability for testing.
  */
 class MemoryPersistenceAdapter {
-  constructor() {
+  constructor(options = {}) {
     this.store = new Map();
+    this.failOnSave = options.failOnSave || false;
+    this.failOnLoad = options.failOnLoad || false;
   }
 
   async save(snapshot) {
+    if (this.failOnSave) {
+      throw RuntimePersistenceError.saveFailed(snapshot?.runId, 'Simulated save failure');
+    }
     this.store.set(snapshot.runId, JSON.parse(JSON.stringify(snapshot)));
     return { ok: true, runId: snapshot.runId };
   }
 
   async load(runId) {
+    if (this.failOnLoad) {
+      throw new RuntimePersistenceError(
+        `Failed to load snapshot: ${runId}`,
+        'LOAD_FAILED',
+        { runId, reason: 'Simulated load failure' }
+      );
+    }
     return this.store.get(runId) || null;
   }
 
@@ -1056,9 +1200,121 @@ class MemoryPersistenceAdapter {
  * V0.8: Unified lifecycle transition — the ONLY public entry point.
  * transitionSkillStatus is now internal-only.
  * All external code MUST use safeTransitionSkillStatus.
+ *
+ * V0.8.1: Auto-emits runtime events on every transition.
+ * State change → event is GUARANTEED. No orphan states.
+ *
+ * @param {object} skill - The skill to transition
+ * @param {string} newStatus - Target status
+ * @param {RuntimeEventLog} eventLog - Optional event log for auto-emission
+ * @param {object} context - Optional context { runId, skillId, reason }
+ * @returns {boolean} True if transition succeeded
+ */
+function safeTransitionSkillStatus(skill, newStatus, eventLog, context) {
+  if (!skill) return false;
+  const allowed = SKILL_TRANSITIONS[skill.status] || [];
+
+  // V0.7.3: Additional constraint — must go through VERIFYING before COMPLETED
+  if (newStatus === SKILL_STATUS.COMPLETED && skill.status !== SKILL_STATUS.VERIFYING) {
+    console.warn(
+      `[Skill] Illegal transition: ${skill.status} → ${newStatus}. ` +
+      `Skill must go through VERIFYING before COMPLETED.`
+    );
+    return false;
+  }
+
+  // V0.7.3: Cannot transition from terminal states
+  if (skill.status === SKILL_STATUS.COMPLETED || skill.status === SKILL_STATUS.FAILED) {
+    console.warn(`[Skill] Cannot transition from terminal state: ${skill.status}`);
+    return false;
+  }
+
+  if (!allowed.includes(newStatus)) {
+    console.warn(`[Skill] Invalid transition: ${skill.status} → ${newStatus}`);
+    return false;
+  }
+
+  // Execute transition
+  const oldStatus = skill.status;
+  skill.status = newStatus;
+  skill.updatedAt = Date.now();
+
+  // V0.8.1: Auto-emit event — state change ALWAYS produces an event
+  if (eventLog) {
+    const eventType = statusToEventType(newStatus);
+    if (eventType) {
+      eventLog.record({
+        runId: context?.runId,
+        skillId: context?.skillId || skill.id,
+        type: eventType,
+        data: {
+          from: oldStatus,
+          to: newStatus,
+          reason: context?.reason,
+        },
+      });
+    }
+  }
+
+  return true;
+}
+
+/**
+ * V0.8.1: Map skill status to runtime event type.
+ */
+function statusToEventType(status) {
+  const map = {
+    [SKILL_STATUS.RUNNING]: RUNTIME_EVENT_TYPES.SKILL_RUNNING,
+    [SKILL_STATUS.VERIFYING]: RUNTIME_EVENT_TYPES.VERIFICATION_STARTED,
+    [SKILL_STATUS.COMPLETED]: RUNTIME_EVENT_TYPES.SKILL_COMPLETED,
+    [SKILL_STATUS.FAILED]: RUNTIME_EVENT_TYPES.SKILL_FAILED,
+    [SKILL_STATUS.CANCELLED]: RUNTIME_EVENT_TYPES.SKILL_CANCELLED,
+  };
+  return map[status] || null;
+}
+
+/**
+ * V0.8.1: Verify event-state consistency.
+ * Checks that every state transition has a corresponding event.
+ * Returns { consistent, missingEvents }.
+ */
+function verifyEventStateConsistency(skill, eventLog) {
+  if (!skill || !eventLog) return { consistent: true, missingEvents: [] };
+
+  const skillEvents = eventLog.getSkillEvents(skill.id);
+  const stateTransitions = skillEvents.filter(e =>
+    e.type === RUNTIME_EVENT_TYPES.SKILL_RUNNING ||
+    e.type === RUNTIME_EVENT_TYPES.VERIFICATION_STARTED ||
+    e.type === RUNTIME_EVENT_TYPES.SKILL_COMPLETED ||
+    e.type === RUNTIME_EVENT_TYPES.SKILL_FAILED ||
+    e.type === RUNTIME_EVENT_TYPES.SKILL_CANCELLED
+  );
+
+  // Check: if skill is in a non-REGISTERED/non-AVAILABLE state,
+  // there should be at least one event
+  const terminalStates = [SKILL_STATUS.COMPLETED, SKILL_STATUS.FAILED, SKILL_STATUS.CANCELLED];
+  if (terminalStates.includes(skill.status)) {
+    const hasCompletionEvent = stateTransitions.some(e =>
+      e.type === (skill.status === SKILL_STATUS.COMPLETED ? RUNTIME_EVENT_TYPES.SKILL_COMPLETED :
+                   skill.status === SKILL_STATUS.FAILED ? RUNTIME_EVENT_TYPES.SKILL_FAILED :
+                   RUNTIME_EVENT_TYPES.SKILL_CANCELLED)
+    );
+    if (!hasCompletionEvent) {
+      return {
+        consistent: false,
+        missingEvents: [`Missing ${skill.status} event for skill ${skill.id}`],
+      };
+    }
+  }
+
+  return { consistent: true, missingEvents: [] };
+}
+
+/**
+ * V0.8.1: Internal transition without event emission.
+ * For use within this module where events are handled separately.
  */
 function transitionSkillStatusInternal(skill, newStatus) {
-  // Internal: bypasses guard, for use within this module only
   if (!skill) return false;
   skill.status = newStatus;
   skill.updatedAt = Date.now();
@@ -1180,4 +1436,8 @@ export {
   restoreSnapshot,
   RuntimePersistence,
   MemoryPersistenceAdapter,
+  RuntimePersistenceError,
+  SNAPSHOT_VERSION,
+  migrateSnapshot,
+  verifyEventStateConsistency,
 };

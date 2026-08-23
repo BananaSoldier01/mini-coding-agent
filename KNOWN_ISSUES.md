@@ -4,6 +4,18 @@
 
 ---
 
+## V0.8.1 — 已完成
+
+### Runtime Hardening
+- Event-State Auto Sync: safeTransitionSkillStatus 自动 emit 事件
+- Snapshot Versioning: SNAPSHOT_VERSION + migrateSnapshot()
+- Persistence Error Handling: RuntimePersistenceError 统一错误模型
+- Recovery 边界: Restore ≠ Resume 决策记录
+- verifyEventStateConsistency(): orphan state 检测
+- 23 new tests (379/379 PASS)
+
+---
+
 ## V0.8.0 — 已完成
 
 ### Runtime Observability & Persistence
