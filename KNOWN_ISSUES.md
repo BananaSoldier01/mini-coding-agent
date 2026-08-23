@@ -4,6 +4,19 @@
 
 ---
 
+## V0.7.0 — 已完成
+
+### Skill Model Foundation & Registry
+- Skill Object: id/name/description/version/tools/capabilities/instructions/verification
+- Skill Lifecycle: REGISTERED → AVAILABLE → RUNNING → VERIFYING → COMPLETED/FAILED
+- SkillRegistry: register/get/list/load/validate/unregister
+- Skill ↔ Plan Binding: bindSkillToPlan/bindSkillToStep
+- Skill Instruction Layer: priority-ordered context injection
+- Tool Permission: isToolAllowedForSkill/assertSkillToolAllowed
+- 53 new tests (269/269 PASS)
+
+---
+
 ## V0.6.4 — 已完成
 
 ### Verification Hardening / Runtime Integrity
