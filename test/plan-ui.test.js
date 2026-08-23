@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createPlan, transitionPlanStatus, PLAN_STATUS, bindToolCall, detectPlanDrift, completeStepAfterExecution } from '../agent/plan.js';
+import { createPlan, transitionPlanStatus, PLAN_STATUS, bindToolCall, detectPlanDrift, completeStepAfterExecution, recordSuccessfulEffect } from '../agent/plan.js';
 
 // ── Test 1: Plan Panel Render ─────────────────────────
 test('Plan UI: Panel 渲染显示 goal/steps', () => {
@@ -61,28 +61,32 @@ test('Plan UI: Reject Flow — AWAITING_APPROVAL → REJECTED, 不执行', () =>
 
 // ── Test 4: Execution Progress ─────────────────────────
 test('Plan UI: Execution Progress — step status updates', () => {
-  // V0.6.1: Step completion happens AFTER tool execution, not at bind time
+  // V0.6.3: Step completion requires successfulEffects (execution evidence)
   const plan = createPlan({
     goal: 'test progress',
     steps: [
-      { id: 's1', description: 'Step 1', files: ['file1.js'] },
-      { id: 's2', description: 'Step 2', files: ['file2.js'] },
+      { id: 's1', description: 'Step 1', files: ['file1.js', 'file2.js'] },
     ],
   });
 
   // 初始全部 pending
   assert.strictEqual(plan.steps[0].status, 'pending');
-  assert.strictEqual(plan.steps[1].status, 'pending');
 
   // bindToolCall marks step as running (NOT completed)
   bindToolCall(plan, 'run_1', 'tc_1', 'write_file', { path: 'file1.js' });
   assert.strictEqual(plan.steps[0].status, 'running');
-  assert.strictEqual(plan.steps[1].status, 'pending');
 
-  // After tool execution succeeds, step is completed
-  completeStepAfterExecution(plan, 's1');
-  assert.strictEqual(plan.steps[0].status, 'completed');
-  assert.ok(plan.steps[0].completedAt !== null);
+  // V0.6.3: Need successfulEffects for completion
+  recordSuccessfulEffect(plan, 's1', 'write_file', { path: 'file1.js' }, { path: 'file1.js', action: 'modified' });
+  // Only 1 of 2 files done — step should NOT complete
+  const result1 = completeStepAfterExecution(plan, 's1');
+  assert.strictEqual(result1, null, 'Step should not complete with only 1 of 2 files');
+
+  // Second file done
+  recordSuccessfulEffect(plan, 's1', 'write_file', { path: 'file2.js' }, { path: 'file2.js', action: 'created' });
+  const result2 = completeStepAfterExecution(plan, 's1');
+  assert.ok(result2, 'Step should complete when all files done');
+  assert.strictEqual(result2.status, 'completed');
 });
 
 // ── Test 5: Timeline Integration ───────────────────────

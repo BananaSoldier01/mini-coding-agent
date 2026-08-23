@@ -170,49 +170,103 @@ function bindToolCall(plan, runId, toolCallId, toolName, args) {
 }
 
 /**
- * V0.6.1: Record tool call on matching step (NO status change).
+ * V0.6.3: Record tool call on matching step (NO status change).
  * Step status is managed by the orchestrator AFTER tool execution succeeds.
+ * Fix: command-type steps (run_command) have no filePath — must still be matched.
  */
 function recordToolCallOnStep(plan, toolName, args, toolCallId) {
   if (!plan || !Array.isArray(plan.steps)) return;
 
   const filePath = args?.path || args?.file;
-  if (!filePath) return;
 
   for (const step of plan.steps) {
     if (!step.toolCalls) step.toolCalls = [];
-    const stepFiles = step.files || [];
-    if (stepFiles.some(f => filePath.includes(f) || f.includes(filePath))) {
+    if (!step.successfulEffects) step.successfulEffects = [];
+
+    // Command-type steps match by tool name (no filePath needed)
+    if (step.type === 'command' && toolName === 'run_command') {
       step.toolCalls.push({
         toolName,
         toolCallId,
-        filePath,
+        filePath: null,
+        command: args?.command,
         timestamp: Date.now(),
       });
-      // Only mark as running, NOT completed — completion happens after execution succeeds
       if (step.status === 'pending') {
         step.status = 'running';
+      }
+      continue;
+    }
+
+    // File-based steps match by file path
+    if (filePath) {
+      const stepFiles = step.files || [];
+      if (stepFiles.some(f => filePath.includes(f) || f.includes(filePath))) {
+        step.toolCalls.push({
+          toolName,
+          toolCallId,
+          filePath,
+          timestamp: Date.now(),
+        });
+        if (step.status === 'pending') {
+          step.status = 'running';
+        }
       }
     }
   }
 }
 
 /**
- * V0.6.2: Mark step as completed AFTER tool execution succeeds.
- * Improved: handles command-type steps and multi-file steps.
+ * V0.6.3: Record successful execution evidence (separate from intent).
+ * Only called AFTER tool execution succeeds.
+ */
+function recordSuccessfulEffect(plan, stepId, toolName, args, result) {
+  if (!plan || !Array.isArray(plan.steps)) return;
+  const step = plan.steps.find(s => s.id === stepId);
+  if (!step) return;
+
+  if (!step.successfulEffects) step.successfulEffects = [];
+
+  step.successfulEffects.push({
+    toolName,
+    args,
+    result: result ? { path: result.path, action: result.action } : null,
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * V0.6.3: Mark step as completed AFTER tool execution succeeds.
+ * Uses successfulEffects (execution evidence), NOT toolCalls (intent).
+ * Command steps complete on first successful run_command.
+ * File steps require all planned files to have successful effects.
  */
 function completeStepAfterExecution(plan, stepId) {
   if (!plan || !Array.isArray(plan.steps)) return null;
   const step = plan.steps.find(s => s.id === stepId);
   if (!step || step.status !== 'running') return null;
 
-  // V0.6.2: For command-type steps, check if all files in the step are done
-  // For file-based steps, check if all files have been touched
+  // V0.6.3: Use successfulEffects (real execution evidence), not toolCalls (intent)
+  const effects = step.successfulEffects || [];
+
+  if (step.type === 'command') {
+    // Command step: any successful run_command completes it
+    if (effects.some(e => e.toolName === 'run_command')) {
+      step.status = 'completed';
+      step.completedAt = Date.now();
+      plan.updatedAt = Date.now();
+      return step;
+    }
+    return null;
+  }
+
+  // File-based step: all planned files must have successful effects
   if (step.files && step.files.length > 0) {
-    const allFilesTouched = step.files.every(f =>
-      step.toolCalls.some(tc => tc.filePath && (tc.filePath.includes(f) || f.includes(tc.filePath)))
+    const allFilesDone = step.files.every(f =>
+      effects.some(e => e.args && (e.args.path || e.args.file) &&
+        ((e.args.path || e.args.file).includes(f) || f.includes(e.args.path || e.args.file)))
     );
-    if (!allFilesTouched) return null; // Not all files done yet
+    if (!allFilesDone) return null;
   }
 
   step.status = 'completed';
@@ -414,6 +468,7 @@ export {
   transitionPlanStatus,
   bindToolCall,
   recordToolCallOnStep,
+  recordSuccessfulEffect,
   completeStepAfterExecution,
   findMatchingStep,
   completeStep,

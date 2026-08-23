@@ -83,7 +83,8 @@ test('Verification: Plan Step Lifecycle EXECUTING → VERIFYING → COMPLETED', 
   const plan = createPlan({
     goal: 'verify lifecycle',
     steps: [
-      { id: 's1', description: 'Step 1', expectedOutcome: 'Tests pass' },
+      { id: 's1', description: 'Step 1', type: 'command',
+        verification: [{ type: 'command', check: 'echo ok', expected: 'exit 0' }] },
     ],
   });
 
@@ -97,17 +98,23 @@ test('Verification: Plan Step Lifecycle EXECUTING → VERIFYING → COMPLETED', 
   transitionPlanStatus(plan, PLAN_STATUS.EXECUTING);
   assert.strictEqual(plan.status, PLAN_STATUS.EXECUTING);
 
-  // Step completes
+  // Step completes — build verificationState from verification array
+  plan.steps[0].verificationState = createVerificationFromStep(plan, plan.steps[0]);
+  addCheck(plan.steps[0].verificationState, {
+    type: VERIFICATION_TYPE.COMMAND,
+    description: 'echo ok',
+    command: 'echo ok',
+    expected: 'exit 0',
+  });
   plan.steps[0].status = 'completed';
   plan.steps[0].completedAt = Date.now();
 
-  // Create verification from step
-  const vs = createVerificationFromStep(plan, plan.steps[0]);
-  assert.ok(vs.id.startsWith('verify_'));
-  assert.strictEqual(vs.planId, plan.id);
-  assert.strictEqual(vs.stepId, 's1');
-  assert.strictEqual(vs.checks.length, 1);
-  assert.strictEqual(vs.checks[0].description, 'Tests pass');
+  // Verify verificationState has the check we added
+  assert.ok(plan.steps[0].verificationState.id.startsWith('verify_'));
+  assert.strictEqual(plan.steps[0].verificationState.planId, plan.id);
+  assert.strictEqual(plan.steps[0].verificationState.stepId, 's1');
+  assert.strictEqual(plan.steps[0].verificationState.checks.length, 1);
+  assert.strictEqual(plan.steps[0].verificationState.checks[0].description, 'echo ok');
 });
 
 // ── Test 4: Verification Failure ───────────────────────
@@ -196,13 +203,14 @@ test('Verification: Plan Step expectedOutcome + verificationState', () => {
   // Verify step has expectedOutcome
   assert.strictEqual(plan.steps[0].expectedOutcome, 'API tests pass');
 
-  // Create verification from step
+  // V0.6.3: expectedOutcome is NOT auto-converted to a CUSTOM check
   const vs = createVerificationFromStep(plan, plan.steps[0]);
   plan.steps[0].verificationState = vs;
 
   assert.ok(plan.steps[0].verificationState !== null);
-  assert.strictEqual(plan.steps[0].verificationState.checks.length, 1);
-  assert.strictEqual(plan.steps[0].verificationState.checks[0].description, 'API tests pass');
+  // expectedOutcome should NOT create a check — only explicit verification[] does
+  assert.strictEqual(plan.steps[0].verificationState.checks.length, 0,
+    'expectedOutcome should not auto-create a CUSTOM check');
 });
 
 // ── Test 8: Verification Status Constants ──────────────

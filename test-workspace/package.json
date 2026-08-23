@@ -1,7 +1,7 @@
 {
-  "name": "broken-app",
-  "version": "1.0.0",
-  "description": "A broken Node.js app for testing",
+  "name": "test-app",
+  "version": "0.4.2",
+  "description": "Test workspace for E2E",
   "main": "app.js",
   "scripts": {
     "start": "node app.js"

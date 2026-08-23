@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.6.2 — Verification Closure & Safety**（已完成）
+**V0.6.3 — Verification Runtime Closure & Safety**（已完成）
 
 **Next: V0.7 — Skills / Extensibility**
 
@@ -126,6 +126,19 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.6.3 — Verification Runtime Closure & Safety
+- P0: SKIPPED 不得导致 Verification PASSED — 聚合逻辑改为 strict
+- P0: 去掉 expectedOutcome → CUSTOM check — 只保留 verification[]
+- P0: 类型化 Verification Spec — validateCheck 拒绝非法 type/check/command
+- P0: command step 真链路 — recordToolCallOnStep 不再因无 filePath 提前返回
+- P0: execution evidence 分离 — 新增 successfulEffects 字段，完成只认成功执行
+- P0: baseline 进入真实 Agent 调用链 — 从 ChangeTracker 构建
+- P0: Verification Failed → step 可 reopen → repair → reverify
+- P0: Agent done 不早于 Plan gate — 统一 Completion Outcome
+- P0: 修 PLAN_STATUS.EXUTING typo
+- Tests: 24 new tests（278/278 PASS）
 - 状态：已完成
 
 ### V0.6.2 — Verification Closure & Safety

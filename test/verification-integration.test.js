@@ -1,17 +1,19 @@
 /**
  * test/verification-integration.test.js — Verification Integration Tests
  *
- * V0.6.2
+ * V0.6.3
  * Real integration tests for Verification lifecycle, safety, and completion gate.
  */
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createPlan, validatePlan, PLAN_STATUS, completeStepAfterExecution, findMatchingStep } from '../agent/plan.js';
+import { createPlan, validatePlan, PLAN_STATUS, completeStepAfterExecution, findMatchingStep, recordSuccessfulEffect } from '../agent/plan.js';
 import {
   createVerification,
   addCheck,
   createVerificationFromStep,
+  validateCheck,
+  validateVerification,
   runVerification,
   runFileVerification,
   runGitVerification,
@@ -19,22 +21,6 @@ import {
   VERIFICATION_TYPE,
 } from '../agent/verification.js';
 import { Session } from '../session.js';
-
-// ── Helper: build verificationState from verification array ──
-function buildVerificationFromArr(plan, step) {
-  const vs = createVerificationFromStep(plan, step);
-  if (step._verification) {
-    for (const v of step._verification) {
-      addCheck(vs, {
-        type: v.type || 'command',
-        description: v.check || v.expected || '',
-        command: v.check || null,
-        expected: v.expected || null,
-      });
-    }
-  }
-  return vs;
-}
 
 // ── Test 1: Missing verification → plan invalid ────────
 test('V-Integration: 缺 verification → plan invalid', () => {
@@ -69,6 +55,8 @@ test('V-Integration: command pass → step completed', async () => {
   });
 
   plan.steps[0].status = 'running';
+  // V0.6.3: Need successfulEffects for completion
+  recordSuccessfulEffect(plan, 's1', 'run_command', { command: 'echo hello' }, { exitCode: 0 });
   const completed = completeStepAfterExecution(plan, 's1');
   assert.ok(completed, 'Step should complete');
   assert.strictEqual(completed.status, 'completed');
@@ -79,7 +67,7 @@ test('V-Integration: command pass → step completed', async () => {
   assert.strictEqual(result.status, VERIFICATION_STATUS.PASSED);
 });
 
-// ── Test 3: Command fail → not completed ───────────────
+// ── Test 3: Command fail → step FAILED ────────────────
 test('V-Integration: command fail → step FAILED', async () => {
   const plan = createPlan({
     goal: 'test',
@@ -97,6 +85,7 @@ test('V-Integration: command fail → step FAILED', async () => {
   });
 
   plan.steps[0].status = 'running';
+  recordSuccessfulEffect(plan, 's1', 'run_command', { command: 'exit 1' }, { exitCode: 0 });
   const completed = completeStepAfterExecution(plan, 's1');
   const vs = completed.verificationState;
   const result = await runVerification(vs, { workspace: process.cwd() });
@@ -124,12 +113,14 @@ test('V-Integration: git status --porcelain', async () => {
   );
 });
 
-// ── Test 6: Custom check → SKIPPED (not PASSED) ────────
-test('V-Integration: custom check → SKIPPED', async () => {
+// ── Test 6: Custom check → SKIPPED → Verification FAILED ──
+test('V-Integration: custom check → SKIPPED → verification FAILED', async () => {
   const v = createVerification({ planId: 'p1' });
   addCheck(v, { type: VERIFICATION_TYPE.CUSTOM, description: 'manual review' });
   const result = await runVerification(v, { workspace: process.cwd() });
-  assert.strictEqual(result.status, VERIFICATION_STATUS.PASSED);
+  // V0.6.3: SKIPPED check → overall verification FAILED (not PASSED)
+  assert.strictEqual(result.status, VERIFICATION_STATUS.FAILED,
+    'SKIPPED check should cause overall FAILED, not PASSED');
   assert.strictEqual(result.checks[0].status, VERIFICATION_STATUS.SKIPPED);
 });
 
@@ -166,12 +157,12 @@ test('V-Integration: multi-file step not prematurely complete', () => {
 
   plan.steps[0].status = 'running';
   // Only first file done — step should NOT complete
-  plan.steps[0].toolCalls.push({ toolName: 'edit_file', filePath: 'a.js' });
+  recordSuccessfulEffect(plan, 's1', 'write_file', { path: 'a.js' }, { path: 'a.js', action: 'modified' });
   const result1 = completeStepAfterExecution(plan, 's1');
   assert.strictEqual(result1, null, 'Step should not complete with only 1 of 2 files');
 
   // Second file done
-  plan.steps[0].toolCalls.push({ toolName: 'edit_file', filePath: 'b.js' });
+  recordSuccessfulEffect(plan, 's1', 'write_file', { path: 'b.js' }, { path: 'b.js', action: 'created' });
   const result2 = completeStepAfterExecution(plan, 's1');
   assert.ok(result2, 'Step should complete when all files done');
   assert.strictEqual(result2.status, 'completed');
@@ -191,6 +182,7 @@ test('V-Integration: command step can be found and completed', () => {
   assert.ok(step, 'Should find command-type step');
   assert.strictEqual(step.id, 's1');
 
+  recordSuccessfulEffect(plan, 's1', 'run_command', { command: 'npm test' }, { exitCode: 0 });
   const completed = completeStepAfterExecution(plan, 's1');
   assert.ok(completed, 'Command step should complete');
   assert.strictEqual(completed.status, 'completed');
@@ -259,7 +251,7 @@ test('V-Integration: PENDING verification blocks completion', () => {
   assert.ok(anyNotPassed, 'PENDING verification should block completion');
 });
 
-// ── Test 13: validatePlan rejects missing verification ─
+// ── Test 13: validatePlan rejects missing verification ──
 test('V-Integration: validatePlan rejects modify step without verification', () => {
   const plan = createPlan({
     goal: 'test',
@@ -322,4 +314,53 @@ test('V-Integration: baseline hash comparison for modified file', async () => {
   });
   assert.strictEqual(resultDiff.status, VERIFICATION_STATUS.PASSED,
     'Changed file should pass modified check');
+});
+
+// ── Test 16: validateCheck rejects malformed checks ─────
+test('V-Integration: validateCheck rejects unknown type', () => {
+  const result = validateCheck({ type: 'banana', check: 'something', expected: 'whatever' });
+  assert.ok(!result.valid);
+  assert.ok(result.errors.some(e => e.includes('banana')));
+});
+
+test('V-Integration: validateCheck rejects empty check', () => {
+  const result = validateCheck({ type: 'command', check: '', expected: 'exit 0' });
+  assert.ok(!result.valid);
+  assert.ok(result.errors.some(e => e.includes('non-empty')));
+});
+
+test('V-Integration: validateCheck rejects missing command', () => {
+  const result = validateCheck({ type: 'command', check: 'echo', expected: 'exit 0' });
+  // command field is required for command type
+  assert.ok(!result.valid);
+  assert.ok(result.errors.some(e => e.includes('command')));
+});
+
+test('V-Integration: validateCheck accepts valid command check', () => {
+  const result = validateCheck({ type: 'command', check: 'echo hello', command: 'echo hello', expected: 'exit 0' });
+  assert.ok(result.valid);
+});
+
+// ── Test 17: validateVerification ───────────────────────
+test('V-Integration: validateVerification rejects all invalid checks', () => {
+  const v = createVerification({ planId: 'p1' });
+  addCheck(v, { type: 'banana', check: '', expected: '' });
+  addCheck(v, { type: 'command', check: 'echo', command: 'echo', expected: 'exit 0' });
+  const result = validateVerification(v);
+  assert.ok(!result.valid);
+  assert.ok(result.errors.length >= 2);
+});
+
+// ── Test 18: createVerificationFromStep no longer creates CUSTOM check ──
+test('V-Integration: createVerificationFromStep does not auto-create CUSTOM check', () => {
+  const plan = createPlan({
+    goal: 'test',
+    steps: [
+      { id: 's1', description: 'step', type: 'modify', files: ['a.js'],
+        expectedOutcome: 'file should exist' },
+    ],
+  });
+  const vs = createVerificationFromStep(plan, plan.steps[0]);
+  assert.strictEqual(vs.checks.length, 0,
+    'expectedOutcome should NOT auto-create a CUSTOM check');
 });

@@ -114,21 +114,15 @@ function completeVerification(verification, status) {
 
 /**
  * 从 Plan Step 创建 Verification。
+ * V0.6.3: 不再自动从 expectedOutcome 创建 CUSTOM check。
+ * expectedOutcome 是验收目标描述，verification[] 才是真实 checks。
  */
 function createVerificationFromStep(plan, step) {
-  const checks = [];
-  if (step.expectedOutcome) {
-    checks.push({
-      id: `check_${step.id}_outcome`,
-      type: VERIFICATION_TYPE.CUSTOM,
-      description: step.expectedOutcome,
-      expected: step.expectedOutcome,
-    });
-  }
+  // Only create checks from explicit verification array, NOT from expectedOutcome
   return createVerification({
     planId: plan?.id,
     stepId: step?.id,
-    checks,
+    checks: [],
   });
 }
 
@@ -295,6 +289,62 @@ async function runCheck(check, opts = {}) {
 }
 
 /**
+ * V0.6.3: Validate a single verification check against typed spec.
+ * Returns { valid, errors }.
+ */
+function validateCheck(check) {
+  const errors = [];
+  if (!check || typeof check !== 'object') {
+    return { valid: false, errors: ['Check is not an object'] };
+  }
+
+  const validTypes = [VERIFICATION_TYPE.COMMAND, VERIFICATION_TYPE.FILE, VERIFICATION_TYPE.GIT, VERIFICATION_TYPE.CUSTOM];
+  if (!validTypes.includes(check.type)) {
+    errors.push(`Unknown verification type: ${check.type}. Expected: ${validTypes.join(', ')}`);
+  }
+
+  if (!check.check || typeof check.check !== 'string' || check.check.trim() === '') {
+    errors.push('Check must have a non-empty "check" field');
+  }
+
+  // Type-specific validation
+  switch (check.type) {
+    case VERIFICATION_TYPE.COMMAND:
+      if (!check.command || check.command.trim() === '') {
+        errors.push('Command check must have a non-empty "command"');
+      }
+      break;
+    case VERIFICATION_TYPE.FILE:
+      if (!check.command || check.command.trim() === '') {
+        errors.push('File check must have a file path in "check" field');
+      }
+      break;
+    case VERIFICATION_TYPE.GIT:
+      if (!check.command || check.command.trim() === '') {
+        errors.push('Git check must have git args in "check" field');
+      }
+      break;
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * V0.6.3: Validate all checks in a verification.
+ */
+function validateVerification(verification) {
+  if (!verification) return { valid: false, errors: ['Verification is null'] };
+  const allErrors = [];
+  for (const check of verification.checks) {
+    const result = validateCheck(check);
+    if (!result.valid) {
+      allErrors.push(...result.errors);
+    }
+  }
+  return { valid: allErrors.length === 0, errors: allErrors };
+}
+
+/**
  * 运行完整 Verification。
  */
 async function runVerification(verification, opts = {}) {
@@ -314,13 +364,17 @@ async function runVerification(verification, opts = {}) {
 
   const allPassed = verification.checks.every(c => c.status === VERIFICATION_STATUS.PASSED);
   const anyFailed = verification.checks.some(c => c.status === VERIFICATION_STATUS.FAILED);
+  const anyNotPassed = verification.checks.some(c => c.status !== VERIFICATION_STATUS.PASSED);
 
-  if (anyFailed) {
+  // V0.6.3: Strict aggregation — only ALL PASSED → PASSED
+  // SKIPPED / RUNNING / PENDING → not PASSED
+  if (anyFailed || anyNotPassed) {
     completeVerification(verification, VERIFICATION_STATUS.FAILED);
-  } else if (verification.checks.length > 0) {
+  } else if (verification.checks.length > 0 && allPassed) {
     completeVerification(verification, VERIFICATION_STATUS.PASSED);
   } else {
-    completeVerification(verification, VERIFICATION_STATUS.PASSED);
+    // No checks at all → cannot claim verification
+    completeVerification(verification, VERIFICATION_STATUS.FAILED);
   }
 
   return verification;
@@ -359,6 +413,8 @@ export {
   completeCheck,
   completeVerification,
   createVerificationFromStep,
+  validateCheck,
+  validateVerification,
   runCommandVerification,
   runFileVerification,
   runGitVerification,

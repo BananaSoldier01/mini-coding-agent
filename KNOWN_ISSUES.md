@@ -4,6 +4,22 @@
 
 ---
 
+## V0.6.3 — 已完成
+
+### Verification Runtime Closure & Safety
+- SKIPPED aggregation: only ALL PASSED → PASSED, else FAILED
+- expectedOutcome no longer auto-creates CUSTOM check
+- validateCheck: typed spec enforcement (type/check/command)
+- recordToolCallOnStep: command steps no longer blocked by missing filePath
+- successfulEffects: execution evidence separated from intent
+- baseline: passed to runVerification from ChangeTracker
+- repair → reverify: failed step can be reopened
+- done event: emitted AFTER Plan gate (unified completion)
+- EXUTING typo fixed
+- 24 new tests (278/278 PASS)
+
+---
+
 ## V0.6.2 — 已完成
 
 ### Verification Closure & Safety

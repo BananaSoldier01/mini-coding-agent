@@ -344,6 +344,9 @@ async function runAgent(opts) {
   let iteration = 0;
   let finalContent = '';
   let stopped = false;
+  // V0.6.3: Pending done event — emitted after Plan gate
+  let _pendingDoneContent = null;
+  let _pendingDoneIteration = 0;
 
   // V0.4.0: Run Status
   const runStatus = new RunStatus();
@@ -600,7 +603,7 @@ async function runAgent(opts) {
         } catch (err) {
           result = { error: err.message };
           // P0-5.1.1: tool error → plan FAILED
-          if (activePlan && (activePlan.status === PLAN_STATUS.EXUTING || activePlan.status === PLAN_STATUS.APPROVED)) {
+          if (activePlan && (activePlan.status === PLAN_STATUS.EXECUTING || activePlan.status === PLAN_STATUS.APPROVED)) {
             const { transitionPlanStatus, PLAN_STATUS } = await import('./plan.js');
             transitionPlanStatus(activePlan, PLAN_STATUS.FAILED);
             session.planState = activePlan;
@@ -626,9 +629,19 @@ async function runAgent(opts) {
           const { completeStepAfterExecution, findMatchingStep } = await import('./plan.js');
           const step = findMatchingStep(activePlan, toolName, args);
 
-          if (step && step.status === 'running') {
+          if (step && (step.status === 'running' || step.status === 'failed')) {
+            // V0.6.3: Record successful execution evidence
+            const { recordSuccessfulEffect } = await import('./plan.js');
+            recordSuccessfulEffect(activePlan, step.id, toolName, args, result);
+
             const completedStep = completeStepAfterExecution(activePlan, step.id);
             if (completedStep) {
+              // V0.6.3: If previously failed, reopen for re-verification
+              if (step.status === 'failed') {
+                step.status = 'completed';
+                step.completedAt = Date.now();
+              }
+
               emit(onEvent, {
                 type: 'plan_step_update',
                 planId: activePlan.id,
@@ -639,9 +652,21 @@ async function runAgent(opts) {
                 })),
               });
 
-              // V0.6.2: Await verification (not fire-and-forget)
+              // V0.6.3: Await verification (not fire-and-forget)
               if (completedStep.verificationState) {
-                const { runVerification, VERIFICATION_STATUS } = await import('./verification.js');
+                const { runVerification, VERIFICATION_STATUS, validateVerification } = await import('./verification.js');
+
+                // V0.6.3: Validate checks before running
+                const valResult = validateVerification(completedStep.verificationState);
+                if (!valResult.valid) {
+                  emit(onEvent, {
+                    type: 'verification_failed',
+                    planId: activePlan.id,
+                    stepId: completedStep.id,
+                    error: 'Invalid verification spec: ' + valResult.errors.join('; '),
+                  });
+                  continue;
+                }
 
                 emit(onEvent, {
                   type: 'verification_started',
@@ -654,8 +679,17 @@ async function runAgent(opts) {
                 runStatus.transition(RUN_STATUS.VERIFYING, 'verification');
                 emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label, detail: 'verification' });
 
+                // V0.6.3: Build baseline from ChangeTracker for file verification
+                const baseline = {};
+                for (const [path, change] of tracker.netDiff?.files || []) {
+                  if (change && change.before) {
+                    const { createHash } = await import('node:crypto');
+                    baseline[path] = { hash: createHash('sha256').update(change.before).digest('hex') };
+                  }
+                }
+
                 // AWAIT the verification (not fire-and-forget)
-                const vs = await runVerification(completedStep.verificationState, { workspace });
+                const vs = await runVerification(completedStep.verificationState, { workspace, baseline });
 
                 emit(onEvent, {
                   type: 'verification_completed',
@@ -673,7 +707,9 @@ async function runAgent(opts) {
                   })),
                 });
 
-                // V0.6.2: Feed verification result back to LLM context
+                // V0.6.3: Feed verification result back to LLM context
+                // Transcript ordering: tool_result already emitted above, so verification
+                // observation comes after — this is correct ordering
                 const verifySummary = vs.checks.map(c =>
                   `[${c.status.toUpperCase()}] ${c.description || c.type}: ${c.result || ''}`
                 ).join('\n');
@@ -684,8 +720,22 @@ async function runAgent(opts) {
                 messages.push(verifyMsg);
                 turnMessages.push(verifyMsg);
 
-                // V0.6.2: VERIFYING → COMPLETED is valid; let normal flow handle final status
-                // Do NOT transition back to EDITING (not a valid transition from VERIFYING)
+                // V0.6.3: If verification failed, reopen step for repair
+                if (vs.status === VERIFICATION_STATUS.FAILED) {
+                  const { transitionPlanStatus, PLAN_STATUS } = await import('./plan.js');
+                  // Mark step as failed so LLM can repair and re-trigger
+                  step.status = 'failed';
+                  step.verificationState = vs;
+                  emit(onEvent, {
+                    type: 'plan_step_update',
+                    planId: activePlan.id,
+                    steps: activePlan.steps.map(s => ({
+                      id: s.id,
+                      status: s.status,
+                      completedAt: s.completedAt,
+                    })),
+                  });
+                }
               }
             }
           }
@@ -718,10 +768,13 @@ async function runAgent(opts) {
       const finalAssistantMsg = { role: 'assistant', content: finalContent };
       messages.push(finalAssistantMsg);
       turnMessages.push(finalAssistantMsg);
-      // 不要自动伪造 Verifying：没有真实 verification action 就直接 Completed
+      // V0.6.3: Don't emit 'done' yet — Plan Lifecycle Closure must run first
+      // The 'done' event will be emitted after the Plan gate in the closure block below
       runStatus.transition(RUN_STATUS.COMPLETED);
       emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label });
-      emit(onEvent, { type: 'done', content: finalContent, iteration });
+      // Store finalContent for emission after Plan gate
+      _pendingDoneContent = finalContent;
+      _pendingDoneIteration = iteration;
       break;
     }
   }
@@ -807,6 +860,19 @@ async function runAgent(opts) {
           })),
         } : null,
       })),
+    });
+  }
+
+  // V0.6.3: Emit 'done' AFTER Plan gate — unified completion outcome
+  if (_pendingDoneContent !== null) {
+    const planOutcome = activePlan ? activePlan.status : null;
+    const systemPassed = !activePlan || activePlan.status === PLAN_STATUS.COMPLETED;
+    emit(onEvent, {
+      type: 'done',
+      content: _pendingDoneContent,
+      iteration: _pendingDoneIteration,
+      planStatus: planOutcome,
+      systemPassed,
     });
   }
 
