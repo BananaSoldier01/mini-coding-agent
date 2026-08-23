@@ -4,6 +4,20 @@
 
 ---
 
+## V0.8.3 — Pre-V0.9 Cleanup（已完成）
+
+### Agent Core Architecture Review
+- RuntimePolicyContext: Permission Context 抽象（environment/user/workspace/skill/restrictions）
+- POLICY_PRESETS: development/production/readonly 预设
+- Session/Runtime 状态统一决策: Single Source of Truth = RuntimeContext
+- Tool Execution Runtime 化设计文档
+- Memory 分层定义（Conversation/Working/Execution/Long-term）
+- Plan 模型重新确认
+- 架构文档: ARCHITECTURE.md
+- 23 new tests (423/423 PASS)
+
+---
+
 ## V0.8.2 — 已完成
 
 ### Runtime Cleanup & Architecture Debt

@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.8.2 — Runtime Cleanup & Architecture Debt**（已完成）
+**V0.8.3 — Pre-V0.9 Cleanup**（已完成）
 
 **Next: V0.9 — Runtime Control Plane**
 
@@ -126,6 +126,14 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.8.3 — Pre-V0.9 Cleanup
+- RuntimePolicyContext: Permission Context 抽象（environment/user/workspace/skill/restrictions）
+- POLICY_PRESETS: development/production/readonly 预设
+- Session/Runtime 状态统一: Single Source of Truth = RuntimeContext
+- 架构文档: ARCHITECTURE.md（Permission/Memory/Plan/Tool/Session 边界确认）
+- 23 new tests (423/423 PASS)
 - 状态：已完成
 
 ### V0.8.2 — Runtime Cleanup & Architecture Debt
