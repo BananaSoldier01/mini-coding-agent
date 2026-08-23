@@ -2,7 +2,7 @@
 
 一个可在本地 workspace 中执行编码任务的轻量级 Agent Harness。
 
-**当前版本**: V0.9.3 — Runtime Approval & Execution Gate
+**当前版本**: V0.9.4 — Runtime Scheduler & Recovery Foundation
 
 ## 特性
 

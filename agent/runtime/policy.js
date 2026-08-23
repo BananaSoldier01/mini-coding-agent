@@ -88,8 +88,8 @@ class RuntimePolicyContext {
       return false;
     }
 
-    // 5. Available tools check
-    if (availableTools && !availableTools.includes(toolName)) {
+    // 5. Available tools check (empty array = no restriction)
+    if (availableTools && availableTools.length > 0 && !availableTools.includes(toolName)) {
       return false;
     }
 

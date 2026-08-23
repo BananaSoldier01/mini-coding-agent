@@ -4,6 +4,17 @@
 
 ---
 
+## V0.9.4 — Runtime Scheduler & Recovery Foundation（已完成）
+
+### Scheduler & Recovery
+- TaskScheduler: 调度器 (getReadyTasks/selectNextTask/pause/resume)
+- ExecutionCoordinator: 协调 Scheduler→Gate→ToolExecution
+- Runtime Recovery Manager: restore/validateConsistency/recoverPendingTasks/recoverPendingApprovals
+- Approval Evidence Binding: 审批→证据链
+- 27 new tests (575/575 PASS)
+
+---
+
 ## V0.9.3 — Runtime Approval & Execution Gate（已完成）
 
 ### Approval & Execution Gate

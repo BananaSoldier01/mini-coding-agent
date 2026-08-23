@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.9.3 — Runtime Approval & Execution Gate**（已完成）
+**V0.9.4 — Runtime Scheduler & Recovery Foundation**（已完成）
 
-**Next: V0.9.4 — Dynamic Plan Revision**
+**Next: V0.9.5 — Dynamic Plan Revision**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,14 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.9.4 — Runtime Scheduler & Recovery Foundation
+- TaskScheduler: 调度器 (getReadyTasks/selectNextTask/pause/resume)
+- ExecutionCoordinator: 协调 Scheduler→Gate→ToolExecution
+- Runtime Recovery Manager: restore/validateConsistency/recoverPendingTasks/recoverPendingApprovals
+- Approval Evidence Binding: 审批→证据链
+- 27 new tests (575/575 PASS)
 - 状态：已完成
 
 ### V0.9.3 — Runtime Approval & Execution Gate
