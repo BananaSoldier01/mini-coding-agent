@@ -15,6 +15,7 @@ const VERIFICATION_STATUS = {
   PASSED: 'passed',
   FAILED: 'failed',
   SKIPPED: 'skipped',
+  STALE: 'stale',
 };
 
 // ── Verification Check Types ───────────────────────────
@@ -105,11 +106,15 @@ function startCheck(verification, checkId) {
 /**
  * 完成 Verification。
  */
-function completeVerification(verification, status) {
+function completeVerification(verification, status, evidenceVersion) {
   if (!verification) return;
   verification.status = status;
   verification.completedAt = Date.now();
   verification.updatedAt = Date.now();
+  // V0.6.4: Record evidence version at completion time
+  if (evidenceVersion !== undefined) {
+    verification.evidenceVersion = evidenceVersion;
+  }
 }
 
 /**
@@ -132,9 +137,30 @@ function createVerificationFromStep(plan, step) {
  * V0.6.1: 使用 workspace 参数，不使用 process.cwd()
  * 返回 { status, result, duration }。
  */
-async function runCommandVerification(command, workspace) {
+async function runCommandVerification(command, workspace, runtime) {
   const start = Date.now();
   const cwd = workspace || process.cwd();
+
+  // V0.6.4: Route through safe execution runtime if available
+  if (runtime && typeof runtime.execute === 'function') {
+    try {
+      const result = await runtime.execute(command, { cwd, timeout: 30000 });
+      return {
+        status: result.exitCode === 0 ? VERIFICATION_STATUS.PASSED : VERIFICATION_STATUS.FAILED,
+        result: (result.stdout || result.stderr || '').trim(),
+        exitCode: result.exitCode,
+        duration: Date.now() - start,
+      };
+    } catch (err) {
+      return {
+        status: VERIFICATION_STATUS.FAILED,
+        result: `Runtime execution error: ${err.message}`,
+        duration: Date.now() - start,
+      };
+    }
+  }
+
+  // Fallback: direct execSync (legacy path)
   try {
     const { execSync } = await import('node:child_process');
     const result = execSync(command, {
@@ -162,14 +188,20 @@ async function runCommandVerification(command, workspace) {
  * V0.6.2: 使用 workspace 参数 + baseline hash 对比 for 'modified'
  * Fix: createHash from node:crypto (not node:fs)
  */
-async function runFileVerification(filePath, expected, workspace, baseline) {
+async function runFileVerification(filePath, expected, workspace, baseline, runtime) {
   const { existsSync, statSync } = await import('node:fs');
   const { readFileSync } = await import('node:fs');
   const { createHash } = await import('node:crypto');
   const { resolve } = await import('node:path');
 
+  // V0.6.4: Use runtime sandbox resolution if available
+  let resolvedPath = resolve(workspace, filePath);
+  if (runtime && typeof runtime.resolvePath === 'function') {
+    resolvedPath = runtime.resolvePath(filePath, workspace);
+  }
+
   const cwd = workspace || process.cwd();
-  const fullPath = resolve(cwd, filePath);
+  const fullPath = resolvedPath;
   const exists = existsSync(fullPath);
 
   if (expected === 'exists') {
@@ -218,9 +250,38 @@ async function runFileVerification(filePath, expected, workspace, baseline) {
  * 运行 Git Verification。
  * V0.6.1: 使用 workspace 参数 + 实际状态检查
  */
-async function runGitVerification(args = ['status'], workspace) {
+async function runGitVerification(args = ['status'], workspace, runtime) {
   const start = Date.now();
   const cwd = workspace || process.cwd();
+  const gitCmd = `git ${args.join(' ')}`;
+
+  // V0.6.4: Route through safe execution runtime if available
+  if (runtime && typeof runtime.execute === 'function') {
+    try {
+      const result = await runtime.execute(gitCmd, { cwd, timeout: 15000 });
+      const output = (result.stdout || '').trim();
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return {
+          status: output === '' ? VERIFICATION_STATUS.PASSED : VERIFICATION_STATUS.FAILED,
+          result: output === '' ? 'Working tree clean' : `Uncommitted changes:\n${output}`,
+          duration: Date.now() - start,
+        };
+      }
+      return {
+        status: result.exitCode === 0 ? VERIFICATION_STATUS.PASSED : VERIFICATION_STATUS.FAILED,
+        result: output,
+        duration: Date.now() - start,
+      };
+    } catch (err) {
+      return {
+        status: VERIFICATION_STATUS.FAILED,
+        result: `Runtime execution error: ${err.message}`,
+        duration: Date.now() - start,
+      };
+    }
+  }
+
+  // Fallback: direct execSync (legacy path)
   try {
     const { execSync } = await import('node:child_process');
     const result = execSync(`git ${args.join(' ')}`, {
@@ -259,20 +320,20 @@ async function runGitVerification(args = ['status'], workspace) {
  * V0.6.1: 传入 workspace 和 baseline
  */
 async function runCheck(check, opts = {}) {
-  const { workspace, baseline } = opts;
+  const { workspace, baseline, runtime } = opts;
   startCheck(null, check.id); // no-op for standalone
 
   switch (check.type) {
     case VERIFICATION_TYPE.COMMAND: {
-      const result = await runCommandVerification(check.command, workspace);
+      const result = await runCommandVerification(check.command, workspace, runtime);
       return { ...result, checkId: check.id };
     }
     case VERIFICATION_TYPE.FILE: {
-      const result = await runFileVerification(check.command, check.expected, workspace, baseline);
+      const result = await runFileVerification(check.command, check.expected, workspace, baseline, runtime);
       return { ...result, checkId: check.id };
     }
     case VERIFICATION_TYPE.GIT: {
-      const result = await runGitVerification(check.command ? check.command.split(' ') : undefined, workspace);
+      const result = await runGitVerification(check.command ? check.command.split(' ') : undefined, workspace, runtime);
       return { ...result, checkId: check.id };
     }
     case VERIFICATION_TYPE.CUSTOM:
@@ -371,7 +432,8 @@ async function runVerification(verification, opts = {}) {
   if (anyFailed || anyNotPassed) {
     completeVerification(verification, VERIFICATION_STATUS.FAILED);
   } else if (verification.checks.length > 0 && allPassed) {
-    completeVerification(verification, VERIFICATION_STATUS.PASSED);
+    // V0.6.4: Record evidence version at completion
+    completeVerification(verification, VERIFICATION_STATUS.PASSED, opts?.evidenceVersion);
   } else {
     // No checks at all → cannot claim verification
     completeVerification(verification, VERIFICATION_STATUS.FAILED);

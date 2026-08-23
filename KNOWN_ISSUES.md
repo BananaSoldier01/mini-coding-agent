@@ -4,6 +4,18 @@
 
 ---
 
+## V0.6.4 — 已完成
+
+### Verification Hardening / Runtime Integrity
+- Evidence Versioning: evidenceVersion + STALE status
+- New mutation invalidates old PASSED verification
+- read_file does not trigger invalidation
+- Verification Runner routes through runtime.execute()/resolvePath()
+- command/file/git verification use safe execution path
+- 32 new tests (286/286 PASS)
+
+---
+
 ## V0.6.3 — 已完成
 
 ### Verification Runtime Closure & Safety

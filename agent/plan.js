@@ -8,6 +8,11 @@
  * - Plan ↔ Execution Binding: planId → runId → toolCalls
  * - Full lifecycle: DRAFT → AWAITING_APPROVAL → APPROVED → EXECUTING → COMPLETED/FAILED/CANCELLED
  * - Step Tracking: per-step status, completedAt, toolCalls
+ */
+
+import { VERIFICATION_STATUS } from './verification.js';
+
+/**
  * - Plan Drift Detection: detect unexpected file modifications
  * - Step Verification: expectedOutcome + verificationState per step
  */
@@ -217,8 +222,9 @@ function recordToolCallOnStep(plan, toolName, args, toolCallId) {
 }
 
 /**
- * V0.6.3: Record successful execution evidence (separate from intent).
+ * V0.6.4: Record successful execution evidence (separate from intent).
  * Only called AFTER tool execution succeeds.
+ * Invalidates old verification when new mutations occur (evidence versioning).
  */
 function recordSuccessfulEffect(plan, stepId, toolName, args, result) {
   if (!plan || !Array.isArray(plan.steps)) return;
@@ -226,13 +232,32 @@ function recordSuccessfulEffect(plan, stepId, toolName, args, result) {
   if (!step) return;
 
   if (!step.successfulEffects) step.successfulEffects = [];
+  if (step.evidenceVersion === undefined) step.evidenceVersion = 0;
+
+  // V0.6.4: Increment evidence version on new mutation
+  const isMutation = toolName === 'write_file' || toolName === 'edit_file' ||
+                     toolName === 'delete_file' || toolName === 'run_command';
+  if (isMutation) {
+    step.evidenceVersion++;
+  }
 
   step.successfulEffects.push({
     toolName,
     args,
     result: result ? { path: result.path, action: result.action } : null,
+    evidenceVersion: step.evidenceVersion,
     timestamp: Date.now(),
   });
+
+  // V0.6.4: Invalidate old verification if new mutation occurred after it passed
+  if (step.verificationState && step.verificationState.status === VERIFICATION_STATUS.PASSED) {
+    const verificationEvidenceVer = step.verificationState.evidenceVersion || 0;
+    if (step.evidenceVersion > verificationEvidenceVer) {
+      step.verificationState.status = VERIFICATION_STATUS.STALE;
+      step.verificationState.staleAt = Date.now();
+      step.verificationState.staleReason = `New mutation (evidence v${step.evidenceVersion}) after verification (v${verificationEvidenceVer})`;
+    }
+  }
 }
 
 /**

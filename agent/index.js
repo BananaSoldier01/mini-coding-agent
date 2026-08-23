@@ -689,7 +689,13 @@ async function runAgent(opts) {
                 }
 
                 // AWAIT the verification (not fire-and-forget)
-                const vs = await runVerification(completedStep.verificationState, { workspace, baseline });
+                // V0.6.4: Pass runtime for safe execution routing
+                const vs = await runVerification(completedStep.verificationState, {
+                  workspace,
+                  baseline,
+                  evidenceVersion: completedStep.evidenceVersion,
+                  runtime: { execute: shellToolDef?.run_command?.execute, resolvePath: sandbox?.resolve },
+                });
 
                 emit(onEvent, {
                   type: 'verification_completed',

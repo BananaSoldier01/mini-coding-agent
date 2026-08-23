@@ -7,6 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { resolve } from 'node:path';
 import { createPlan, validatePlan, PLAN_STATUS, completeStepAfterExecution, findMatchingStep, recordSuccessfulEffect } from '../agent/plan.js';
 import {
   createVerification,
@@ -15,6 +16,7 @@ import {
   validateCheck,
   validateVerification,
   runVerification,
+  runCommandVerification,
   runFileVerification,
   runGitVerification,
   VERIFICATION_STATUS,
@@ -363,4 +365,139 @@ test('V-Integration: createVerificationFromStep does not auto-create CUSTOM chec
   const vs = createVerificationFromStep(plan, plan.steps[0]);
   assert.strictEqual(vs.checks.length, 0,
     'expectedOutcome should NOT auto-create a CUSTOM check');
+});
+
+// ── Test 19: Evidence versioning — new mutation invalidates old verification ──
+test('V-Integration: new mutation invalidates old PASSED verification → STALE', () => {
+  const plan = createPlan({
+    goal: 'evidence test',
+    steps: [
+      { id: 's1', description: 'step', type: 'modify', files: ['a.js'] },
+    ],
+  });
+
+  plan.steps[0].status = 'running';
+  recordSuccessfulEffect(plan, 's1', 'write_file', { path: 'a.js' }, { path: 'a.js', action: 'modified' });
+  const completed = completeStepAfterExecution(plan, 's1');
+  assert.ok(completed, 'Step should complete');
+
+  // Set verification as PASSED with evidenceVersion 1
+  plan.steps[0].verificationState = {
+    status: VERIFICATION_STATUS.PASSED,
+    evidenceVersion: 1,
+    checks: [{ status: VERIFICATION_STATUS.PASSED, result: 'OK' }],
+  };
+
+  // New mutation — should invalidate
+  recordSuccessfulEffect(plan, 's1', 'write_file', { path: 'a.js' }, { path: 'a.js', action: 'modified' });
+  assert.strictEqual(plan.steps[0].evidenceVersion, 2);
+  assert.strictEqual(plan.steps[0].verificationState.status, VERIFICATION_STATUS.STALE,
+    'Old PASSED verification should become STALE after new mutation');
+});
+
+// ── Test 20: STALE status constant exists ──────────────
+test('V-Integration: VERIFICATION_STATUS.STALE exists', () => {
+  assert.strictEqual(VERIFICATION_STATUS.STALE, 'stale');
+});
+
+// ── Test 21: Evidence versioning — read_file does not invalidate ──
+test('V-Integration: read_file does not invalidate PASSED verification', () => {
+  const plan = createPlan({
+    goal: 'evidence test',
+    steps: [
+      { id: 's1', description: 'step', type: 'modify', files: ['a.js'] },
+    ],
+  });
+
+  plan.steps[0].status = 'running';
+  recordSuccessfulEffect(plan, 's1', 'write_file', { path: 'a.js' }, { path: 'a.js', action: 'modified' });
+  const completed = completeStepAfterExecution(plan, 's1');
+
+  plan.steps[0].verificationState = {
+    status: VERIFICATION_STATUS.PASSED,
+    evidenceVersion: 1,
+    checks: [{ status: VERIFICATION_STATUS.PASSED, result: 'OK' }],
+  };
+
+  // read_file is NOT a mutation — should NOT invalidate
+  recordSuccessfulEffect(plan, 's1', 'read_file', { path: 'a.js' }, { path: 'a.js', action: 'read' });
+  assert.strictEqual(plan.steps[0].verificationState.status, VERIFICATION_STATUS.PASSED,
+    'read_file should not invalidate PASSED verification');
+});
+
+// ── Test 22: Verification Runner Security — runtime routing ──
+test('V-Integration: verification command routes through runtime.execute', async () => {
+  const mockRuntime = {
+    execute: async (cmd, opts) => {
+      if (cmd.includes('echo')) {
+        return { exitCode: 0, stdout: 'hello', stderr: '' };
+      }
+      return { exitCode: 1, stdout: '', stderr: 'command not allowed' };
+    },
+  };
+
+  const result = await runCommandVerification('echo hello', process.cwd(), mockRuntime);
+  assert.strictEqual(result.status, VERIFICATION_STATUS.PASSED);
+  assert.ok(result.result.includes('hello'));
+});
+
+test('V-Integration: verification command blocked by runtime security', async () => {
+  const mockRuntime = {
+    execute: async (cmd, opts) => {
+      if (cmd.includes('rm') || cmd.includes('cat /etc')) {
+        throw new Error('Command blocked by security policy');
+      }
+      return { exitCode: 0, stdout: 'ok', stderr: '' };
+    },
+  };
+
+  const result = await runCommandVerification('cat /etc/passwd', process.cwd(), mockRuntime);
+  assert.strictEqual(result.status, VERIFICATION_STATUS.FAILED);
+  assert.ok(result.result.includes('security policy'));
+});
+
+// ── Test 23: Verification git routes through runtime ──
+test('V-Integration: verification git routes through runtime.execute', async () => {
+  const mockRuntime = {
+    execute: async (cmd, opts) => {
+      if (cmd.startsWith('git')) {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      throw new Error('Non-git command blocked');
+    },
+  };
+
+  const result = await runGitVerification(['status', '--porcelain'], process.cwd(), mockRuntime);
+  assert.strictEqual(result.status, VERIFICATION_STATUS.PASSED);
+  assert.ok(result.result.includes('clean'));
+});
+
+// ── Test 24: Verification file uses runtime path resolution ──
+test('V-Integration: verification file uses runtime.resolvePath', async () => {
+  const mockRuntime = {
+    resolvePath: (filePath, workspace) => {
+      // Prevent path traversal
+      if (filePath.includes('..')) throw new Error('Path traversal blocked');
+      return resolve(workspace, filePath);
+    },
+  };
+
+  const result = await runFileVerification('package.json', 'exists', process.cwd(), null, mockRuntime);
+  assert.strictEqual(result.status, VERIFICATION_STATUS.PASSED);
+});
+
+test('V-Integration: verification file blocks path traversal', async () => {
+  const mockRuntime = {
+    resolvePath: (filePath, workspace) => {
+      if (filePath.includes('..')) throw new Error('Path traversal blocked');
+      return resolve(workspace, filePath);
+    },
+  };
+
+  try {
+    await runFileVerification('../etc/passwd', 'exists', process.cwd(), null, mockRuntime);
+    assert.ok(false, 'Should have thrown');
+  } catch (err) {
+    assert.ok(err.message.includes('traversal'));
+  }
 });

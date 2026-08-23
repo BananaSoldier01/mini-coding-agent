@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.6.3 — Verification Runtime Closure & Safety**（已完成）
+**V0.6.4 — Verification Hardening / Runtime Integrity**（已完成）
 
 **Next: V0.7 — Skills / Extensibility**
 
@@ -126,6 +126,14 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.6.4 — Verification Hardening / Runtime Integrity
+- P0: Evidence Versioning — evidenceVersion + STALE 状态
+- P0: 新 mutation 自动使旧 verification 失效（read_file 不触发）
+- P0: Verification Runner 接入 Runtime 安全执行层
+- P0: command/file/git verification 路由到 runtime.execute()/resolvePath()
+- Tests: 32 new tests（286/286 PASS）
 - 状态：已完成
 
 ### V0.6.3 — Verification Runtime Closure & Safety

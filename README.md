@@ -2,7 +2,7 @@
 
 一个可在本地 workspace 中执行编码任务的轻量级 Agent Harness。
 
-**当前版本**: V0.6.3 — Verification Runtime Closure & Safety
+**当前版本**: V0.6.4 — Verification Hardening / Runtime Integrity
 
 ## 特性
 
