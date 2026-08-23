@@ -4,6 +4,16 @@
 
 ---
 
+## V0.9.3 — Runtime Approval & Execution Gate（已完成）
+
+### Approval & Execution Gate
+- ApprovalRequest: 审批生命周期 (PENDING→APPROVED/REJECTED/EXPIRED)
+- ExecutionGate: 审批门控机制 (request/approve/reject/canProceed)
+- ApprovalPolicy: 审批策略 (destructive/production/high-risk 自动触发)
+- 29 new tests (548/548 PASS)
+
+---
+
 ## V0.9.2 — Planner Interface & Execution Orchestration（已完成）
 
 ### Planner & Orchestration
