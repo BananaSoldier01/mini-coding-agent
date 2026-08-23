@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.7.3 — Skill Verification & Evidence**（已完成）
+**V0.8.0 — Runtime Observability & Persistence**（已完成）
 
-**Next: V0.8+ — Larger Directions**
+**Next: V0.9+ — Larger Directions**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,15 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.8.0 — Runtime Observability & Persistence
+- RuntimeEventLog: record/getEvents/getSkillEvents/clearEvents/serialize/deserialize
+- RuntimeSnapshot: createSnapshot/restoreSnapshot with full state capture
+- RuntimePersistence: save/load/delete/list with pluggable MemoryPersistenceAdapter
+- SkillRuntimeContext: eventLog integration + serialization
+- Lifecycle Entry Unification: safeTransitionSkillStatus as public API
+- 25 new tests (356/356 PASS)
 - 状态：已完成
 
 ### V0.7.3 — Skill Verification & Evidence

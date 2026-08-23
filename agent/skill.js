@@ -460,6 +460,7 @@ class SkillRuntimeContext {
     this.evidenceRefs = new Map(); // skillId → [evidenceIds]
     this.verificationResults = new Map(); // skillId → VerificationResult
     this.instructionBlocks = [];  // provenance-tracked instructions
+    this.eventLog = new RuntimeEventLog(); // V0.8: runtime event timeline
   }
 
   /**
@@ -562,6 +563,7 @@ class SkillRuntimeContext {
       evidenceRefs: Object.fromEntries(this.evidenceRefs),
       verificationResults: Object.fromEntries(this.verificationResults),
       instructionBlocks: this.instructionBlocks,
+      eventLog: this.eventLog ? this.eventLog.serialize() : null,
     };
   }
 
@@ -591,6 +593,9 @@ class SkillRuntimeContext {
     }
     if (data.instructionBlocks) {
       ctx.instructionBlocks = data.instructionBlocks;
+    }
+    if (data.eventLog) {
+      ctx.eventLog = RuntimeEventLog.deserialize(data.eventLog);
     }
     return ctx;
   }
@@ -819,6 +824,247 @@ function canTransitionSkillStatus(skill, newStatus) {
   return (SKILL_TRANSITIONS[skill.status] || []).includes(newStatus);
 }
 
+// ── Runtime Event Timeline ────────────────────────────────
+
+const RUNTIME_EVENT_TYPES = {
+  SKILL_ACTIVATED: 'skill_activated',
+  SKILL_RUNNING: 'skill_running',
+  TOOL_STARTED: 'tool_started',
+  TOOL_COMPLETED: 'tool_completed',
+  VERIFICATION_STARTED: 'verification_started',
+  EVIDENCE_COLLECTED: 'evidence_collected',
+  VERIFICATION_COMPLETED: 'verification_completed',
+  SKILL_COMPLETED: 'skill_completed',
+  SKILL_FAILED: 'skill_failed',
+  SKILL_CANCELLED: 'skill_cancelled',
+  RUN_STARTED: 'run_started',
+  RUN_COMPLETED: 'run_completed',
+  RUN_FAILED: 'run_failed',
+  SNAPSHOT_SAVED: 'snapshot_saved',
+  SNAPSHOT_RESTORED: 'snapshot_restored',
+};
+
+/**
+ * V0.8: RuntimeEventLog — records the full execution timeline for observability.
+ */
+class RuntimeEventLog {
+  constructor() {
+    this.events = [];
+    this.maxEvents = 1000;
+  }
+
+  /**
+   * Record a runtime event.
+   */
+  record(event) {
+    const ev = {
+      id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+      timestamp: Date.now(),
+      ...event,
+    };
+    this.events.push(ev);
+
+    // Cap the log size
+    if (this.events.length > this.maxEvents) {
+      this.events = this.events.slice(-this.maxEvents);
+    }
+
+    return ev;
+  }
+
+  /**
+   * Get all events for a run.
+   */
+  getEvents(runId) {
+    if (!runId) return [...this.events];
+    return this.events.filter(e => e.runId === runId);
+  }
+
+  /**
+   * Get events for a specific skill.
+   */
+  getSkillEvents(skillId) {
+    return this.events.filter(e => e.skillId === skillId);
+  }
+
+  /**
+   * Get the latest event for a skill.
+   */
+  getLatestSkillEvent(skillId) {
+    const skillEvents = this.getSkillEvents(skillId);
+    return skillEvents.length > 0 ? skillEvents[skillEvents.length - 1] : null;
+  }
+
+  /**
+   * Clear events for a run.
+   */
+  clearEvents(runId) {
+    if (!runId) {
+      this.events = [];
+    } else {
+      this.events = this.events.filter(e => e.runId !== runId);
+    }
+  }
+
+  /**
+   * Get event count.
+   */
+  count(runId) {
+    if (!runId) return this.events.length;
+    return this.events.filter(e => e.runId === runId).length;
+  }
+
+  /**
+   * Serialize for persistence.
+   */
+  serialize() {
+    return {
+      events: this.events,
+      maxEvents: this.maxEvents,
+    };
+  }
+
+  /**
+   * Deserialize from persistence.
+   */
+  static deserialize(data) {
+    const log = new RuntimeEventLog();
+    log.events = data.events || [];
+    log.maxEvents = data.maxEvents || 1000;
+    return log;
+  }
+}
+
+// ── Runtime Snapshot ──────────────────────────────────────
+
+/**
+ * V0.8: RuntimeSnapshot — captures the full state of a run at a point in time.
+ */
+function createSnapshot(runId, runtimeContext, evidenceRegistry, eventLog, status) {
+  return {
+    id: `snap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    runId,
+    timestamp: Date.now(),
+    status: status || 'unknown',
+    runtimeContext: runtimeContext ? runtimeContext.serialize() : null,
+    evidenceRegistry: evidenceRegistry ? evidenceRegistry.serialize() : null,
+    eventLog: eventLog ? eventLog.serialize() : null,
+  };
+}
+
+/**
+ * V0.8: Restore a RuntimeSnapshot into fresh runtime objects.
+ */
+function restoreSnapshot(snapshot, registry) {
+  if (!snapshot) return null;
+
+  const ctx = new SkillRuntimeContext(snapshot.runId);
+  if (snapshot.runtimeContext) {
+    const restored = SkillRuntimeContext.deserialize(snapshot.runtimeContext, registry);
+    Object.assign(ctx, restored);
+  }
+
+  const evRegistry = new EvidenceRegistry();
+  if (snapshot.evidenceRegistry) {
+    const restoredEv = EvidenceRegistry.deserialize(snapshot.evidenceRegistry);
+    Object.assign(evRegistry, restoredEv);
+  }
+
+  const eventLog = new RuntimeEventLog();
+  if (snapshot.eventLog) {
+    const restoredEv = RuntimeEventLog.deserialize(snapshot.eventLog);
+    Object.assign(eventLog, restoredEv);
+  }
+
+  return {
+    runtimeContext: ctx,
+    evidenceRegistry: evRegistry,
+    eventLog,
+    restoredAt: Date.now(),
+  };
+}
+
+// ── Runtime Persistence ───────────────────────────────────
+
+/**
+ * V0.8: RuntimePersistence — pluggable adapter for saving/loading snapshots.
+ * Default implementation uses in-memory storage.
+ */
+class RuntimePersistence {
+  constructor(adapter) {
+    this.adapter = adapter || new MemoryPersistenceAdapter();
+  }
+
+  /**
+   * Save a snapshot.
+   */
+  async save(snapshot) {
+    return this.adapter.save(snapshot);
+  }
+
+  /**
+   * Load a snapshot by runId.
+   */
+  async load(runId) {
+    return this.adapter.load(runId);
+  }
+
+  /**
+   * Delete a snapshot by runId.
+   */
+  async delete(runId) {
+    return this.adapter.delete(runId);
+  }
+
+  /**
+   * List all saved snapshot runIds.
+   */
+  async list() {
+    return this.adapter.list();
+  }
+}
+
+/**
+ * V0.8: In-memory persistence adapter (default).
+ */
+class MemoryPersistenceAdapter {
+  constructor() {
+    this.store = new Map();
+  }
+
+  async save(snapshot) {
+    this.store.set(snapshot.runId, JSON.parse(JSON.stringify(snapshot)));
+    return { ok: true, runId: snapshot.runId };
+  }
+
+  async load(runId) {
+    return this.store.get(runId) || null;
+  }
+
+  async delete(runId) {
+    return this.store.delete(runId);
+  }
+
+  async list() {
+    return Array.from(this.store.keys());
+  }
+}
+
+// ── Lifecycle Entry Unification ───────────────────────────
+
+/**
+ * V0.8: Unified lifecycle transition — the ONLY public entry point.
+ * transitionSkillStatus is now internal-only.
+ * All external code MUST use safeTransitionSkillStatus.
+ */
+function transitionSkillStatusInternal(skill, newStatus) {
+  // Internal: bypasses guard, for use within this module only
+  if (!skill) return false;
+  skill.status = newStatus;
+  skill.updatedAt = Date.now();
+  return true;
+}
+
 // ── Skill ↔ Plan Binding ──────────────────────────────────
 
 /**
@@ -927,4 +1173,11 @@ export {
   runSkillVerification,
   safeTransitionSkillStatus,
   canTransitionSkillStatus,
+  // V0.8: Observability & Persistence
+  RUNTIME_EVENT_TYPES,
+  RuntimeEventLog,
+  createSnapshot,
+  restoreSnapshot,
+  RuntimePersistence,
+  MemoryPersistenceAdapter,
 };

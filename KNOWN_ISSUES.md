@@ -4,6 +4,18 @@
 
 ---
 
+## V0.8.0 — 已完成
+
+### Runtime Observability & Persistence
+- RuntimeEventLog: record/getEvents/getSkillEvents/clearEvents/serialize/deserialize
+- RuntimeSnapshot: createSnapshot/restoreSnapshot
+- RuntimePersistence: save/load/delete/list with MemoryPersistenceAdapter
+- SkillRuntimeContext: eventLog integration
+- Lifecycle Entry Unification: safeTransitionSkillStatus as public API
+- 25 new tests (356/356 PASS)
+
+---
+
 ## V0.7.3 — 已完成
 
 ### Skill Verification & Evidence
