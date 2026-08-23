@@ -2,7 +2,7 @@
  * agent/runtime/policy.js — Runtime Policy Context
  *
  * V0.8.3 (Pre-V0.9 Cleanup)
- * - RuntimePolicyContext: unified permission and execution context
+ * V0.9.0.1: skillId instead of skill object for clean serialization
  *
  * Design:
  *   Permission is currently bound to Skill only.
@@ -17,8 +17,6 @@
  *   - Time-based restrictions (future)
  */
 
-import { SKILL_STATUS } from '../skill/lifecycle.js';
-
 /**
  * V0.8.3: RuntimePolicyContext — unified permission & execution context.
  *
@@ -28,13 +26,17 @@ import { SKILL_STATUS } from '../skill/lifecycle.js';
  * 3. Provides a single evaluate() entry point for tool permission checks
  *
  * Future V0.9 Policy Engine will build on this foundation.
+ *
+ * V0.9.0.1: Uses skillId instead of skill object for clean serialization.
+ * Skill is resolved at runtime via registry, not stored in context.
  */
 class RuntimePolicyContext {
   constructor(options = {}) {
-    this.environment = options.environment || 'development'; // development/staging/production
+    this.environment = options.environment || 'development';
     this.user = options.user || null;
     this.workspace = options.workspace || null;
-    this.skill = options.skill || null;       // current active skill
+    // V0.9.0.1: Store skillId, not skill object — clean serialization
+    this.skillId = options.skillId || (options.skill ? options.skill.id : null);
     this.allowedTools = options.allowedTools || [];
     this.restrictions = options.restrictions || [];
     this.sessionId = options.sessionId || null;
@@ -49,11 +51,15 @@ class RuntimePolicyContext {
    * Priority (highest to lowest):
    *   1. Explicit restrictions (always deny)
    *   2. Environment restrictions
-   *  3. Workspace restrictions
-   *   4. Skill tool list
-   *   5. Allowed tools list
+   *   3. Skill tool list (resolved via skillTools param)
+   *   4. Allowed tools list
+   *   5. Available tools
+   *
+   * @param {string} toolName - Tool to check
+   * @param {string[]} availableTools - Tools available in this run
+   * @param {string[]} [skillTools] - Tools allowed by the active skill (resolved externally)
    */
-  isToolAllowed(toolName, availableTools) {
+  isToolAllowed(toolName, availableTools, skillTools) {
     // 1. Explicit restrictions always deny
     for (const r of this.restrictions) {
       if (r.type === 'deny' && r.tools.includes(toolName)) {
@@ -72,12 +78,9 @@ class RuntimePolicyContext {
       }
     }
 
-    // 3. Skill-based check (if a skill is active)
-    if (this.skill) {
-      const skillTools = this.skill.tools || [];
-      if (skillTools.length > 0 && !skillTools.includes(toolName)) {
-        return false;
-      }
+    // 3. Skill-based check (if skillTools provided)
+    if (skillTools && skillTools.length > 0 && !skillTools.includes(toolName)) {
+      return false;
     }
 
     // 4. Allowed tools check
@@ -105,30 +108,27 @@ class RuntimePolicyContext {
   }
 
   /**
-   * Create a child context for a specific skill.
+   * V0.9.0.1: Create a child context for a specific skill.
+   * Uses skillId (not skill object) for clean serialization.
    */
   forSkill(skill) {
     return new RuntimePolicyContext({
       ...this,
-      skill,
-      // Inherit restrictions from parent
+      skillId: skill.id,
       restrictions: [...this.restrictions],
     });
   }
 
   /**
    * Serialize for persistence.
+   * V0.9.0.1: skillId only — no skill object.
    */
   serialize() {
     return {
       environment: this.environment,
       user: this.user,
       workspace: this.workspace,
-      skill: this.skill ? {
-        id: this.skill.id,
-        name: this.skill.name,
-        tools: this.skill.tools,
-      } : null,
+      skillId: this.skillId,
       allowedTools: this.allowedTools,
       restrictions: this.restrictions,
       sessionId: this.sessionId,
@@ -139,6 +139,7 @@ class RuntimePolicyContext {
 
   /**
    * Deserialize from persistence.
+   * V0.9.0.1: skillId only — resolve via registry at runtime.
    */
   static deserialize(data) {
     if (!data) return new RuntimePolicyContext();
@@ -146,7 +147,7 @@ class RuntimePolicyContext {
       environment: data.environment,
       user: data.user,
       workspace: data.workspace,
-      skill: data.skill,
+      skillId: data.skillId,
       allowedTools: data.allowedTools,
       restrictions: data.restrictions,
       sessionId: data.sessionId,

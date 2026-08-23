@@ -65,13 +65,15 @@ function createToolExecution(runId, taskId, toolName, args, options = {}) {
  * Returns { allowed, reason, policySource }.
  *
  * Final permission = Skill Capability ∩ Runtime Policy ∩ Environment Constraint
+ *
+ * V0.9.0.1: Passes skillTools to isToolAllowed for proper skill-based checking.
  */
-function checkToolPermission(toolExec, policyContext, availableTools) {
+function checkToolPermission(toolExec, policyContext, availableTools, skillTools) {
   if (!policyContext) {
     return { allowed: true, reason: 'No policy context', policySource: 'none' };
   }
 
-  const allowed = policyContext.isToolAllowed(toolExec.toolName, availableTools);
+  const allowed = policyContext.isToolAllowed(toolExec.toolName, availableTools, skillTools);
   return {
     allowed,
     reason: allowed ? 'Allowed by policy' : `Tool "${toolExec.toolName}" denied by policy`,
@@ -118,7 +120,12 @@ function completePolicyCheck(toolExec, emitter, context = {}) {
     return { allowed: false, reason: `Cannot policy-check in status: ${toolExec.status}`, policySource: 'none' };
   }
 
-  const result = context.policyResult || checkToolPermission(toolExec, context.policyContext, context.availableTools);
+  const result = context.policyResult || checkToolPermission(
+    toolExec,
+    context.policyContext,
+    context.availableTools,
+    context.skillTools
+  );
   toolExec.policyCheck = result;
 
   if (result.allowed) {

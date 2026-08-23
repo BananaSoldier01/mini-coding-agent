@@ -4,6 +4,17 @@
 
 ---
 
+## V0.9.0.1 — Runtime Consistency Patch（已完成）
+
+### Consistency Fixes
+- Task 生命周期约束: RUNNING 不能直接 COMPLETED（必须经过 VERIFYING）
+- PolicyContext: skillId 替代 skill object，干净序列化
+- checkToolPermission: 支持 skillTools 参数
+- RuntimeContext 职责收缩: 业务逻辑未来下沉到 service
+- 17 new tests (447/447 PASS)
+
+---
+
 ## V0.9.0 — Runtime Control Plane Foundation（已完成）
 
 ### Control Plane Foundation

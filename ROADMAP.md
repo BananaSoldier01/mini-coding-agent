@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.9.0 — Runtime Control Plane Foundation**（已完成）
+**V0.9.0.1 — Runtime Consistency Patch**（已完成）
 
-**Next: V0.9.1 — Planner Integration**
+**Next: V0.9.1 — Plan Runtime**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,14 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.9.0.1 — Runtime Consistency Patch
+- Task 生命周期约束: RUNNING 不能直接 COMPLETED，必须经过 VERIFYING（与 Skill 一致）
+- PolicyContext 序列化: skillId 替代 skill object，避免序列化污染
+- checkToolPermission: 支持 skillTools 参数传递
+- RuntimeContext 职责收缩: 文档约束，业务逻辑未来下沉到 service
+- 17 new tests (447/447 PASS)
 - 状态：已完成
 
 ### V0.9.0 — Runtime Control Plane Foundation

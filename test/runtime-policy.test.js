@@ -20,7 +20,7 @@ test('Policy: RuntimePolicyContext constructor sets defaults', () => {
   assert.strictEqual(ctx.environment, 'development');
   assert.strictEqual(ctx.user, null);
   assert.strictEqual(ctx.workspace, null);
-  assert.strictEqual(ctx.skill, null);
+  assert.strictEqual(ctx.skillId, null);
   assert.deepStrictEqual(ctx.allowedTools, []);
   assert.deepStrictEqual(ctx.restrictions, []);
   assert.ok(ctx.createdAt > 0);
@@ -61,9 +61,9 @@ test('Policy: isToolAllowed respects environment restrictions', () => {
 
 test('Policy: isToolAllowed respects skill tool list', () => {
   const skill = { id: 's1', name: 'Test', tools: ['read_file'] };
-  const ctx = new RuntimePolicyContext({ skill });
-  assert.ok(ctx.isToolAllowed('read_file', ['read_file', 'write_file']));
-  assert.ok(!ctx.isToolAllowed('write_file', ['read_file', 'write_file']));
+  const ctx = new RuntimePolicyContext({ skillId: 's1' });
+  assert.ok(ctx.isToolAllowed('read_file', ['read_file', 'write_file'], skill.tools));
+  assert.ok(!ctx.isToolAllowed('write_file', ['read_file', 'write_file'], skill.tools));
 });
 
 test('Policy: isToolAllowed respects allowedTools list', () => {
@@ -99,7 +99,7 @@ test('Policy: multiple restrictions accumulate', () => {
 
 // ── Test 4: forSkill ──────────────────────────────────────
 
-test('Policy: forSkill creates child context with skill', () => {
+test('Policy: forSkill creates child context with skillId', () => {
   const parent = new RuntimePolicyContext({
     allowedTools: ['read_file'],
     restrictions: [{ type: 'deny', tools: ['run_shell'] }],
@@ -107,10 +107,10 @@ test('Policy: forSkill creates child context with skill', () => {
   const skill = { id: 's1', name: 'Test', tools: ['read_file', 'write_file'] };
 
   const child = parent.forSkill(skill);
-  assert.strictEqual(child.skill, skill);
+  assert.strictEqual(child.skillId, 's1');
   assert.strictEqual(child.restrictions.length, 1);
-  assert.ok(child.isToolAllowed('read_file', ['read_file', 'write_file']));
-  assert.ok(!child.isToolAllowed('write_file', ['read_file', 'write_file']));
+  assert.ok(child.isToolAllowed('read_file', ['read_file', 'write_file'], skill.tools));
+  assert.ok(!child.isToolAllowed('write_file', ['read_file', 'write_file'], skill.tools));
   assert.ok(!child.isToolAllowed('run_shell', ['run_shell']));
 });
 
@@ -121,6 +121,7 @@ test('Policy: serialize captures all fields', () => {
     environment: 'production',
     user: { id: 'u1' },
     workspace: '/proj',
+    skillId: 's1',
     allowedTools: ['read_file'],
     restrictions: [{ type: 'deny', tools: ['run_shell'] }],
     sessionId: 'sess-1',
@@ -131,6 +132,7 @@ test('Policy: serialize captures all fields', () => {
   assert.strictEqual(serialized.environment, 'production');
   assert.deepStrictEqual(serialized.user, { id: 'u1' });
   assert.strictEqual(serialized.workspace, '/proj');
+  assert.strictEqual(serialized.skillId, 's1');
   assert.deepStrictEqual(serialized.allowedTools, ['read_file']);
   assert.strictEqual(serialized.restrictions.length, 1);
   assert.strictEqual(serialized.sessionId, 'sess-1');
@@ -219,9 +221,9 @@ test('Policy: forSkill restricts to skill tools only', () => {
   const skill = { id: 's1', name: 'Test', tools: ['git_status', 'git_diff'] };
   const ctx = parent.forSkill(skill);
 
-  assert.ok(ctx.isToolAllowed('git_status', ['git_status', 'git_diff', 'run_shell']));
-  assert.ok(ctx.isToolAllowed('git_diff', ['git_status', 'git_diff', 'run_shell']));
-  assert.ok(!ctx.isToolAllowed('run_shell', ['git_status', 'git_diff', 'run_shell']));
+  assert.ok(ctx.isToolAllowed('git_status', ['git_status', 'git_diff', 'run_shell'], skill.tools));
+  assert.ok(ctx.isToolAllowed('git_diff', ['git_status', 'git_diff', 'run_shell'], skill.tools));
+  assert.ok(!ctx.isToolAllowed('run_shell', ['git_status', 'git_diff', 'run_shell'], skill.tools));
 });
 
 test('Policy: restriction overrides skill permission', () => {
@@ -231,6 +233,6 @@ test('Policy: restriction overrides skill permission', () => {
   const ctx = parent.forSkill(skill);
 
   // Even though skill allows git_status, restriction denies it
-  assert.ok(!ctx.isToolAllowed('git_status', ['git_status', 'git_diff']));
-  assert.ok(ctx.isToolAllowed('git_diff', ['git_status', 'git_diff']));
+  assert.ok(!ctx.isToolAllowed('git_status', ['git_status', 'git_diff'], skill.tools));
+  assert.ok(ctx.isToolAllowed('git_diff', ['git_status', 'git_diff'], skill.tools));
 });

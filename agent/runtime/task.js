@@ -22,7 +22,8 @@ const TASK_STATUS = {
 
 const TASK_TRANSITIONS = {
   [TASK_STATUS.PENDING]: [TASK_STATUS.RUNNING, TASK_STATUS.CANCELLED],
-  [TASK_STATUS.RUNNING]: [TASK_STATUS.VERIFYING, TASK_STATUS.COMPLETED, TASK_STATUS.FAILED, TASK_STATUS.CANCELLED],
+  // V0.9.0.1: RUNNING cannot directly go to COMPLETED — must pass through VERIFYING
+  [TASK_STATUS.RUNNING]: [TASK_STATUS.VERIFYING, TASK_STATUS.FAILED, TASK_STATUS.CANCELLED],
   [TASK_STATUS.VERIFYING]: [TASK_STATUS.COMPLETED, TASK_STATUS.FAILED, TASK_STATUS.CANCELLED],
   [TASK_STATUS.COMPLETED]: [],
   [TASK_STATUS.FAILED]: [],
@@ -83,11 +84,15 @@ function startTask(task, emitter, context = {}) {
 /**
  * Complete a task — VERIFYING → COMPLETED.
  * Emits TASK_COMPLETED event.
+ * V0.9.0.1: Strict — must be in VERIFYING state (cannot complete directly from RUNNING).
  */
 function completeTask(task, emitter, context = {}) {
   if (!task) return false;
-  if (task.status !== TASK_STATUS.VERIFYING && task.status !== TASK_STATUS.RUNNING) {
-    console.warn(`[Task] Cannot complete task in status: ${task.status}`);
+  if (task.status !== TASK_STATUS.VERIFYING) {
+    console.warn(
+      `[Task] Cannot complete task in status: ${task.status}. ` +
+      `Task must go through VERIFYING before COMPLETED.`
+    );
     return false;
   }
 
