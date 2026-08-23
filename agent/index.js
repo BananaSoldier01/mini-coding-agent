@@ -498,28 +498,41 @@ async function runAgent(opts) {
           continue;
         }
 
-        // ── V0.7.1: Skill Tool Permission Check ────────────
-        // Skills must not bypass the Tool Runtime.
-        // If a skill is active, verify the tool is allowed for that skill.
+        // ── V0.7.2: Skill Tool Permission Check ────────────
+        // Multi-Skill Permission Model: ANY active skill allowing the tool → permitted.
+        // Skills cannot override Runtime Security Policy (System > Runtime > Skill).
         if (activePlan?.skills && activePlan.skills.length > 0) {
-          const { assertSkillToolAllowed, getPlanSkill } = await import('./skill.js');
+          const { isToolAllowedForSkill } = await import('./skill.js');
           const availableToolNames = Array.from(toolMap.keys());
+          const activeSkillList = [];
+
           for (const binding of activePlan.skills) {
-            // Only enforce if the skill is loaded and available
             const skill = registry?.get(binding.skillId);
-            if (skill && skill.status === 'available') {
-              try {
-                assertSkillToolAllowed(skill, toolName, availableToolNames);
-              } catch (err) {
-                emit(onEvent, {
-                  type: 'tool_result',
-                  toolCall: { id: tc.id, name: toolName, args },
-                  result: { error: err.message, denied: true, skillId: skill.id },
-                });
-                messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: err.message }) });
-                turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: err.message }) });
-                continue;
-              }
+            if (skill && (skill.status === 'available' || skill.status === 'running')) {
+              activeSkillList.push(skill);
+            }
+          }
+
+          if (activeSkillList.length > 0) {
+            // V0.7.2: ANY active skill allowing the tool → permitted
+            const anySkillAllows = activeSkillList.some(skill =>
+              isToolAllowedForSkill(skill, toolName, availableToolNames)
+            );
+
+            if (!anySkillAllows) {
+              const skillIds = activeSkillList.map(s => s.id).join(', ');
+              const err = new Error(
+                `Tool "${toolName}" not allowed by any active skill (${skillIds}). ` +
+                `Allowed tools: ${activeSkillList[0].tools.length > 0 ? activeSkillList[0].tools.join(', ') : '(none)'}`
+              );
+              emit(onEvent, {
+                type: 'tool_result',
+                toolCall: { id: tc.id, name: toolName, args },
+                result: { error: err.message, denied: true, skillIds: activeSkillList.map(s => s.id) },
+              });
+              messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: err.message }) });
+              turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: err.message }) });
+              continue;
             }
           }
         }

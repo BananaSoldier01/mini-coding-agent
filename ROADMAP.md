@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.7.1 — Skill Execution Integration**（已完成）
+**V0.7.2 — Skill Runtime Hardening**（已完成）
 
 **Next: V0.7.3 — Skill Verification & Evidence**
 
@@ -126,6 +126,14 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.7.2 — Skill Runtime Hardening
+- Multi-Skill Permission Model: ANY active skill allows tool (not ALL)
+- Skill Lifecycle Runtime Integration: activate/start/complete/fail/cancel helpers
+- Instruction Provenance: source/priority tracked per instruction block
+- SkillRuntimeContext: unified context (activeSkills, permissions, lifecycle, evidenceRefs)
+- 23 new tests (305/305 PASS)
 - 状态：已完成
 
 ### V0.7.1 — Skill Execution Integration

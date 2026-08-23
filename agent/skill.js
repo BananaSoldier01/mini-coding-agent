@@ -316,6 +316,265 @@ class SkillRegistry {
   }
 }
 
+// ── Skill Runtime Lifecycle Helpers ───────────────────────
+
+/**
+ * V0.7.2: Activate skills for a run — transition from AVAILABLE to RUNNING.
+ * Called when the Run starts executing.
+ */
+function activateSkillsForRun(registry, skillIds) {
+  const activated = [];
+  for (const id of skillIds) {
+    const skill = registry.get(id);
+    if (skill && skill.status === SKILL_STATUS.AVAILABLE) {
+      transitionSkillStatus(skill, SKILL_STATUS.RUNNING);
+      activated.push(skill);
+    }
+  }
+  return activated;
+}
+
+/**
+ * V0.7.2: Start skill verification — transition from RUNNING to VERIFYING.
+ */
+function startSkillVerification(registry, skillId) {
+  const skill = registry.get(skillId);
+  if (skill && skill.status === SKILL_STATUS.RUNNING) {
+    transitionSkillStatus(skill, SKILL_STATUS.VERIFYING);
+    return skill;
+  }
+  return null;
+}
+
+/**
+ * V0.7.2: Complete a skill — transition from VERIFYING to COMPLETED.
+ */
+function completeSkill(registry, skillId) {
+  const skill = registry.get(skillId);
+  if (skill && (skill.status === SKILL_STATUS.VERIFYING || skill.status === SKILL_STATUS.RUNNING)) {
+    transitionSkillStatus(skill, SKILL_STATUS.COMPLETED);
+    return skill;
+  }
+  return null;
+}
+
+/**
+ * V0.7.2: Fail a skill — transition to FAILED.
+ */
+function failSkill(registry, skillId) {
+  const skill = registry.get(skillId);
+  if (skill && (skill.status === SKILL_STATUS.RUNNING || skill.status === SKILL_STATUS.VERIFYING)) {
+    transitionSkillStatus(skill, SKILL_STATUS.FAILED);
+    return skill;
+  }
+  return null;
+}
+
+/**
+ * V0.7.2: Cancel all skills — transition to CANCELLED.
+ */
+function cancelAllSkills(registry) {
+  const cancelled = [];
+  for (const skill of registry.list()) {
+    if (skill.status !== SKILL_STATUS.COMPLETED && skill.status !== SKILL_STATUS.FAILED) {
+      transitionSkillStatus(skill, SKILL_STATUS.CANCELLED);
+      cancelled.push(skill);
+    }
+  }
+  return cancelled;
+}
+
+/**
+ * V0.7.2: Get skill lifecycle summary for a run.
+ */
+function getSkillLifecycleSummary(registry) {
+  const skills = registry.list();
+  return {
+    total: skills.length,
+    registered: skills.filter(s => s.status === SKILL_STATUS.REGISTERED).length,
+    available: skills.filter(s => s.status === SKILL_STATUS.AVAILABLE).length,
+    running: skills.filter(s => s.status === SKILL_STATUS.RUNNING).length,
+    verifying: skills.filter(s => s.status === SKILL_STATUS.VERIFYING).length,
+    completed: skills.filter(s => s.status === SKILL_STATUS.COMPLETED).length,
+    failed: skills.filter(s => s.status === SKILL_STATUS.FAILED).length,
+    cancelled: skills.filter(s => s.status === SKILL_STATUS.CANCELLED).length,
+  };
+}
+
+// ── Instruction Provenance ─────────────────────────────────
+
+/**
+ * V0.7.2: Build instruction context with provenance tracking.
+ * Returns an array of typed instruction blocks, NOT a flat string.
+ * The final prompt string is built by the caller from these blocks.
+ */
+function buildInstructionProvenance(skill, baseBlocks = []) {
+  const blocks = [...baseBlocks];
+
+  if (skill && skill.instructions) {
+    blocks.push({
+      source: 'skill',
+      skillId: skill.id,
+      skillName: skill.name,
+      priority: SKILL_INSTRUCTION_PRIORITY.SKILL_INSTRUCTION,
+      timestamp: Date.now(),
+      content: skill.instructions,
+    });
+  }
+
+  return blocks;
+}
+
+/**
+ * V0.7.2: Sort instruction blocks by priority (highest first).
+ */
+function sortInstructionsByPriority(blocks) {
+  return [...blocks].sort((a, b) => (b.priority || 0) - (a.priority || 0));
+}
+
+/**
+ * V0.7.2: Render instruction blocks to final prompt string.
+ */
+function renderInstructionsToPrompt(blocks) {
+  const sorted = sortInstructionsByPriority(blocks);
+  return sorted.map(b => {
+    if (b.source === 'skill') {
+      return `[Skill: ${b.skillName} v${b.skillId}]\n${b.content}\n[End Skill: ${b.skillName}]`;
+    }
+    return b.content;
+  }).join('\n\n');
+}
+
+// ── Skill Runtime Context ──────────────────────────────────
+
+/**
+ * V0.7.2: Unified Skill Runtime Context.
+ * Centralizes skill state instead of scattering across agent/index.js, plan.js, verification.js.
+ */
+class SkillRuntimeContext {
+  constructor(runId) {
+    this.runId = runId;
+    this.activeSkills = [];       // [{ skill, status, activatedAt }]
+    this.permissions = new Map(); // skillId → allowedTools[]
+    this.lifecycle = new Map();   // skillId → { state, transitions[] }
+    this.evidenceRefs = new Map(); // skillId → [evidenceIds]
+    this.instructionBlocks = [];  // provenance-tracked instructions
+  }
+
+  /**
+   * Add a skill to the runtime context.
+   */
+  addSkill(skill) {
+    if (!this.activeSkills.find(s => s.skill.id === skill.id)) {
+      this.activeSkills.push({
+        skill,
+        status: skill.status,
+        activatedAt: Date.now(),
+      });
+      this.lifecycle.set(skill.id, {
+        state: skill.status,
+        transitions: [{ status: skill.status, timestamp: Date.now() }],
+      });
+      this.permissions.set(skill.id, skill.tools);
+    }
+  }
+
+  /**
+   * Update skill lifecycle state with transition tracking.
+   */
+  updateSkillStatus(skillId, newStatus) {
+    const entry = this.activeSkills.find(s => s.skill.id === skillId);
+    if (entry) {
+      entry.status = newStatus;
+    }
+    const lc = this.lifecycle.get(skillId);
+    if (lc) {
+      lc.state = newStatus;
+      lc.transitions.push({ status: newStatus, timestamp: Date.now() });
+    }
+  }
+
+  /**
+   * Add an instruction block with provenance.
+   */
+  addInstructionBlock(block) {
+    this.instructionBlocks.push({
+      ...block,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Add an evidence reference.
+   */
+  addEvidenceRef(skillId, evidenceId) {
+    if (!this.evidenceRefs.has(skillId)) {
+      this.evidenceRefs.set(skillId, []);
+    }
+    this.evidenceRefs.get(skillId).push(evidenceId);
+  }
+
+  /**
+   * Get skills by status.
+   */
+  getSkillsByStatus(status) {
+    return this.activeSkills.filter(s => s.status === status);
+  }
+
+  /**
+   * Check if a tool is allowed across all active skills (ANY model).
+   */
+  isToolAllowed(toolName, availableTools) {
+    if (this.activeSkills.length === 0) return true; // No skills → all tools allowed
+    return this.activeSkills.some(entry =>
+      isToolAllowedForSkill(entry.skill, toolName, availableTools)
+    );
+  }
+
+  /**
+   * Serialize for session persistence.
+   */
+  serialize() {
+    return {
+      runId: this.runId,
+      activeSkills: this.activeSkills.map(s => ({
+        skillId: s.skill.id,
+        status: s.status,
+        activatedAt: s.activatedAt,
+      })),
+      permissions: Object.fromEntries(this.permissions),
+      lifecycle: Object.fromEntries(this.lifecycle),
+      evidenceRefs: Object.fromEntries(this.evidenceRefs),
+      instructionBlocks: this.instructionBlocks,
+    };
+  }
+
+  /**
+   * Deserialize from session.
+   */
+  static deserialize(data, registry) {
+    const ctx = new SkillRuntimeContext(data.runId);
+    if (data.activeSkills) {
+      for (const s of data.activeSkills) {
+        const skill = registry.get(s.skillId);
+        if (skill) {
+          ctx.addSkill(skill);
+          ctx.updateSkillStatus(s.skillId, s.status);
+        }
+      }
+    }
+    if (data.evidenceRefs) {
+      for (const [skillId, refs] of Object.entries(data.evidenceRefs)) {
+        ctx.evidenceRefs.set(skillId, refs);
+      }
+    }
+    if (data.instructionBlocks) {
+      ctx.instructionBlocks = data.instructionBlocks;
+    }
+    return ctx;
+  }
+}
+
 // ── Skill ↔ Plan Binding ──────────────────────────────────
 
 /**
@@ -407,4 +666,15 @@ export {
   getPlanSkill,
   buildSkillContextForLLM,
   assertSkillToolAllowed,
+  // V0.7.2: Runtime Hardening
+  activateSkillsForRun,
+  startSkillVerification,
+  completeSkill,
+  failSkill,
+  cancelAllSkills,
+  getSkillLifecycleSummary,
+  buildInstructionProvenance,
+  sortInstructionsByPriority,
+  renderInstructionsToPrompt,
+  SkillRuntimeContext,
 };

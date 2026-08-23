@@ -4,6 +4,17 @@
 
 ---
 
+## V0.7.2 — 已完成
+
+### Skill Runtime Hardening
+- Multi-Skill Permission: ANY active skill allows tool (not ALL must allow)
+- Skill Lifecycle Runtime: activateSkillsForRun/startSkillVerification/completeSkill/failSkill/cancelAllSkills
+- Instruction Provenance: source/priority tracked per block, not flat string
+- SkillRuntimeContext: unified context with activeSkills/permissions/lifecycle/evidenceRefs
+- 23 new tests (305/305 PASS)
+
+---
+
 ## V0.7.1 — 已完成
 
 ### Skill Execution Integration
