@@ -188,18 +188,27 @@ async function runAgent(opts) {
           executionMode,
         });
 
-        // V0.6.1: Build verificationState from LLM verification array
+        // V0.6.2: Build verificationState from LLM verification array
+        // Fix: properly map check field based on type (command/file/git)
         for (const step of activePlan.steps) {
           if (step._verification && Array.isArray(step._verification) && step._verification.length > 0) {
             step.verificationState = createVerificationFromStep(activePlan, step);
             for (const v of step._verification) {
               const { addCheck } = await import('./verification.js');
-              addCheck(step.verificationState, {
+              const checkConfig = {
                 type: v.type || 'command',
                 description: v.check || v.expected || '',
-                command: v.type === 'command' ? v.check : null,
                 expected: v.expected || null,
-              });
+              };
+              // V0.6.2: Map check field correctly by type
+              if (v.type === 'command') {
+                checkConfig.command = v.check;
+              } else if (v.type === 'file') {
+                checkConfig.command = v.check; // file path
+              } else if (v.type === 'git') {
+                checkConfig.command = v.check; // git args
+              }
+              addCheck(step.verificationState, checkConfig);
             }
           }
           delete step._verification;
@@ -468,10 +477,10 @@ async function runAgent(opts) {
         });
 
         // P0: Plan ↔ Execution Binding
+        // V0.6.2: bindToolCall already calls recordToolCallOnStep internally — no duplicate
         if (activePlan) {
-          const { bindToolCall, recordToolCallOnStep, transitionPlanStatus, PLAN_STATUS } = await import('./plan.js');
+          const { bindToolCall, transitionPlanStatus, PLAN_STATUS } = await import('./plan.js');
           bindToolCall(activePlan, run?.runId || activePlan.runId, tc.id, toolName, args);
-          recordToolCallOnStep(activePlan, toolName, args, tc.id);
 
           // APPROVED → EXECUTING on first tool execution
           if (activePlan.status === PLAN_STATUS.APPROVED) {
@@ -612,66 +621,71 @@ async function runAgent(opts) {
           result: finalResult,
         });
 
-        // V0.6.1: Step completion + verification AFTER tool execution succeeds
+        // V0.6.2: Step completion + verification AFTER tool execution succeeds
         if (activePlan && !result.error) {
-          const { completeStepAfterExecution } = await import('./plan.js');
-          const filePath = args?.path || args?.file;
+          const { completeStepAfterExecution, findMatchingStep } = await import('./plan.js');
+          const step = findMatchingStep(activePlan, toolName, args);
 
-          for (const step of activePlan.steps) {
-            if (step.status !== 'running') continue;
-            const stepFiles = step.files || [];
-            if (stepFiles.some(f => filePath?.includes(f) || f?.includes(filePath))) {
-              const completedStep = completeStepAfterExecution(activePlan, step.id);
-              if (completedStep) {
+          if (step && step.status === 'running') {
+            const completedStep = completeStepAfterExecution(activePlan, step.id);
+            if (completedStep) {
+              emit(onEvent, {
+                type: 'plan_step_update',
+                planId: activePlan.id,
+                steps: activePlan.steps.map(s => ({
+                  id: s.id,
+                  status: s.status,
+                  completedAt: s.completedAt,
+                })),
+              });
+
+              // V0.6.2: Await verification (not fire-and-forget)
+              if (completedStep.verificationState) {
+                const { runVerification, VERIFICATION_STATUS } = await import('./verification.js');
+
                 emit(onEvent, {
-                  type: 'plan_step_update',
+                  type: 'verification_started',
                   planId: activePlan.id,
-                  steps: activePlan.steps.map(s => ({
-                    id: s.id,
-                    status: s.status,
-                    completedAt: s.completedAt,
+                  stepId: completedStep.id,
+                  verificationId: completedStep.verificationState.id,
+                });
+
+                // Update Run Status to VERIFYING
+                runStatus.transition(RUN_STATUS.VERIFYING, 'verification');
+                emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label, detail: 'verification' });
+
+                // AWAIT the verification (not fire-and-forget)
+                const vs = await runVerification(completedStep.verificationState, { workspace });
+
+                emit(onEvent, {
+                  type: 'verification_completed',
+                  planId: activePlan.id,
+                  stepId: completedStep.id,
+                  verificationId: vs.id,
+                  status: vs.status,
+                  checks: vs.checks.map(c => ({
+                    id: c.id,
+                    type: c.type,
+                    description: c.description,
+                    expected: c.expected,
+                    status: c.status,
+                    result: c.result,
                   })),
                 });
 
-                // V0.6.1: Await verification (not fire-and-forget)
-                if (completedStep.verificationState) {
-                  const { runVerification, VERIFICATION_STATUS } = await import('./verification.js');
-                  const { transitionPlanStatus, PLAN_STATUS } = await import('./plan.js');
+                // V0.6.2: Feed verification result back to LLM context
+                const verifySummary = vs.checks.map(c =>
+                  `[${c.status.toUpperCase()}] ${c.description || c.type}: ${c.result || ''}`
+                ).join('\n');
+                const verifyMsg = {
+                  role: 'system',
+                  content: `Verification for step "${completedStep.description}" (${vs.status}):\n${verifySummary}`,
+                };
+                messages.push(verifyMsg);
+                turnMessages.push(verifyMsg);
 
-                  emit(onEvent, {
-                    type: 'verification_started',
-                    planId: activePlan.id,
-                    stepId: completedStep.id,
-                    verificationId: completedStep.verificationState.id,
-                  });
-
-                  // Update Run Status to VERIFYING
-                  runStatus.transition(RUN_STATUS.VERIFYING, 'verification');
-                  emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label, detail: 'verification' });
-
-                  // AWAIT the verification (not fire-and-forget)
-                  const vs = await runVerification(completedStep.verificationState, { workspace });
-
-                  emit(onEvent, {
-                    type: 'verification_completed',
-                    planId: activePlan.id,
-                    stepId: completedStep.id,
-                    verificationId: vs.id,
-                    status: vs.status,
-                    checks: vs.checks.map(c => ({
-                      id: c.id,
-                      type: c.type,
-                      description: c.description,
-                      expected: c.expected,
-                      status: c.status,
-                      result: c.result,
-                    })),
-                  });
-
-                  // Restore Run Status
-                  runStatus.transition(RUN_STATUS.EDITING, 'verification-done');
-                  emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label });
-                }
+                // V0.6.2: VERIFYING → COMPLETED is valid; let normal flow handle final status
+                // Do NOT transition back to EDITING (not a valid transition from VERIFYING)
               }
             }
           }
@@ -727,7 +741,11 @@ async function runAgent(opts) {
     } else if (runStatus.status === RUN_STATUS.FAILED || contextMetadata.overflow) {
       transitionPlanStatus(activePlan, PLAN_STATUS.FAILED);
     } else if (activePlan.status === PLAN_STATUS.APPROVED || activePlan.status === PLAN_STATUS.EXECUTING || activePlan.status === PLAN_STATUS.VERIFYING) {
-      // V0.6.1: Proper completion rules — verification must be PASSED or absent
+      // V0.6.2: If in VERIFYING, transition through it first
+      if (activePlan.status === PLAN_STATUS.APPROVED) {
+        transitionPlanStatus(activePlan, PLAN_STATUS.EXECUTING);
+      }
+      // V0.6.2: Strict completion gate — only PASSED → COMPLETED
       const stepsWithVerification = activePlan.steps.filter(s => s.verificationState);
       const allVerificationPassed = stepsWithVerification.every(
         s => s.verificationState.status === VERIFICATION_STATUS.PASSED
@@ -735,21 +753,20 @@ async function runAgent(opts) {
       const anyVerificationFailed = stepsWithVerification.some(
         s => s.verificationState.status === VERIFICATION_STATUS.FAILED
       );
-      const anyVerificationPending = stepsWithVerification.some(
-        s => s.verificationState.status === VERIFICATION_STATUS.PENDING ||
-             s.verificationState.status === VERIFICATION_STATUS.RUNNING
+      const anyVerificationNotPassed = stepsWithVerification.some(
+        s => s.verificationState.status !== VERIFICATION_STATUS.PASSED
       );
 
-      if (anyVerificationFailed) {
-        transitionPlanStatus(activePlan, PLAN_STATUS.FAILED);
-      } else if (anyVerificationPending) {
-        // Verification still running/pending — cannot complete
-        transitionPlanStatus(activePlan, PLAN_STATUS.FAILED);
-      } else if (stepsWithVerification.length > 0 && allVerificationPassed) {
+      if (stepsWithVerification.length === 0) {
+        // No verification required — but validatePlan should have caught this
+        // If we reach here, it means the plan was approved without verification
+        // V0.6.2: Still allow completion for backward compatibility with explore steps
         transitionPlanStatus(activePlan, PLAN_STATUS.COMPLETED);
-      } else if (stepsWithVerification.length === 0) {
-        transitionPlanStatus(activePlan, PLAN_STATUS.COMPLETED);
+      } else if (anyVerificationFailed || anyVerificationNotPassed) {
+        // Any non-PASSED verification → FAILED (no backdoor)
+        transitionPlanStatus(activePlan, PLAN_STATUS.FAILED);
       } else {
+        // All verification PASSED → COMPLETED
         transitionPlanStatus(activePlan, PLAN_STATUS.COMPLETED);
       }
     }

@@ -187,9 +187,14 @@ test('Plan: plan-execute 模式可绑定 tool calls', () => {
 
 // ── Test 9: Plan Validation ────────────────────────────
 test('Plan: validatePlan — 有效 Plan', () => {
+  // V0.6.2: modify/command steps must have verification
   const plan = createPlan({
     goal: 'valid',
-    steps: [{ id: 's1', description: 'step 1' }],
+    steps: [
+      { id: 's1', description: 'step 1', type: 'explore', files: [] },
+      { id: 's2', description: 'step 2', type: 'modify', files: ['a.js'],
+        verification: [{ type: 'command', check: 'npm test', expected: 'exit 0' }] },
+    ],
     risks: [],
     files: [],
   });

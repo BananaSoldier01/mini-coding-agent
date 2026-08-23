@@ -19,6 +19,7 @@ const PLAN_STATUS = {
   APPROVED: 'approved',
   REJECTED: 'rejected',
   EXECUTING: 'executing',
+  VERIFYING: 'verifying',
   COMPLETED: 'completed',
   FAILED: 'failed',
   CANCELLED: 'cancelled',
@@ -29,7 +30,8 @@ const PLAN_TRANSITIONS = {
   [PLAN_STATUS.DRAFT]: [PLAN_STATUS.AWAITING_APPROVAL],
   [PLAN_STATUS.AWAITING_APPROVAL]: [PLAN_STATUS.APPROVED, PLAN_STATUS.REJECTED],
   [PLAN_STATUS.APPROVED]: [PLAN_STATUS.EXECUTING, PLAN_STATUS.FAILED, PLAN_STATUS.CANCELLED],
-  [PLAN_STATUS.EXECUTING]: [PLAN_STATUS.COMPLETED, PLAN_STATUS.FAILED, PLAN_STATUS.CANCELLED],
+  [PLAN_STATUS.EXECUTING]: [PLAN_STATUS.VERIFYING, PLAN_STATUS.COMPLETED, PLAN_STATUS.FAILED, PLAN_STATUS.CANCELLED],
+  [PLAN_STATUS.VERIFYING]: [PLAN_STATUS.COMPLETED, PLAN_STATUS.FAILED, PLAN_STATUS.CANCELLED],
   [PLAN_STATUS.COMPLETED]: [],
   [PLAN_STATUS.REJECTED]: [],
   [PLAN_STATUS.FAILED]: [],
@@ -92,6 +94,7 @@ function createPlan(opts = {}) {
 
 /**
  * 验证 Plan 结构。
+ * V0.6.2: 强制 verification — 每个 modify/command 类型的 step 必须有 verification
  */
 function validatePlan(plan) {
   if (!plan || typeof plan !== 'object') {
@@ -107,6 +110,14 @@ function validatePlan(plan) {
     for (const step of plan.steps) {
       if (!step.id || !step.description) {
         errors.push('Each step must have id and description');
+      }
+      // V0.6.2: Enforce verification for modify/command steps
+      if (step.type === 'modify' || step.type === 'command') {
+        const hasVerification = step.verificationState && step.verificationState.checks && step.verificationState.checks.length > 0;
+        const hasVerificationArray = step._verification && Array.isArray(step._verification) && step._verification.length > 0;
+        if (!hasVerification && !hasVerificationArray) {
+          errors.push(`Step "${step.id}" (${step.type}) must have verification checks`);
+        }
       }
     }
   }
@@ -187,16 +198,48 @@ function recordToolCallOnStep(plan, toolName, args, toolCallId) {
 }
 
 /**
- * V0.6.1: Mark step as completed AFTER tool execution succeeds.
+ * V0.6.2: Mark step as completed AFTER tool execution succeeds.
+ * Improved: handles command-type steps and multi-file steps.
  */
 function completeStepAfterExecution(plan, stepId) {
-  if (!plan || !Array.isArray(plan.steps)) return;
+  if (!plan || !Array.isArray(plan.steps)) return null;
   const step = plan.steps.find(s => s.id === stepId);
-  if (step && step.status === 'running') {
-    step.status = 'completed';
-    step.completedAt = Date.now();
-    plan.updatedAt = Date.now();
-    return step;
+  if (!step || step.status !== 'running') return null;
+
+  // V0.6.2: For command-type steps, check if all files in the step are done
+  // For file-based steps, check if all files have been touched
+  if (step.files && step.files.length > 0) {
+    const allFilesTouched = step.files.every(f =>
+      step.toolCalls.some(tc => tc.filePath && (tc.filePath.includes(f) || f.includes(tc.filePath)))
+    );
+    if (!allFilesTouched) return null; // Not all files done yet
+  }
+
+  step.status = 'completed';
+  step.completedAt = Date.now();
+  plan.updatedAt = Date.now();
+  return step;
+}
+
+/**
+ * V0.6.2: Find matching step for a tool call (handles command-type steps too).
+ */
+function findMatchingStep(plan, toolName, args) {
+  if (!plan || !Array.isArray(plan.steps)) return null;
+  const filePath = args?.path || args?.file;
+
+  for (const step of plan.steps) {
+    // Command-type steps match by tool name
+    if (step.type === 'command' && toolName === 'run_command') {
+      return step;
+    }
+    // File-based steps match by file path
+    if (filePath) {
+      const stepFiles = step.files || [];
+      if (stepFiles.some(f => filePath.includes(f) || f.includes(filePath))) {
+        return step;
+      }
+    }
   }
   return null;
 }
@@ -372,6 +415,7 @@ export {
   bindToolCall,
   recordToolCallOnStep,
   completeStepAfterExecution,
+  findMatchingStep,
   completeStep,
   failStep,
   detectPlanDrift,

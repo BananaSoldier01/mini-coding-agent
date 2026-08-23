@@ -165,12 +165,14 @@ async function runCommandVerification(command, workspace) {
 
 /**
  * 运行 File Verification。
- * V0.6.1: 使用 workspace 参数 + baseline hash 对比 for 'modified'
+ * V0.6.2: 使用 workspace 参数 + baseline hash 对比 for 'modified'
+ * Fix: createHash from node:crypto (not node:fs)
  */
 async function runFileVerification(filePath, expected, workspace, baseline) {
-  const { existsSync, statSync, createHash } = await import('node:fs');
-  const { resolve } = await import('node:path');
+  const { existsSync, statSync } = await import('node:fs');
   const { readFileSync } = await import('node:fs');
+  const { createHash } = await import('node:crypto');
+  const { resolve } = await import('node:path');
 
   const cwd = workspace || process.cwd();
   const fullPath = resolve(cwd, filePath);
@@ -281,11 +283,11 @@ async function runCheck(check, opts = {}) {
     }
     case VERIFICATION_TYPE.CUSTOM:
     default:
-      // V0.6.1: CUSTOM checks now require explicit evidence
-      // No automatic PASS — the caller must provide a result
+      // V0.6.2: CUSTOM checks without external evidence → SKIPPED
+      // No automatic PASS — self-reported evidence is not verification
       return {
-        status: VERIFICATION_STATUS.PASSED,
-        result: check.description || 'Custom check passed',
+        status: VERIFICATION_STATUS.SKIPPED,
+        result: check.description || 'Custom check skipped (no automated evidence)',
         checkId: check.id,
         evidence: 'self-reported',
       };

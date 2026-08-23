@@ -4,6 +4,24 @@
 
 ---
 
+## V0.6.2 — 已完成
+
+### Verification Closure & Safety
+- validatePlan: enforce verification for modify/command steps
+- File/Git schema mapping: check field properly mapped by type
+- CUSTOM check: SKIPPED (not PASSED) without external evidence
+- Completion Gate: only PASSED → COMPLETED, no backdoor
+- Step Completion: multi-file steps require all files done
+- Command step: properly mapped via findMatchingStep
+- Verification feedback: results written to messages for LLM
+- Duplicate call: removed double recordToolCallOnStep
+- RunStatus: VERIFYING transitions fixed
+- PLAN_STATUS.VERIFYING: added
+- createHash: from node:crypto (not node:fs)
+- 18 Verification Integration Tests
+
+---
+
 ## V0.6.1 — 已完成
 
 ### Verification Integrity

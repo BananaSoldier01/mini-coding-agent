@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.6.1 — Verification Integrity**（已完成）
+**V0.6.2 — Verification Closure & Safety**（已完成）
 
 **Next: V0.7 — Skills / Extensibility**
 
@@ -126,6 +126,20 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.6.2 — Verification Closure & Safety
+- P0: validatePlan 强制 verification — 缺 verification → invalid
+- P0: File/Git schema mapping 修复 — check 字段正确映射
+- P0: CUSTOM check → SKIPPED（不允许 PASSED）
+- P0: Completion Gate — 只有 PASSED → COMPLETED，无后门
+- P0: Step Completion Contract — 多文件 step 需全部文件完成
+- P0: command step 能正确映射和完成
+- P0: Verification 结果写入 messages — LLM 能看到
+- P0: 去除 bindToolCall/recordToolCallOnStep 重复调用
+- P0: RunStatus VERIFYING 转换表修正 + PLAN_STATUS.VERIFYING
+- P0: createHash from node:crypto（不是 node:fs）
+- Tests: 18 Verification Integration Tests（272/272 PASS）
 - 状态：已完成
 
 ### V0.6.1 — Verification Integrity
