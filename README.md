@@ -2,7 +2,7 @@
 
 一个可在本地 workspace 中执行编码任务的轻量级 Agent Harness。
 
-**当前版本**: V0.8.3 — Pre-V0.9 Cleanup
+**当前版本**: V0.9.0 — Runtime Control Plane Foundation
 
 ## 特性
 

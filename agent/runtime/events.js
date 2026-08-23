@@ -10,19 +10,41 @@
 // ── Runtime Event Types ───────────────────────────────────
 
 const RUNTIME_EVENT_TYPES = {
+  // Skill events
   SKILL_ACTIVATED: 'skill_activated',
   SKILL_RUNNING: 'skill_running',
-  TOOL_STARTED: 'tool_started',
-  TOOL_COMPLETED: 'tool_completed',
-  VERIFICATION_STARTED: 'verification_started',
-  EVIDENCE_COLLECTED: 'evidence_collected',
-  VERIFICATION_COMPLETED: 'verification_completed',
   SKILL_COMPLETED: 'skill_completed',
   SKILL_FAILED: 'skill_failed',
   SKILL_CANCELLED: 'skill_cancelled',
+
+  // Task events (V0.9.0)
+  TASK_CREATED: 'task_created',
+  TASK_STARTED: 'task_started',
+  TASK_COMPLETED: 'task_completed',
+  TASK_FAILED: 'task_failed',
+  TASK_CANCELLED: 'task_cancelled',
+
+  // Tool events (V0.9.0)
+  TOOL_REQUESTED: 'tool_requested',
+  TOOL_POLICY_CHECKED: 'tool_policy_checked',
+  TOOL_EXECUTING: 'tool_executing',
+  TOOL_COMPLETED: 'tool_completed',
+  TOOL_FAILED: 'tool_failed',
+
+  // Legacy tool events (backward compat)
+  TOOL_STARTED: 'tool_started',
+
+  // Verification events
+  VERIFICATION_STARTED: 'verification_started',
+  EVIDENCE_COLLECTED: 'evidence_collected',
+  VERIFICATION_COMPLETED: 'verification_completed',
+
+  // Run events
   RUN_STARTED: 'run_started',
   RUN_COMPLETED: 'run_completed',
   RUN_FAILED: 'run_failed',
+
+  // Snapshot events
   SNAPSHOT_SAVED: 'snapshot_saved',
   SNAPSHOT_RESTORED: 'snapshot_restored',
 };

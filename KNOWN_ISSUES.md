@@ -4,6 +4,20 @@
 
 ---
 
+## V0.9.0 — Runtime Control Plane Foundation（已完成）
+
+### Control Plane Foundation
+- AgentRuntimeContext: 统一运行时容器
+- Task Runtime: Task 对象 + 生命周期
+- ToolExecution Runtime: 工具执行一等公民
+- Policy Enforcement: checkToolPermission 集成
+- Evidence Binding: ToolExecution 自动创建 Evidence
+- Event System: TASK_*/TOOL_* 事件类型扩展
+- 架构契约: ARCHITECTURE.md（6 条 Contract Rules）
+- 30 new tests (430/430 PASS)
+
+---
+
 ## V0.8.3 — Pre-V0.9 Cleanup（已完成）
 
 ### Agent Core Architecture Review

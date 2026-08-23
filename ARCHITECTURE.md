@@ -1,7 +1,187 @@
 # Agent Core Architecture Review
 
-> V0.8.3 (Pre-V0.9 Cleanup)
+> V0.9.0 (Runtime Control Plane Foundation)
 > 目的：确认 Permission / Memory / Plan / Tool / Runtime / Session 核心对象边界，为 V0.9 Control Plane 做架构冻结。
+
+---
+
+# Runtime Object Ownership
+
+## Session
+
+**责任**：用户交互。
+
+**包含**：
+- conversation history
+- user messages
+- UI state
+
+**不包含**：
+- skill status
+- task status
+- execution state
+
+---
+
+## RuntimeContext (AgentRuntimeContext)
+
+**责任**：执行真相源（Single Source of Truth）。
+
+**包含**：
+```
+AgentRuntimeContext
+├── TaskContext
+├── SkillRuntimeContext
+├── RuntimePolicyContext
+├── ToolExecutionContext
+├── EvidenceContext
+├── EventContext
+└── SnapshotContext
+```
+
+Runtime 状态必须只存在于此。
+
+---
+
+## Skill
+
+**责任**：能力定义。
+
+**包含**：
+- instructions
+- available tools
+- metadata
+
+**不拥有**：
+- execution state
+- task progress
+- policy decision
+
+---
+
+## Policy
+
+**责任**：执行约束。
+
+**规则**：
+```
+Skill 声明能力。
+Policy 决定是否允许执行。
+```
+
+**最终权限**：
+```
+Capability ∩ Runtime Policy ∩ Environment Constraint = Effective Permission
+```
+
+---
+
+## Task
+
+**责任**：用户目标分解单元。
+
+**包含**：
+- objective
+- status
+- dependencies
+- assigned skills
+- evidence
+
+---
+
+## ToolExecution
+
+**责任**：单次工具调用生命周期。
+
+**包含**：
+- requested tool
+- arguments
+- policy check
+- execution result
+- evidence
+
+---
+
+## Evidence
+
+**责任**：执行结果证明。
+
+**来源**：Runtime execution events，而非 Skill 自报。
+
+---
+
+# Architecture Contract Rules
+
+## Rule 1
+
+**Session 不能存储 Agent 执行状态。**
+
+Session 只保存对话历史和用户交互。
+
+---
+
+## Rule 2
+
+**Skill 不能直接执行工具。**
+
+必须的流程：
+```
+Skill → Task → Policy Check → ToolExecution → Evidence
+```
+
+---
+
+## Rule 3
+
+**所有状态转换必须产生 Runtime Events。**
+
+状态变化 = 事件。没有例外。
+
+---
+
+## Rule 4
+
+**RuntimeContext 是唯一的执行真相源。**
+
+Session / Skill / Task 都不能独立持有执行状态。
+
+---
+
+## Rule 5
+
+**Evidence 来自 Runtime 执行事件。**
+
+Skill 自报不算 Evidence。
+
+---
+
+## Rule 6
+
+**ToolExecution 是一等 Runtime 对象。**
+
+不是 `call tool()` → `return result`，而是完整生命周期。
+
+---
+
+# V0.9.0 Architecture
+
+```
+User Goal
+ ↓
+Task Runtime (NEW)
+ ↓
+Skill Selection
+ ↓
+Policy Check (RuntimePolicyContext)
+ ↓
+ToolExecution Runtime (NEW)
+ ↓
+Evidence (Runtime-generated)
+ ↓
+Verification
+ ↓
+Completion
+```
 
 ---
 
