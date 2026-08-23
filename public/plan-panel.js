@@ -85,17 +85,23 @@ function renderPlanPanel(plan) {
       html += '</ul>';
     }
 
-    // V0.6.0: Verification for this step
+    // V0.6.1: Verification for this step — show full evidence
     if (step.verificationState) {
       const vs = step.verificationState;
-      const vsIcon = vs.status === 'passed' ? '✅' : vs.status === 'failed' ? '❌' : '⟳';
+      const vsIcon = vs.status === 'passed' ? '✅' : vs.status === 'failed' ? '❌' : vs.status === 'running' ? '⟳' : '○';
       html += `<div class="step-verification">`;
       html += `<span class="vs-icon">${vsIcon}</span> Verification: ${vs.status}`;
       if (vs.checks && vs.checks.length > 0) {
         html += '<ul class="vs-checks">';
         for (const c of vs.checks) {
           const cIcon = c.status === 'passed' ? '✓' : c.status === 'failed' ? '✗' : '○';
-          html += `<li class="vs-check"><span>${cIcon}</span> ${escapeHtml(c.description || c.type || '')} ${c.result ? ': ' + escapeHtml(c.result).slice(0, 60) : ''}</li>`;
+          const checkDesc = c.description || c.type || '';
+          const expected = c.expected ? `Expected: ${c.expected}` : '';
+          const result = c.result ? `Result: ${c.result}` : '';
+          html += `<li class="vs-check"><span>${cIcon}</span> ${escapeHtml(checkDesc)}`;
+          if (expected) html += `<br><span class="vs-detail">${escapeHtml(expected)}</span>`;
+          if (result) html += `<br><span class="vs-detail">${escapeHtml(result).slice(0, 120)}</span>`;
+          html += '</li>';
         }
         html += '</ul>';
       }

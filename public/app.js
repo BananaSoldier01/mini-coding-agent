@@ -1389,8 +1389,23 @@ function handleEvent(event) {
       if (state.plan) {
         state.plan.status = event.status || 'completed';
         state.plan.toolCallCount = event.toolCallCount || 0;
+        // V0.6.1: Preserve verification evidence in steps
+        if (event.steps) {
+          for (const s of event.steps) {
+            const step = state.plan.steps.find(st => st.id === s.id);
+            if (step) {
+              step.status = s.status;
+              step.completedAt = s.completedAt;
+              if (s.verification) {
+                step.verificationState = s.verification;
+              }
+            }
+          }
+        }
       }
-      appendSystemMessage('🏁 计划完成');
+      const statusEmoji = event.status === 'failed' ? '💥' : '🏁';
+      const statusText = event.status === 'failed' ? '计划失败' : '计划完成';
+      appendSystemMessage(`${statusEmoji} ${statusText} (${event.status})`);
       break;
 
     case 'plan_failed':
@@ -1446,8 +1461,12 @@ function handleEvent(event) {
         const step = state.plan.steps.find(s => s.id === event.stepId);
         if (step && step.verificationState) {
           step.verificationState.status = event.status;
+          // V0.6.1: 保留完整 evidence 字段
           step.verificationState.checks = (event.checks || []).map(c => ({
             id: c.id,
+            type: c.type,
+            description: c.description,
+            expected: c.expected,
             status: c.status,
             result: c.result,
           }));

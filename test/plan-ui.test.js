@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createPlan, transitionPlanStatus, PLAN_STATUS, bindToolCall, detectPlanDrift } from '../agent/plan.js';
+import { createPlan, transitionPlanStatus, PLAN_STATUS, bindToolCall, detectPlanDrift, completeStepAfterExecution } from '../agent/plan.js';
 
 // ── Test 1: Plan Panel Render ─────────────────────────
 test('Plan UI: Panel 渲染显示 goal/steps', () => {
@@ -61,38 +61,28 @@ test('Plan UI: Reject Flow — AWAITING_APPROVAL → REJECTED, 不执行', () =>
 
 // ── Test 4: Execution Progress ─────────────────────────
 test('Plan UI: Execution Progress — step status updates', () => {
+  // V0.6.1: Step completion happens AFTER tool execution, not at bind time
   const plan = createPlan({
     goal: 'test progress',
-    steps: [
-      { id: 's1', description: 'Step 1' },
-      { id: 's2', description: 'Step 2' },
-      { id: 's3', description: 'Step 3' },
-    ],
-  });
-
-  // 初始全部 pending
-  assert.strictEqual(plan.steps[0].status, 'pending');
-  assert.strictEqual(plan.steps[1].status, 'pending');
-  assert.strictEqual(plan.steps[2].status, 'pending');
-
-  // 模拟 tool call 更新 step
-  bindToolCall(plan, 'run_1', 'tc_1', 'write_file', { path: 'file1.js' });
-  // Note: updateStepFromToolCall matches by file path in step.files
-  // Since steps don't have files, this won't match. Let's test with files.
-
-  const plan2 = createPlan({
-    goal: 'test progress 2',
     steps: [
       { id: 's1', description: 'Step 1', files: ['file1.js'] },
       { id: 's2', description: 'Step 2', files: ['file2.js'] },
     ],
   });
 
-  bindToolCall(plan2, 'run_2', 'tc_2', 'write_file', { path: 'file1.js' });
-  // write_file immediately marks step as completed
-  assert.strictEqual(plan2.steps[0].status, 'completed');
-  assert.ok(plan2.steps[0].completedAt !== null);
-  assert.strictEqual(plan2.steps[1].status, 'pending');
+  // 初始全部 pending
+  assert.strictEqual(plan.steps[0].status, 'pending');
+  assert.strictEqual(plan.steps[1].status, 'pending');
+
+  // bindToolCall marks step as running (NOT completed)
+  bindToolCall(plan, 'run_1', 'tc_1', 'write_file', { path: 'file1.js' });
+  assert.strictEqual(plan.steps[0].status, 'running');
+  assert.strictEqual(plan.steps[1].status, 'pending');
+
+  // After tool execution succeeds, step is completed
+  completeStepAfterExecution(plan, 's1');
+  assert.strictEqual(plan.steps[0].status, 'completed');
+  assert.ok(plan.steps[0].completedAt !== null);
 });
 
 // ── Test 5: Timeline Integration ───────────────────────

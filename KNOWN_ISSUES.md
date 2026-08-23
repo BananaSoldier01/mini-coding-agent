@@ -4,6 +4,22 @@
 
 ---
 
+## V0.6.1 — 已完成
+
+### Verification Integrity
+- Plan Schema: expectedOutcome + verification array in buildPlanPrompt
+- Step Completion: AFTER tool execution (not at bind time)
+- Verification: awaited (not fire-and-forget)
+- Completion Rules: pending/running → FAILED, only PASSED → COMPLETED
+- Workspace: verification runner uses workspace param (not process.cwd())
+- File 'modified': baseline hash comparison
+- Git: porcelain output check for clean tree
+- VERIFYING: connected to RunStatus state machine
+- Frontend: FAILED shows "计划失败", evidence fields preserved
+- setStepExpectedOutcome dead logic fixed
+
+---
+
 ## V0.6.0 — 已完成
 
 ### Verification Foundation

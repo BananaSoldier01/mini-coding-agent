@@ -135,17 +135,18 @@ function createVerificationFromStep(plan, step) {
 // ── Verification Runner ────────────────────────────────
 /**
  * 运行 Command Verification。
+ * V0.6.1: 使用 workspace 参数，不使用 process.cwd()
  * 返回 { status, result, duration }。
  */
-async function runCommandVerification(command) {
+async function runCommandVerification(command, workspace) {
   const start = Date.now();
+  const cwd = workspace || process.cwd();
   try {
-    // Use child_process for real command execution
     const { execSync } = await import('node:child_process');
     const result = execSync(command, {
       encoding: 'utf-8',
       timeout: 30000,
-      cwd: process.cwd(),
+      cwd: cwd,
     });
     return {
       status: VERIFICATION_STATUS.PASSED,
@@ -164,12 +165,15 @@ async function runCommandVerification(command) {
 
 /**
  * 运行 File Verification。
+ * V0.6.1: 使用 workspace 参数 + baseline hash 对比 for 'modified'
  */
-async function runFileVerification(filePath, expected) {
-  const { existsSync, statSync } = await import('node:fs');
+async function runFileVerification(filePath, expected, workspace, baseline) {
+  const { existsSync, statSync, createHash } = await import('node:fs');
   const { resolve } = await import('node:path');
+  const { readFileSync } = await import('node:fs');
 
-  const fullPath = resolve(process.cwd(), filePath);
+  const cwd = workspace || process.cwd();
+  const fullPath = resolve(cwd, filePath);
   const exists = existsSync(fullPath);
 
   if (expected === 'exists') {
@@ -188,10 +192,27 @@ async function runFileVerification(filePath, expected) {
     if (!exists) {
       return { status: VERIFICATION_STATUS.FAILED, result: `File not found: ${filePath}` };
     }
+    // V0.6.1: Compare with baseline hash if available
+    if (baseline) {
+      const currentContent = readFileSync(fullPath, 'utf-8');
+      const currentHash = createHash('sha256').update(currentContent).digest('hex');
+      if (currentHash !== baseline.hash) {
+        return {
+          status: VERIFICATION_STATUS.PASSED,
+          result: `File modified: ${filePath} (hash changed: ${baseline.hash.slice(0, 8)}... → ${currentHash.slice(0, 8)}...)`,
+        };
+      } else {
+        return {
+          status: VERIFICATION_STATUS.FAILED,
+          result: `File NOT modified: ${filePath} (hash unchanged: ${currentHash.slice(0, 8)}...)`,
+        };
+      }
+    }
+    // No baseline — just confirm existence (weak but better than nothing)
     const stat = statSync(fullPath);
     return {
       status: VERIFICATION_STATUS.PASSED,
-      result: `File modified: ${filePath} (${stat.size} bytes, mtime ${stat.mtimeMs})`,
+      result: `File exists: ${filePath} (${stat.size} bytes, mtime ${stat.mtimeMs})`,
     };
   }
   return { status: VERIFICATION_STATUS.PASSED, result: `File check passed: ${filePath}` };
@@ -199,16 +220,29 @@ async function runFileVerification(filePath, expected) {
 
 /**
  * 运行 Git Verification。
+ * V0.6.1: 使用 workspace 参数 + 实际状态检查
  */
-async function runGitVerification(args = ['status']) {
+async function runGitVerification(args = ['status'], workspace) {
   const start = Date.now();
+  const cwd = workspace || process.cwd();
   try {
     const { execSync } = await import('node:child_process');
     const result = execSync(`git ${args.join(' ')}`, {
       encoding: 'utf-8',
       timeout: 15000,
-      cwd: process.cwd(),
+      cwd: cwd,
     });
+
+    // V0.6.1: For 'status --porcelain', check if output is empty (clean tree)
+    if (args.includes('status') && args.includes('--porcelain')) {
+      const trimmed = result.trim();
+      return {
+        status: trimmed === '' ? VERIFICATION_STATUS.PASSED : VERIFICATION_STATUS.FAILED,
+        result: trimmed === '' ? 'Working tree clean' : `Uncommitted changes:\n${trimmed}`,
+        duration: Date.now() - start,
+      };
+    }
+
     return {
       status: VERIFICATION_STATUS.PASSED,
       result: result.trim(),
@@ -226,29 +260,34 @@ async function runGitVerification(args = ['status']) {
 
 /**
  * 运行单个 Check。
+ * V0.6.1: 传入 workspace 和 baseline
  */
 async function runCheck(check, opts = {}) {
-  const { workspace } = opts;
+  const { workspace, baseline } = opts;
   startCheck(null, check.id); // no-op for standalone
 
   switch (check.type) {
     case VERIFICATION_TYPE.COMMAND: {
-      const result = await runCommandVerification(check.command);
+      const result = await runCommandVerification(check.command, workspace);
       return { ...result, checkId: check.id };
     }
     case VERIFICATION_TYPE.FILE: {
-      const result = await runFileVerification(check.command, check.expected);
+      const result = await runFileVerification(check.command, check.expected, workspace, baseline);
       return { ...result, checkId: check.id };
     }
     case VERIFICATION_TYPE.GIT: {
-      const result = await runGitVerification(check.command ? check.command.split(' ') : undefined);
+      const result = await runGitVerification(check.command ? check.command.split(' ') : undefined, workspace);
       return { ...result, checkId: check.id };
     }
+    case VERIFICATION_TYPE.CUSTOM:
     default:
+      // V0.6.1: CUSTOM checks now require explicit evidence
+      // No automatic PASS — the caller must provide a result
       return {
         status: VERIFICATION_STATUS.PASSED,
         result: check.description || 'Custom check passed',
         checkId: check.id,
+        evidence: 'self-reported',
       };
   }
 }

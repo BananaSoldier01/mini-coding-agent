@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.6.0 — Verification Foundation**（已完成）
+**V0.6.1 — Verification Integrity**（已完成）
 
 **Next: V0.7 — Skills / Extensibility**
 
@@ -126,6 +126,21 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.6.1 — Verification Integrity
+- P0: buildPlanPrompt 加入 expectedOutcome + verification schema
+- P0: Step completion 移到工具成功执行后（不在 bindToolCall 时提前标记）
+- P0: Verification 改为 await（不再 fire-and-forget）
+- P0: Completion Rules 真正等待验证结果（pending/running 不能 Completed）
+- P0: Verification Runner 使用 workspace 参数（不使用 process.cwd()）
+- P0: File 'modified' 验证改为 baseline hash 对比
+- P0: Git 验证增加实际状态检查（porcelain output）
+- P0: VERIFYING 接入 RunStatus 状态机
+- P1: 前端 FAILED 不显示"计划完成"
+- P1: Verification evidence 保留 description/expected/type 字段
+- P1: 修复 setStepExpectedOutcome 死逻辑
+- Tests: 254/254 PASS
 - 状态：已完成
 
 ### V0.6.0 — Verification Foundation

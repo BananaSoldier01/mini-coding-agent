@@ -188,6 +188,23 @@ async function runAgent(opts) {
           executionMode,
         });
 
+        // V0.6.1: Build verificationState from LLM verification array
+        for (const step of activePlan.steps) {
+          if (step._verification && Array.isArray(step._verification) && step._verification.length > 0) {
+            step.verificationState = createVerificationFromStep(activePlan, step);
+            for (const v of step._verification) {
+              const { addCheck } = await import('./verification.js');
+              addCheck(step.verificationState, {
+                type: v.type || 'command',
+                description: v.check || v.expected || '',
+                command: v.type === 'command' ? v.check : null,
+                expected: v.expected || null,
+              });
+            }
+          }
+          delete step._verification;
+        }
+
         const validation = validatePlan(activePlan);
         if (validation.valid) {
           session.planState = activePlan;
@@ -452,8 +469,9 @@ async function runAgent(opts) {
 
         // P0: Plan ↔ Execution Binding
         if (activePlan) {
-          const { bindToolCall, transitionPlanStatus, PLAN_STATUS, detectPlanDrift } = await import('./plan.js');
+          const { bindToolCall, recordToolCallOnStep, transitionPlanStatus, PLAN_STATUS } = await import('./plan.js');
           bindToolCall(activePlan, run?.runId || activePlan.runId, tc.id, toolName, args);
+          recordToolCallOnStep(activePlan, toolName, args, tc.id);
 
           // APPROVED → EXECUTING on first tool execution
           if (activePlan.status === PLAN_STATUS.APPROVED) {
@@ -462,9 +480,9 @@ async function runAgent(opts) {
             emit(onEvent, { type: 'plan_executing', planId: activePlan.id, status: activePlan.status });
           }
 
-          // V0.5.2: Emit step status update
-          const updatedSteps = activePlan.steps.filter(s => s.status === 'running' || s.status === 'completed');
-          if (updatedSteps.length > 0) {
+          // V0.5.2: Emit step status update (running only, not completed yet)
+          const runningSteps = activePlan.steps.filter(s => s.status === 'running');
+          if (runningSteps.length > 0) {
             emit(onEvent, {
               type: 'plan_step_update',
               planId: activePlan.id,
@@ -474,35 +492,6 @@ async function runAgent(opts) {
                 completedAt: s.completedAt,
               })),
             });
-          }
-
-          // V0.6.0: Auto-trigger verification for completed steps
-          for (const step of activePlan.steps) {
-            if (step.status === 'completed' && step.expectedOutcome && !step.verificationState) {
-              step.verificationState = createVerificationFromStep(activePlan, step);
-              emit(onEvent, {
-                type: 'verification_started',
-                planId: activePlan.id,
-                stepId: step.id,
-                verificationId: step.verificationState.id,
-              });
-
-              // Run verification
-              runVerification(step.verificationState, { workspace }).then((vs) => {
-                emit(onEvent, {
-                  type: 'verification_completed',
-                  planId: activePlan.id,
-                  stepId: step.id,
-                  verificationId: vs.id,
-                  status: vs.status,
-                  checks: vs.checks.map(c => ({
-                    id: c.id,
-                    status: c.status,
-                    result: c.result,
-                  })),
-                });
-              });
-            }
           }
         }
 
@@ -623,6 +612,71 @@ async function runAgent(opts) {
           result: finalResult,
         });
 
+        // V0.6.1: Step completion + verification AFTER tool execution succeeds
+        if (activePlan && !result.error) {
+          const { completeStepAfterExecution } = await import('./plan.js');
+          const filePath = args?.path || args?.file;
+
+          for (const step of activePlan.steps) {
+            if (step.status !== 'running') continue;
+            const stepFiles = step.files || [];
+            if (stepFiles.some(f => filePath?.includes(f) || f?.includes(filePath))) {
+              const completedStep = completeStepAfterExecution(activePlan, step.id);
+              if (completedStep) {
+                emit(onEvent, {
+                  type: 'plan_step_update',
+                  planId: activePlan.id,
+                  steps: activePlan.steps.map(s => ({
+                    id: s.id,
+                    status: s.status,
+                    completedAt: s.completedAt,
+                  })),
+                });
+
+                // V0.6.1: Await verification (not fire-and-forget)
+                if (completedStep.verificationState) {
+                  const { runVerification, VERIFICATION_STATUS } = await import('./verification.js');
+                  const { transitionPlanStatus, PLAN_STATUS } = await import('./plan.js');
+
+                  emit(onEvent, {
+                    type: 'verification_started',
+                    planId: activePlan.id,
+                    stepId: completedStep.id,
+                    verificationId: completedStep.verificationState.id,
+                  });
+
+                  // Update Run Status to VERIFYING
+                  runStatus.transition(RUN_STATUS.VERIFYING, 'verification');
+                  emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label, detail: 'verification' });
+
+                  // AWAIT the verification (not fire-and-forget)
+                  const vs = await runVerification(completedStep.verificationState, { workspace });
+
+                  emit(onEvent, {
+                    type: 'verification_completed',
+                    planId: activePlan.id,
+                    stepId: completedStep.id,
+                    verificationId: vs.id,
+                    status: vs.status,
+                    checks: vs.checks.map(c => ({
+                      id: c.id,
+                      type: c.type,
+                      description: c.description,
+                      expected: c.expected,
+                      status: c.status,
+                      result: c.result,
+                    })),
+                  });
+
+                  // Restore Run Status
+                  runStatus.transition(RUN_STATUS.EDITING, 'verification-done');
+                  emit(onEvent, { type: 'status', status: runStatus.status, label: runStatus.label });
+                }
+              }
+            }
+          }
+        }
+
         // 记录 command 结果（用于 Completion Summary verification evidence）
         if (toolName === 'run_command' && finalResult) {
           emit(onEvent, {
@@ -672,19 +726,28 @@ async function runAgent(opts) {
       transitionPlanStatus(activePlan, PLAN_STATUS.CANCELLED);
     } else if (runStatus.status === RUN_STATUS.FAILED || contextMetadata.overflow) {
       transitionPlanStatus(activePlan, PLAN_STATUS.FAILED);
-    } else if (activePlan.status === PLAN_STATUS.APPROVED || activePlan.status === PLAN_STATUS.EXECUTING) {
-      // V0.6.0: Check verification results before completing
+    } else if (activePlan.status === PLAN_STATUS.APPROVED || activePlan.status === PLAN_STATUS.EXECUTING || activePlan.status === PLAN_STATUS.VERIFYING) {
+      // V0.6.1: Proper completion rules — verification must be PASSED or absent
       const stepsWithVerification = activePlan.steps.filter(s => s.verificationState);
       const allVerificationPassed = stepsWithVerification.every(
-        s => s.verificationState.status === VERIFICATION_STATUS.PASSED || s.verificationState.status === VERIFICATION_STATUS.PENDING
+        s => s.verificationState.status === VERIFICATION_STATUS.PASSED
       );
       const anyVerificationFailed = stepsWithVerification.some(
         s => s.verificationState.status === VERIFICATION_STATUS.FAILED
       );
+      const anyVerificationPending = stepsWithVerification.some(
+        s => s.verificationState.status === VERIFICATION_STATUS.PENDING ||
+             s.verificationState.status === VERIFICATION_STATUS.RUNNING
+      );
 
       if (anyVerificationFailed) {
         transitionPlanStatus(activePlan, PLAN_STATUS.FAILED);
-      } else if (stepsWithVerification.length > 0) {
+      } else if (anyVerificationPending) {
+        // Verification still running/pending — cannot complete
+        transitionPlanStatus(activePlan, PLAN_STATUS.FAILED);
+      } else if (stepsWithVerification.length > 0 && allVerificationPassed) {
+        transitionPlanStatus(activePlan, PLAN_STATUS.COMPLETED);
+      } else if (stepsWithVerification.length === 0) {
         transitionPlanStatus(activePlan, PLAN_STATUS.COMPLETED);
       } else {
         transitionPlanStatus(activePlan, PLAN_STATUS.COMPLETED);

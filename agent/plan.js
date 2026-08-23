@@ -49,7 +49,9 @@ const EXECUTION_MODE = {
  */
 function createPlan(opts = {}) {
   const { goal, steps, risks, files, context, runId, executionMode } = opts;
-  // V0.6.0: Initialize step tracking + verification fields
+  // V0.6.1: Initialize step tracking + verification fields
+  // verificationState is built later by the orchestrator (agent/index.js)
+  // from the verification array in the LLM schema
   const enrichedSteps = Array.isArray(steps)
     ? steps.map(s => ({
         id: s.id,
@@ -64,6 +66,8 @@ function createPlan(opts = {}) {
         // V0.6.0: Verification fields
         expectedOutcome: s.expectedOutcome || null,
         verificationState: s.verificationState || null,
+        // V0.6.1: Raw verification array from LLM schema
+        _verification: Array.isArray(s.verification) ? s.verification : null,
       }))
     : [];
 
@@ -150,15 +154,15 @@ function bindToolCall(plan, runId, toolCallId, toolName, args) {
   });
   plan.updatedAt = Date.now();
 
-  // V0.5.2: Update step status based on tool call
-  updateStepFromToolCall(plan, toolName, args);
+  // V0.6.1: Record tool call on matching step (NO status change)
+  recordToolCallOnStep(plan, toolName, args, toolCallId);
 }
 
 /**
- * V0.5.2: Update step status from tool call.
- * Maps tool calls to plan steps by file path.
+ * V0.6.1: Record tool call on matching step (NO status change).
+ * Step status is managed by the orchestrator AFTER tool execution succeeds.
  */
-function updateStepFromToolCall(plan, toolName, args) {
+function recordToolCallOnStep(plan, toolName, args, toolCallId) {
   if (!plan || !Array.isArray(plan.steps)) return;
 
   const filePath = args?.path || args?.file;
@@ -166,29 +170,35 @@ function updateStepFromToolCall(plan, toolName, args) {
 
   for (const step of plan.steps) {
     if (!step.toolCalls) step.toolCalls = [];
-    if (!step.status) step.status = 'pending';
-    if (!step.completedAt) step.completedAt = null;
-
-    // Check if this step touches the same file
     const stepFiles = step.files || [];
     if (stepFiles.some(f => filePath.includes(f) || f.includes(filePath))) {
       step.toolCalls.push({
         toolName,
-        toolCallId: args._toolCallId,
+        toolCallId,
         filePath,
         timestamp: Date.now(),
       });
-
-      // Update step status
+      // Only mark as running, NOT completed — completion happens after execution succeeds
       if (step.status === 'pending') {
         step.status = 'running';
       }
-      if (toolName === 'write_file' || toolName === 'edit_file' || toolName === 'delete_file') {
-        step.status = 'completed';
-        step.completedAt = Date.now();
-      }
     }
   }
+}
+
+/**
+ * V0.6.1: Mark step as completed AFTER tool execution succeeds.
+ */
+function completeStepAfterExecution(plan, stepId) {
+  if (!plan || !Array.isArray(plan.steps)) return;
+  const step = plan.steps.find(s => s.id === stepId);
+  if (step && step.status === 'running') {
+    step.status = 'completed';
+    step.completedAt = Date.now();
+    plan.updatedAt = Date.now();
+    return step;
+  }
+  return null;
 }
 
 /**
@@ -255,6 +265,7 @@ function detectPlanDrift(plan, actualFiles) {
 
 /**
  * 构建 Plan Prompt（用于 LLM 生成计划）。
+ * V0.6.1: 加入 expectedOutcome + verification schema
  */
 function buildPlanPrompt(task, projectContext, sessionContext) {
   let prompt = `You are a planning assistant. Analyze the following task and produce a structured execution plan.
@@ -273,12 +284,36 @@ Produce a JSON object with this exact schema:
 {
   "goal": "one sentence describing the ultimate goal",
   "steps": [
-    { "id": "step-1", "description": "what this step does", "type": "explore|modify|verify|command", "files": [], "risks": [] }
+    {
+      "id": "step-1",
+      "description": "what this step does",
+      "type": "explore|modify|verify|command",
+      "files": ["file1"],
+      "risks": ["risk1"],
+      "expectedOutcome": "how to verify this step is done correctly",
+      "verification": [
+        {
+          "type": "command|file|git",
+          "check": "npm test",
+          "expected": "exit 0"
+        }
+      ]
+    }
   ],
   "risks": ["risk 1", "risk 2"],
   "files": ["file1", "file2"],
   "estimatedChanges": "low|medium|high"
 }
+
+CRITICAL: Every step MUST include:
+- expectedOutcome: A concrete, testable statement of what "done" looks like.
+  Examples: "API returns 200 for valid input", "npm test passes with 0 failures",
+  "file config.json exists with valid JSON", "no TypeScript errors".
+- verification: An array of 1-3 verification checks.
+  Each check MUST have:
+  - type: "command" (run a shell command), "file" (check file state), or "git" (check git state)
+  - check: The command to run or file to check
+  - expected: What success looks like (e.g., "exit 0", "file exists", "working tree clean")
 
 Rules:
 - Break the task into concrete, ordered steps
@@ -335,7 +370,8 @@ export {
   validatePlan,
   transitionPlanStatus,
   bindToolCall,
-  updateStepFromToolCall,
+  recordToolCallOnStep,
+  completeStepAfterExecution,
   completeStep,
   failStep,
   detectPlanDrift,
