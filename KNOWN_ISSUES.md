@@ -4,6 +4,18 @@
 
 ---
 
+## V0.7.1 — 已完成
+
+### Skill Execution Integration
+- Skill ↔ Agent Orchestrator: instruction injection, tool permission, lifecycle
+- Skill Registry initialized with agent tool set
+- Skill context injected into system prompt with priority ordering
+- Skill tool permission enforced before tool execution
+- Backward compatibility: plans without skills work normally
+- 13 new tests (282/282 PASS)
+
+---
+
 ## V0.7.0 — 已完成
 
 ### Skill Model Foundation & Registry

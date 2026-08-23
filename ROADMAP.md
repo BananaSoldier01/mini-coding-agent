@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.7.0 — Skill Model Foundation & Registry**（已完成）
+**V0.7.1 — Skill Execution Integration**（已完成）
 
-**Next: V0.7.1+ — Skill Execution Integration & Verification**
+**Next: V0.7.3 — Skill Verification & Evidence**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,16 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.7.1 — Skill Execution Integration
+- Skill ↔ Agent Orchestrator Integration
+- Skill instruction injection into system prompt (priority-ordered)
+- Skill tool permission enforcement during execution
+- Skill Registry initialized with agent tool set
+- Skill lifecycle tracking alongside Run lifecycle
+- Backward compatibility: plans without skills work normally
+- 13 new tests (282/282 PASS)
 - 状态：已完成
 
 ### V0.7.0 — Skill Model Foundation & Registry

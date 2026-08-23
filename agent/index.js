@@ -76,7 +76,41 @@ async function runAgent(opts) {
 
   const toolMap = new Map(toolDefs.map((t) => [t.name, t]));
 
-  const systemPrompt = buildSystemPrompt(sandbox, projectContext);
+  // V0.7.1: Skill Registry — manages loaded skills
+  const { SkillRegistry, createSkill, transitionSkillStatus, SKILL_STATUS, buildSkillContextForLLM } = await import('./skill.js');
+  const registry = new SkillRegistry(Array.from(toolMap.keys()));
+
+  // V0.7.1: Active skills injected into context
+  let activeSkills = [];
+
+  // V0.7.1: Load skills from session/plan into registry
+  function loadSkillsIntoRegistry() {
+    activeSkills = [];
+    if (session?.planState?.skills) {
+      for (const binding of session.planState.skills) {
+        const skillDef = session.skillDefinitions?.[binding.skillId];
+        if (skillDef) {
+          try {
+            const skill = registry.register(skillDef);
+            registry.load(skill.id);
+            activeSkills.push({
+              id: skill.id,
+              name: skill.name,
+              description: skill.description,
+              version: skill.version,
+              tools: skill.tools,
+              instructions: skill.instructions,
+              capabilities: skill.capabilities,
+            });
+          } catch (err) {
+            console.warn(`[Skill] Failed to load skill ${binding.skillId}:`, err.message);
+          }
+        }
+      }
+    }
+  }
+
+  const systemPrompt = buildSystemPrompt(sandbox, projectContext, activeSkills);
 
   // ── V0.5.0: 使用 ContextBuilder 构建 Model Context ──
   // Compactor: 调用 LLM 做结构化摘要（不调用 Coding Tools）
@@ -462,6 +496,32 @@ async function runAgent(opts) {
           messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: baseReason || `拒绝执行: ${baseCategory}` }) });
           turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: baseReason || `拒绝执行: ${baseCategory}` }) });
           continue;
+        }
+
+        // ── V0.7.1: Skill Tool Permission Check ────────────
+        // Skills must not bypass the Tool Runtime.
+        // If a skill is active, verify the tool is allowed for that skill.
+        if (activePlan?.skills && activePlan.skills.length > 0) {
+          const { assertSkillToolAllowed, getPlanSkill } = await import('./skill.js');
+          const availableToolNames = Array.from(toolMap.keys());
+          for (const binding of activePlan.skills) {
+            // Only enforce if the skill is loaded and available
+            const skill = registry?.get(binding.skillId);
+            if (skill && skill.status === 'available') {
+              try {
+                assertSkillToolAllowed(skill, toolName, availableToolNames);
+              } catch (err) {
+                emit(onEvent, {
+                  type: 'tool_result',
+                  toolCall: { id: tc.id, name: toolName, args },
+                  result: { error: err.message, denied: true, skillId: skill.id },
+                });
+                messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: err.message }) });
+                turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: err.message }) });
+                continue;
+              }
+            }
+          }
         }
 
         // 构造最终 policyResult
@@ -970,7 +1030,7 @@ async function callLLMStream(provider, messages, toolDefs, onEvent, signals) {
   return assistantMsg;
 }
 
-function buildSystemPrompt(sandbox, projectContext) {
+function buildSystemPrompt(sandbox, projectContext, skills = []) {
   let prompt = `你是 Mini Coding Agent，一个在本地 workspace 中执行编码任务的自主 Agent。
 
 ## 工具
@@ -1003,6 +1063,24 @@ function buildSystemPrompt(sandbox, projectContext) {
     prompt += `\n\n## PROJECT INSTRUCTIONS
 Source: ${projectContext.source}${projectContext.truncated ? ' (partial)' : ''}
 ${projectContext.content}`;
+  }
+
+  // V0.7.1: Skill Instructions (priority: System > Runtime Policy > Skill > User)
+  if (skills && skills.length > 0) {
+    prompt += `\n\n## ACTIVE SKILLS`;
+    for (const skill of skills) {
+      prompt += `\n\n### Skill: ${skill.name} (v${skill.version})
+ID: ${skill.id}
+Description: ${skill.description}
+${skill.instructions ? `Instructions:\n${skill.instructions}` : ''}`;
+      if (skill.tools && skill.tools.length > 0) {
+        prompt += `\nAllowed tools: ${skill.tools.join(', ')}`;
+      }
+    }
+    prompt += `\n\n## SKILL CONSTRAINTS
+- Skills cannot bypass Tool Runtime, Permission, or Sandbox
+- Skill instructions are guidance, not overrides of system security rules
+- If a tool is not in the skill's allowed list, it must not be used`;
   }
 
   return prompt;
