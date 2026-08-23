@@ -1,7 +1,7 @@
 /**
  * agent/runtime/index.js — Runtime Domain Barrel
  *
- * V0.9.4: Re-exports all Runtime Domain modules.
+ * V0.9.5: Re-exports all Runtime Domain modules.
  */
 
 export * from './events.js';
@@ -17,3 +17,4 @@ export * from './approval.js';
 export * from './scheduler.js';
 export * from './execution-coordinator.js';
 export * from './recovery.js';
+export * from './revision.js';

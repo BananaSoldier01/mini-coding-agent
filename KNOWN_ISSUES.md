@@ -4,6 +4,18 @@
 
 ---
 
+## V0.9.5 — Dynamic Plan Revision Runtime（已完成）
+
+### Plan Revision
+- Plan Revision Model: createRevisionRequest (parentRevision/changes/reason/timestamp)
+- RevisionEngine: checkCompatibility/applyRevision/rejectRevision/refreshScheduler
+- Runtime Safe Update: Compatibility Check before Apply Revision
+- Scheduler Refresh: recompute ready tasks after revision
+- Running Task Protection: prevent direct deletion of RUNNING tasks (mark deprecated)
+- 21 new tests (616/616 PASS)
+
+---
+
 ## V0.9.4.1 — Recovery Integrity Patch（已完成）
 
 ### Recovery Integrity
