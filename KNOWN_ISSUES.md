@@ -4,6 +4,17 @@
 
 ---
 
+## V0.9.4.1 — Recovery Integrity Patch（已完成）
+
+### Recovery Integrity
+- Approval Recovery: restore ApprovalRequest from snapshot to ExecutionGate
+- ExecutionGate: restoreRequest/restoreRequests/getRequestsByRun/hasPendingApprovals
+- Snapshot v2: include approvals field from ExecutionGate
+- canAutoContinue() fix: checks pending approvals, failed plan, critical issues, expired approvals
+- 20 new tests (595/595 PASS)
+
+---
+
 ## V0.9.4 — Runtime Scheduler & Recovery Foundation（已完成）
 
 ### Scheduler & Recovery

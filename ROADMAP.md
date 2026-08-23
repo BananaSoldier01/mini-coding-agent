@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.9.4 — Runtime Scheduler & Recovery Foundation**（已完成）
+**V0.9.4.1 — Recovery Integrity Patch**（已完成）
 
 **Next: V0.9.5 — Dynamic Plan Revision**
 
@@ -126,6 +126,14 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.9.4.1 — Recovery Integrity Patch
+- Approval Recovery: restore ApprovalRequest from snapshot to ExecutionGate
+- ExecutionGate.restoreRequest()/restoreRequests()/getRequestsByRun()/hasPendingApprovals()
+- Snapshot v2: include approvals field from ExecutionGate
+- canAutoContinue() fix: checks pending approvals, failed plan, critical issues, expired approvals
+- 20 new tests (595/595 PASS)
 - 状态：已完成
 
 ### V0.9.4 — Runtime Scheduler & Recovery Foundation

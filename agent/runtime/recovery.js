@@ -1,10 +1,11 @@
 /**
  * agent/runtime/recovery.js — Runtime Recovery Manager
  *
- * V0.9.4
+ * V0.9.4.1
  * - RuntimeRecoveryManager: restore Runtime state from Snapshot
  * - Validates consistency after recovery
  * - Recovers pending tasks and approvals
+ * - Restores ApprovalRequest back to ExecutionGate
  *
  * Design:
  *   Snapshot is the recovery unit.
@@ -18,7 +19,7 @@ import { APPROVAL_STATUS } from './approval.js';
 import { RUNTIME_EVENT_TYPES } from './events.js';
 
 /**
- * V0.9.4: RuntimeRecoveryManager — restores Runtime from Snapshot.
+ * V0.9.4.1: RuntimeRecoveryManager — restores Runtime from Snapshot.
  *
  * Recovery rules:
  * - Completed tasks stay completed (no re-execution)
@@ -31,16 +32,17 @@ class RuntimeRecoveryManager {
   constructor(options = {}) {
     this.options = options;
     this.emitter = options.emitter || null;
-    this.autoResetRunning = options.autoResetRunning || false; // If true, reset running→pending on recovery
+    this.autoResetRunning = options.autoResetRunning || false;
   }
 
   /**
-   * V0.9.4: Restore Runtime state from a Snapshot v2.
+   * V0.9.4.1: Restore Runtime state from a Snapshot v2.
    *
    * @param {object} snapshot - Snapshot v2 object
-   * @returns {object} Recovery result { restored, issues, actions }
+   * @param {object} [executionGate] - Optional ExecutionGate to restore approvals into
+   * @returns {object} Recovery result { restored, issues, actions, plan, taskStatusMap, approvalStatusMap, approvalRequests }
    */
-  restore(snapshot) {
+  restore(snapshot, executionGate) {
     if (!snapshot) {
       return { restored: false, issues: ['No snapshot provided'], actions: [] };
     }
@@ -54,6 +56,7 @@ class RuntimeRecoveryManager {
       plan: null,
       taskStatusMap: new Map(),
       approvalStatusMap: new Map(),
+      approvalRequests: [],
     };
 
     // 1. Restore Plan
@@ -68,25 +71,43 @@ class RuntimeRecoveryManager {
         const status = task.status || TASK_STATUS.PENDING;
         result.taskStatusMap.set(task.id, status);
 
-        // Check for inconsistent states
         if (status === TASK_STATUS.RUNNING && this.autoResetRunning) {
           result.taskStatusMap.set(task.id, TASK_STATUS.PENDING);
-          result.actions.push({ type: 'task_reset', taskId: task.id, from: TASK_STATUS.RUNNING, to: TASK_STATUS.PENDING });
+          result.actions.push({
+            type: 'task_reset',
+            taskId: task.id,
+            from: TASK_STATUS.RUNNING,
+            to: TASK_STATUS.PENDING,
+          });
         }
       }
     }
 
-    // 3. Validate consistency
-    const validation = this.validateConsistency(snapshot, result);
-    result.issues.push(...validation.issues);
+    // 3. Restore ApprovalRequests from snapshot
+    if (snapshot.approvals && Array.isArray(snapshot.approvals)) {
+      for (const approvalData of snapshot.approvals) {
+        const approval = this.restoreApproval(approvalData);
+        if (approval) {
+          result.approvalRequests.push(approval);
+          result.approvalStatusMap.set(approval.target.id, approval.status);
 
-    // 4. Recover pending approvals
-    if (snapshot.plan && snapshot.plan.tasks) {
-      for (const task of snapshot.plan.tasks) {
-        // Tasks that were waiting for approval stay pending
-        // We don't auto-approve — that's the safe behavior
+          // Restore into ExecutionGate if provided
+          if (executionGate) {
+            executionGate.restoreRequest(approval);
+            result.actions.push({
+              type: 'approval_restored',
+              approvalId: approval.id,
+              targetId: approval.target.id,
+              status: approval.status,
+            });
+          }
+        }
       }
     }
+
+    // 4. Validate consistency
+    const validation = this.validateConsistency(snapshot, result);
+    result.issues.push(...validation.issues);
 
     // 5. Emit recovery event
     if (this.emitter) {
@@ -97,6 +118,7 @@ class RuntimeRecoveryManager {
           snapshotId: snapshot.id,
           actions: result.actions.length,
           issues: result.issues.length,
+          approvalsRestored: result.approvalRequests.length,
         },
       });
     }
@@ -105,7 +127,21 @@ class RuntimeRecoveryManager {
   }
 
   /**
-   * V0.9.4: Validate Runtime consistency after restore.
+   * V0.9.4.1: Restore a single ApprovalRequest from snapshot data.
+   * Does NOT auto-approve. Preserves original status.
+   */
+  restoreApproval(data) {
+    if (!data) return null;
+    return {
+      ...data,
+      createdAt: data.createdAt || Date.now(),
+      resolvedAt: data.resolvedAt || null,
+      expiresAt: data.expiresAt || null,
+    };
+  }
+
+  /**
+   * V0.9.4.1: Validate Runtime consistency after restore.
    */
   validateConsistency(snapshot, recovery) {
     const issues = [];
@@ -125,7 +161,7 @@ class RuntimeRecoveryManager {
       }
     }
 
-    // Check for running tasks without plan
+    // Check for running tasks in draft plan
     if (recovery.plan && recovery.plan.status === 'draft') {
       const runningTasks = Array.from(recovery.taskStatusMap.entries())
         .filter(([_, s]) => s === TASK_STATUS.RUNNING);
@@ -139,7 +175,7 @@ class RuntimeRecoveryManager {
       }
     }
 
-    // Check for orphaned tasks (tasks not in plan)
+    // Check for orphaned tasks
     if (recovery.plan) {
       const planTaskIds = new Set(recovery.plan.tasks.map(t => t.id));
       for (const [taskId, status] of recovery.taskStatusMap) {
@@ -155,11 +191,26 @@ class RuntimeRecoveryManager {
       }
     }
 
+    // V0.9.4.1: Check for pending approvals with expired timestamps
+    const approvalRequests = recovery.approvalRequests || [];
+    const now = Date.now();
+    for (const approval of approvalRequests) {
+      if (approval.status === APPROVAL_STATUS.PENDING && approval.expiresAt && now > approval.expiresAt) {
+        issues.push({
+          severity: 'warning',
+          type: 'expired_approval',
+          message: `Approval ${approval.id} has expired but status is still PENDING`,
+          approvalId: approval.id,
+          targetId: approval.target.id,
+        });
+      }
+    }
+
     return { issues };
   }
 
   /**
-   * V0.9.4: Recover pending tasks — return tasks that should be retried.
+   * V0.9.4.1: Recover pending tasks — return tasks that should be retried.
    */
   recoverPendingTasks(taskStatusMap) {
     const pending = [];
@@ -172,10 +223,11 @@ class RuntimeRecoveryManager {
   }
 
   /**
-   * V0.9.4: Recover pending approvals — return approvals that are still pending.
-   * Does NOT auto-approve. Returns for external handling.
+   * V0.9.4.1: Recover pending approvals — return approvals that are still pending.
+   * Uses the actual recovery approvalStatusMap, not an empty map.
    */
   recoverPendingApprovals(approvalStatusMap) {
+    if (!approvalStatusMap) return [];
     const pending = [];
     for (const [taskId, status] of approvalStatusMap) {
       if (status === APPROVAL_STATUS.PENDING) {
@@ -186,27 +238,67 @@ class RuntimeRecoveryManager {
   }
 
   /**
-   * V0.9.4: Check if recovery is safe to auto-continue.
-   * Returns false if there are pending approvals or running dangerous tasks.
+   * V0.9.4.1: Check if recovery is safe to auto-continue.
+   *
+   * Returns false if:
+   * - Any pending approvals exist
+   * - Plan is in FAILED state
+   * - Runtime consistency validation has critical errors
+   *
+   * @param {object} recovery - Recovery result from restore()
+   * @returns {boolean}
    */
   canAutoContinue(recovery) {
-    // Cannot auto-continue if there are pending approvals
-    const pendingApprovals = this.recoverPendingApprovals(new Map());
+    if (!recovery) return false;
+
+    // 1. Check pending approvals — use actual recovery data
+    const pendingApprovals = this.recoverPendingApprovals(recovery.approvalStatusMap);
     if (pendingApprovals.length > 0) {
       return false;
     }
 
-    // Cannot auto-continue if plan is in failed state
-    if (recovery.plan && recovery.plan.status === 'failed') {
+    // 2. Check plan state
+    if (recovery.plan) {
+      if (recovery.plan.status === 'failed') {
+        return false;
+      }
+      if (recovery.plan.status === 'cancelled') {
+        return false;
+      }
+    }
+
+    // 3. Check for critical consistency errors
+    const criticalIssues = (recovery.issues || []).filter(
+      i => i.severity === 'error' || i.severity === 'critical'
+    );
+    if (criticalIssues.length > 0) {
+      return false;
+    }
+
+    // 4. Check for expired approvals that should have been resolved
+    const expiredApprovals = (recovery.approvalRequests || []).filter(
+      a => a.status === APPROVAL_STATUS.PENDING &&
+           a.expiresAt &&
+           Date.now() > a.expiresAt
+    );
+    if (expiredApprovals.length > 0) {
       return false;
     }
 
     return true;
   }
+
+  /**
+   * V0.9.4.1: Check if recovery has pending approvals.
+   */
+  hasPendingApprovals(recovery) {
+    if (!recovery) return false;
+    return this.recoverPendingApprovals(recovery.approvalStatusMap).length > 0;
+  }
 }
 
 /**
- * V0.9.4: Create a RuntimeRecoveryManager.
+ * V0.9.4.1: Create a RuntimeRecoveryManager.
  */
 function createRecoveryManager(options) {
   return new RuntimeRecoveryManager(options);

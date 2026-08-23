@@ -42,9 +42,10 @@ class SnapshotCompatibilityError extends Error {
 /**
  * V0.8: RuntimeSnapshot — captures the full state of a run at a point in time.
  * V0.8.1: Added version field.
+ * V0.9.4.1: Added approvals field for ExecutionGate state.
  */
-function createSnapshot(runId, runtimeContext, evidenceRegistry, eventLog, status) {
-  return {
+function createSnapshot(runId, runtimeContext, evidenceRegistry, eventLog, status, executionGate) {
+  const snapshot = {
     id: `snap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     runId,
     timestamp: Date.now(),
@@ -54,6 +55,29 @@ function createSnapshot(runId, runtimeContext, evidenceRegistry, eventLog, statu
     evidenceRegistry: evidenceRegistry ? evidenceRegistry.serialize() : null,
     eventLog: eventLog ? eventLog.serialize() : null,
   };
+
+  // V0.9.4.1: Include approval requests from ExecutionGate
+  if (executionGate && executionGate.getRequestsByRun) {
+    const approvals = executionGate.getRequestsByRun(runId);
+    if (approvals.length > 0) {
+      snapshot.approvals = approvals.map(a => ({
+        id: a.id,
+        runId: a.runId,
+        target: a.target,
+        reason: a.reason,
+        context: a.context,
+        status: a.status,
+        createdAt: a.createdAt,
+        resolvedAt: a.resolvedAt,
+        resolvedBy: a.resolvedBy,
+        resolutionReason: a.resolutionReason,
+        timeoutMs: a.timeoutMs,
+        expiresAt: a.expiresAt,
+      }));
+    }
+  }
+
+  return snapshot;
 }
 
 // ── Restore Snapshot ──────────────────────────────────────

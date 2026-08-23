@@ -281,6 +281,52 @@ class ExecutionGate {
   }
 
   /**
+   * V0.9.4.1: Restore an ApprovalRequest from snapshot.
+   * Does NOT auto-approve. Preserves original status.
+   *
+   * @param {object} request - ApprovalRequest data from snapshot
+   * @returns {object} The restored request
+   */
+  restoreRequest(request) {
+    if (!request) return null;
+    const restored = {
+      ...request,
+      // Ensure Date fields are numbers
+      createdAt: request.createdAt || Date.now(),
+      resolvedAt: request.resolvedAt || null,
+      expiresAt: request.expiresAt || null,
+    };
+    this.requests.set(restored.id, restored);
+    return restored;
+  }
+
+  /**
+   * V0.9.4.1: Restore multiple ApprovalRequests from snapshot.
+   * @param {object[]} requests - Array of ApprovalRequest data
+   * @returns {object[]} Restored requests
+   */
+  restoreRequests(requests) {
+    if (!Array.isArray(requests)) return [];
+    return requests.map(r => this.restoreRequest(r)).filter(Boolean);
+  }
+
+  /**
+   * V0.9.4.1: Get all requests for a run.
+   */
+  getRequestsByRun(runId) {
+    return Array.from(this.requests.values())
+      .filter(r => r.runId === runId);
+  }
+
+  /**
+   * V0.9.4.1: Check if there are any pending approvals for a run.
+   */
+  hasPendingApprovals(runId) {
+    return this.getRequestsByRun(runId)
+      .some(r => r.status === APPROVAL_STATUS.PENDING);
+  }
+
+  /**
    * V0.9.3: Get all pending requests for a run.
    */
   getPendingRequests(runId) {

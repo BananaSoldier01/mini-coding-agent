@@ -321,6 +321,7 @@ function getExecutionOrder(plan) {
 
 /**
  * V0.9.1: Create a Runtime Snapshot v2 — includes Plan + Task + ToolExecution + Evidence.
+ * V0.9.4.1: Added executionGate parameter for approval state.
  *
  * @param {string} runId - Run ID
  * @param {object} runtimeContext - AgentRuntimeContext
@@ -328,10 +329,11 @@ function getExecutionOrder(plan) {
  * @param {object} evidenceRegistry - EvidenceRegistry
  * @param {object} eventLog - RuntimeEventLog
  * @param {string} status - Overall status
+ * @param {object} [executionGate] - ExecutionGate for approval state
  * @returns {object} Snapshot v2
  */
-function createSnapshotV2(runId, runtimeContext, plan, evidenceRegistry, eventLog, status) {
-  return {
+function createSnapshotV2(runId, runtimeContext, plan, evidenceRegistry, eventLog, status, executionGate) {
+  const snapshot = {
     id: `snap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     runId,
     timestamp: Date.now(),
@@ -343,6 +345,29 @@ function createSnapshotV2(runId, runtimeContext, plan, evidenceRegistry, eventLo
     evidenceRegistry: evidenceRegistry ? evidenceRegistry.serialize() : null,
     eventLog: eventLog ? eventLog.serialize() : null,
   };
+
+  // V0.9.4.1: Include approval requests from ExecutionGate
+  if (executionGate && executionGate.getRequestsByRun) {
+    const approvals = executionGate.getRequestsByRun(runId);
+    if (approvals.length > 0) {
+      snapshot.approvals = approvals.map(a => ({
+        id: a.id,
+        runId: a.runId,
+        target: a.target,
+        reason: a.reason,
+        context: a.context,
+        status: a.status,
+        createdAt: a.createdAt,
+        resolvedAt: a.resolvedAt,
+        resolvedBy: a.resolvedBy,
+        resolutionReason: a.resolutionReason,
+        timeoutMs: a.timeoutMs,
+        expiresAt: a.expiresAt,
+      }));
+    }
+  }
+
+  return snapshot;
 }
 
 /**
