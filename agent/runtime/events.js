@@ -1,116 +1,28 @@
 /**
  * agent/runtime/events.js — Runtime Event System
  *
- * V0.8.2
- * - RuntimeEventTypes
+ * V1.1.1
+ * - RuntimeEventTypes (deduplicated, standardized)
  * - RuntimeEventLog
  * - RuntimeEventEmitter (pub/sub bus)
+ * - Event Schema Validation
+ *
+ * Design:
+ *   Event is the audit trail.
+ *   Every state transition produces an Event.
+ *   Events are the source for Replay.
  */
 
 // ── Runtime Event Types ───────────────────────────────────
+// V1.1.1: Deduplicated — removed legacy duplicates, fixed typos.
 
 const RUNTIME_EVENT_TYPES = {
-  // Skill events
+  // ── Skill events ─────────────────────────────────────
   SKILL_ACTIVATED: 'skill_activated',
   SKILL_RUNNING: 'skill_running',
   SKILL_COMPLETED: 'skill_completed',
   SKILL_FAILED: 'skill_failed',
   SKILL_CANCELLED: 'skill_cancelled',
-
-  // Task events (V0.9.0)
-  TASK_CREATED: 'task_created',
-  TASK_STARTED: 'task_started',
-  TASK_COMPLETED: 'task_completed',
-  TASK_FAILED: 'task_failed',
-  TASK_CANCELLED: 'task_cancelled',
-
-  // Tool events (V0.9.0)
-  TOOL_REQUESTED: 'tool_requested',
-  TOOL_POLICY_CHECKED: 'tool_policy_checked',
-  TOOL_EXECUTING: 'tool_executing',
-  TOOL_COMPLETED: 'tool_completed',
-  TOOL_FAILED: 'tool_failed',
-
-  // Legacy tool events (backward compat)
-  TOOL_STARTED: 'tool_started',
-
-  // Verification events
-  VERIFICATION_STARTED: 'verification_started',
-  EVIDENCE_COLLECTED: 'evidence_collected',
-  VERIFICATION_COMPLETED: 'verification_completed',
-
-  // Run events
-  RUN_STARTED: 'run_started',
-  RUN_COMPLETED: 'run_completed',
-  RUN_FAILED: 'run_failed',
-
-  // Snapshot events
-  SNAPSHOT_SAVED: 'snapshot_saved',
-  SNAPSHOT_RESTORED: 'snapshot_restored',
-
-  // V0.9.7: Unified event types — standardized schema
-  PLAN_CREATED: 'plan_created',
-  PLAN_APPROVED: 'plan_approved',
-  PLAN_STARTED: 'plan_started',
-  PLAN_COMPLETED: 'plan_completed',
-  PLAN_FAILED: 'plan_failed',
-  PLAN_CANCELLED: 'plan_cancelled',
-
-  // V0.9.7: Revision events
-  REVISION_REQUESTED: 'revision_requested',
-  REVISION_VALIDATED: 'revision_validated',
-  REVISION_APPLIED: 'revision_applied',
-  REVISION_REJECTED: 'revision_rejected',
-  REVISION_CONFLICT: 'revision_conflict',
-  REVISION_ROLLED_BACK: 'revision_rolled_back',
-
-  // V0.9.7: Scheduler events
-  SCHEDULER_REFRESHED: 'scheduler_refreshed',
-  TASK_READY: 'task_ready',
-
-  // V0.9.7: Task verification events
-  TASK_VERIFYING: 'task_verifying',
-  TASK_SUPERSEDED: 'task_superseded',
-
-  // V0.9.8: Governance & Human Approval events
-  APPROVAL_REQUESTED: 'approval_requested',
-  APPROVAL_GRANTED: 'approval_granted',
-  APPROVAL_REJECTED: 'approval_rejected',
-  APPROVAL_EXPIRED: 'approval_expired',
-  TASK_PAUSED: 'task_paused',
-  TASK_RESUMED: 'task_resumend',
-  HUMAN_OVERRIDE: 'human_override',
-  RUN_PAUSED: 'run_paused',
-  RUN_RESUMED: 'run_resumend',
-
-  // V0.9.8: Task waiting approval
-  TASK_WAITING_APPROVAL: 'task_waiting_approval',
-
-  // V0.9.7: Tool execution events
-  TOOL_REQUESTED: 'tool_requested',
-  TOOL_POLICY_CHECKED: 'tool_policy_checked',
-  TOOL_EXECUTING: 'tool_executing',
-  TOOL_COMPLETED: 'tool_completed',
-  TOOL_FAILED: 'tool_failed',
-
-  // V0.9.7: Run events
-  RUN_STARTED: 'run_started',
-  RUN_COMPLETED: 'run_completed',
-  RUN_FAILED: 'run_failed',
-
-  // V0.9.9: Capability events
-  CAPABILITY_REGISTERED: 'capability_registered',
-  CAPABILITY_ENABLED: 'capability_enabled',
-  CAPABILITY_DISABLED: 'capability_disabled',
-  CAPABILITY_CHECKED: 'capability_checked',
-  CAPABILITY_DENIED: 'capability_denied',
-
-  // V0.9.9: Tool events
-  TOOL_REGISTERED: 'tool_registered',
-  TOOL_EXECUTION_REQUESTED: 'tool_execution_requested',
-  TOOL_EXECUTION_BLOCKED: 'tool_execution_blocked',
-
-  // V1.0.0: Skill Runtime events
   SKILL_REGISTERED: 'skill_registered',
   SKILL_ENABLED: 'skill_enabled',
   SKILL_DISABLED: 'skill_disabled',
@@ -120,7 +32,79 @@ const RUNTIME_EVENT_TYPES = {
   SKILL_EXECUTION_FAILED: 'skill_execution_failed',
   SKILL_CAPABILITY_DENIED: 'skill_capability_denied',
 
-  // V1.1.0: Workspace events
+  // ── Task events ──────────────────────────────────────
+  TASK_CREATED: 'task_created',
+  TASK_STARTED: 'task_started',
+  TASK_VERIFYING: 'task_verifying',
+  TASK_COMPLETED: 'task_completed',
+  TASK_FAILED: 'task_failed',
+  TASK_CANCELLED: 'task_cancelled',
+  TASK_SUPERSEDED: 'task_superseded',
+  TASK_PAUSED: 'task_paused',
+  TASK_RESUMED: 'task_resumed',
+  TASK_WAITING_APPROVAL: 'task_waiting_approval',
+
+  // ── Plan events ──────────────────────────────────────
+  PLAN_CREATED: 'plan_created',
+  PLAN_APPROVED: 'plan_approved',
+  PLAN_STARTED: 'plan_started',
+  PLAN_COMPLETED: 'plan_completed',
+  PLAN_FAILED: 'plan_failed',
+  PLAN_CANCELLED: 'plan_cancelled',
+
+  // ── Revision events ──────────────────────────────────
+  REVISION_REQUESTED: 'revision_requested',
+  REVISION_VALIDATED: 'revision_validated',
+  REVISION_APPLIED: 'revision_applied',
+  REVISION_REJECTED: 'revision_rejected',
+  REVISION_CONFLICT: 'revision_conflict',
+  REVISION_ROLLED_BACK: 'revision_rolled_back',
+
+  // ── Tool events ──────────────────────────────────────
+  TOOL_REQUESTED: 'tool_requested',
+  TOOL_POLICY_CHECKED: 'tool_policy_checked',
+  TOOL_EXECUTING: 'tool_executing',
+  TOOL_COMPLETED: 'tool_completed',
+  TOOL_FAILED: 'tool_failed',
+  TOOL_REGISTERED: 'tool_registered',
+  TOOL_EXECUTION_REQUESTED: 'tool_execution_requested',
+  TOOL_EXECUTION_BLOCKED: 'tool_execution_blocked',
+
+  // ── Capability events ────────────────────────────────
+  CAPABILITY_REGISTERED: 'capability_registered',
+  CAPABILITY_ENABLED: 'capability_enabled',
+  CAPABILITY_DISABLED: 'capability_disabled',
+  CAPABILITY_CHECKED: 'capability_checked',
+  CAPABILITY_DENIED: 'capability_denied',
+
+  // ── Approval / Governance events ─────────────────────
+  APPROVAL_REQUESTED: 'approval_requested',
+  APPROVAL_GRANTED: 'approval_granted',
+  APPROVAL_REJECTED: 'approval_rejected',
+  APPROVAL_EXPIRED: 'approval_expired',
+  HUMAN_OVERRIDE: 'human_override',
+  RUN_PAUSED: 'run_paused',
+  RUN_RESUMED: 'run_resumed',
+
+  // ── Scheduler events ─────────────────────────────────
+  SCHEDULER_REFRESHED: 'scheduler_refreshed',
+  TASK_READY: 'task_ready',
+
+  // ── Verification events ──────────────────────────────
+  VERIFICATION_STARTED: 'verification_started',
+  EVIDENCE_COLLECTED: 'evidence_collected',
+  VERIFICATION_COMPLETED: 'verification_completed',
+
+  // ── Run events ───────────────────────────────────────
+  RUN_STARTED: 'run_started',
+  RUN_COMPLETED: 'run_completed',
+  RUN_FAILED: 'run_failed',
+
+  // ── Snapshot events ──────────────────────────────────
+  SNAPSHOT_SAVED: 'snapshot_saved',
+  SNAPSHOT_RESTORED: 'snapshot_restored',
+
+  // ── Workspace events (V1.1.0) ────────────────────────
   WORKSPACE_CREATED: 'workspace_created',
   WORKSPACE_ACTIVATED: 'workspace_activated',
   WORKSPACE_ARCHIVED: 'workspace_archived',
@@ -129,6 +113,105 @@ const RUNTIME_EVENT_TYPES = {
   ARTIFACT_DELETED: 'artifact_deleted',
   WORKSPACE_SNAPSHOT_CREATED: 'workspace_snapshot_created',
 };
+
+// ── Event Schema ──────────────────────────────────────────
+
+/**
+ * V1.1.1: Event Schema — defines required fields per event type.
+ * Used for validation in development mode.
+ */
+const EVENT_SCHEMA = {
+  // Required fields for all events
+  _base: ['type', 'timestamp', 'runId'],
+
+  // Skill events
+  skill_activated: ['type', 'timestamp', 'runId', 'data'],
+  skill_execution_started: ['type', 'timestamp', 'runId', 'data'],
+  skill_execution_completed: ['type', 'timestamp', 'runId', 'data'],
+  skill_execution_failed: ['type', 'timestamp', 'runId', 'data'],
+  skill_capability_denied: ['type', 'timestamp', 'runId', 'data'],
+
+  // Task events
+  task_created: ['type', 'timestamp', 'runId', 'taskId', 'data'],
+  task_started: ['type', 'timestamp', 'runId', 'taskId', 'data'],
+  task_completed: ['type', 'timestamp', 'runId', 'taskId', 'data'],
+  task_failed: ['type', 'timestamp', 'runId', 'taskId', 'data'],
+  task_superseded: ['type', 'timestamp', 'runId', 'taskId', 'data'],
+  task_paused: ['type', 'timestamp', 'runId', 'taskId', 'data'],
+  task_resumed: ['type', 'timestamp', 'runId', 'taskId', 'data'],
+  task_waiting_approval: ['type', 'timestamp', 'runId', 'taskId', 'data'],
+
+  // Plan events
+  plan_created: ['type', 'timestamp', 'runId', 'planId', 'data'],
+  plan_approved: ['type', 'timestamp', 'runId', 'planId', 'data'],
+  plan_started: ['type', 'timestamp', 'runId', 'planId', 'data'],
+  plan_completed: ['type', 'timestamp', 'runId', 'planId', 'data'],
+  plan_failed: ['type', 'timestamp', 'runId', 'planId', 'data'],
+
+  // Revision events
+  revision_requested: ['type', 'timestamp', 'runId', 'planId', 'data'],
+  revision_validated: ['type', 'timestamp', 'runId', 'planId', 'data'],
+  revision_applied: ['type', 'timestamp', 'runId', 'planId', 'data'],
+  revision_rejected: ['type', 'timestamp', 'runId', 'planId', 'data'],
+  revision_conflict: ['type', 'timestamp', 'runId', 'planId', 'data'],
+  revision_rolled_back: ['type', 'timestamp', 'runId', 'planId', 'data'],
+
+  // Approval events
+  approval_requested: ['type', 'timestamp', 'runId', 'taskId', 'data'],
+  approval_granted: ['type', 'timestamp', 'runId', 'taskId', 'data'],
+  approval_rejected: ['type', 'timestamp', 'runId', 'taskId', 'data'],
+
+  // Workspace events
+  workspace_created: ['type', 'timestamp', 'runId', 'workspaceId', 'data'],
+  workspace_activated: ['type', 'timestamp', 'runId', 'workspaceId', 'data'],
+  workspace_archived: ['type', 'timestamp', 'runId', 'workspaceId', 'data'],
+  context_updated: ['type', 'timestamp', 'runId', 'workspaceId', 'data'],
+  artifact_created: ['type', 'timestamp', 'runId', 'workspaceId', 'taskId', 'data'],
+  artifact_deleted: ['type', 'timestamp', 'runId', 'workspaceId', 'data'],
+};
+
+// ── Event Validation ──────────────────────────────────────
+
+/**
+ * V1.1.1: Validate an event against the schema.
+ * In development mode, throws on invalid events.
+ * In production mode, logs warnings.
+ */
+function validateEvent(event, strict = false) {
+  if (!event || typeof event !== 'object') {
+    const msg = '[EventValidation] Invalid event: not an object';
+    if (strict) throw new Error(msg);
+    console.warn(msg);
+    return false;
+  }
+
+  if (!event.type) {
+    const msg = '[EventValidation] Event missing type';
+    if (strict) throw new Error(msg);
+    console.warn(msg);
+    return false;
+  }
+
+  const schema = EVENT_SCHEMA[event.type] || EVENT_SCHEMA._base;
+  for (const field of schema) {
+    if (event[field] === undefined || event[field] === null) {
+      const msg = `[EventValidation] Event ${event.type} missing required field: ${field}`;
+      if (strict) throw new Error(msg);
+      console.warn(msg);
+      return false;
+    }
+  }
+
+  // Check for unknown event types
+  if (!RUNTIME_EVENT_TYPES[event.type] && !EVENT_SCHEMA[event.type]) {
+    const msg = `[EventValidation] Unknown event type: ${event.type}`;
+    if (strict) throw new Error(msg);
+    console.warn(msg);
+    return false;
+  }
+
+  return true;
+}
 
 // ── Runtime Event Log ─────────────────────────────────────
 
@@ -152,7 +235,6 @@ class RuntimeEventLog {
     };
     this.events.push(ev);
 
-    // Cap the log size
     if (this.events.length > this.maxEvents) {
       this.events = this.events.slice(-this.maxEvents);
     }
@@ -238,20 +320,28 @@ class RuntimeEventEmitter {
   constructor() {
     this.handlers = new Map(); // eventType → [handlers]
     this.allHandlers = [];     // wildcard handlers
-    // V0.9.7: Event Store integration — all emitted events are persisted
+    // V1.1.1: Event Store integration
     this.store = null;
+    // V1.1.1: Development mode validation
+    this.strictValidation = false;
   }
 
   /**
-   * V0.9.7: Set the RuntimeEventStore for persistence.
-   * All emitted events are also appended to the store.
+   * V1.1.1: Enable strict event validation.
+   */
+  setStrictValidation(enabled) {
+    this.strictValidation = enabled;
+  }
+
+  /**
+   * V1.1.1: Set the RuntimeEventStore for persistence.
    */
   setStore(store) {
     this.store = store;
   }
 
   /**
-   * V0.9.7: Get the current event store.
+   * V1.1.1: Get the current event store.
    */
   getStore() {
     return this.store;
@@ -294,13 +384,18 @@ class RuntimeEventEmitter {
    * Emit an event to all subscribers.
    */
   emit(event) {
+    // V1.1.1: Validate event schema
+    if (this.strictValidation) {
+      validateEvent(event, true);
+    }
+
     const ev = {
       id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
       timestamp: Date.now(),
       ...event,
     };
 
-    // V0.9.7: Persist to Event Store
+    // V1.1.1: Persist to Event Store
     if (this.store) {
       this.store.append(ev);
     }
@@ -338,6 +433,8 @@ class RuntimeEventEmitter {
 
 export {
   RUNTIME_EVENT_TYPES,
+  EVENT_SCHEMA,
+  validateEvent,
   RuntimeEventLog,
   RuntimeEventEmitter,
 };

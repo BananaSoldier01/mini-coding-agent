@@ -276,7 +276,7 @@ test('Governance: approve emits approval_granted event', () => {
   const events = store.getEventsByTask(task.id);
   const types = events.map(e => e.type);
   assert.ok(types.includes('approval_granted'));
-  assert.ok(types.includes('task_resumend'));
+  assert.ok(types.includes('task_resumed'));
 });
 
 test('Governance: reject emits approval_rejected event', () => {
@@ -307,7 +307,7 @@ test('Governance: pause emits task_paused event', () => {
   assert.ok(events.some(e => e.type === 'task_paused'));
 });
 
-test('Governance: resume emits task_resumend event', () => {
+test('Governance: resume emits task_resumed event', () => {
   const store = createEventStore();
   const emitter = new RuntimeEventEmitter();
   emitter.setStore(store);
@@ -318,7 +318,7 @@ test('Governance: resume emits task_resumend event', () => {
   resumeTask(task, emitter, { operator: 'user' });
 
   const events = store.getEventsByTask(task.id);
-  assert.ok(events.some(e => e.type === 'task_resumend'));
+  assert.ok(events.some(e => e.type === 'task_resumed'));
 });
 
 test('Governance: humanOverride emits human_override event', () => {
@@ -351,7 +351,7 @@ test('Governance: pauseRun emits run_paused event', () => {
   assert.ok(events.some(e => e.type === 'run_paused'));
 });
 
-test('Governance: resumeRun emits run_resumend event', () => {
+test('Governance: resumeRun emits run_resumed event', () => {
   const store = createEventStore();
   const emitter = new RuntimeEventEmitter();
   emitter.setStore(store);
@@ -361,7 +361,7 @@ test('Governance: resumeRun emits run_resumend event', () => {
   manager.resumeRun('run-1', { operator: 'user' });
 
   const events = store.getEventsByRun('run-1');
-  assert.ok(events.some(e => e.type === 'run_resumend'));
+  assert.ok(events.some(e => e.type === 'run_resumed'));
 });
 
 // ── Test 6: Governance + Replay Integration ───────────────

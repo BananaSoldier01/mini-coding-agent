@@ -4,6 +4,62 @@
 
 ---
 
+## V1.1.1 — Runtime Hardening & Architecture Stabilization
+
+### D1: Unified Runtime State Model
+
+**Decision**: Clarify Source of Truth for all core Runtime objects.
+
+| Object | Source of Truth | Derived State | Event Log |
+|--------|----------------|---------------|-----------|
+| Workspace | WorkspaceStore (Map) | status, runIds | workspace_created/activated/archived |
+| Run | ExecutionCoordinator | tasks, planId | run_started/completed/failed |
+| Task | TaskRuntime (in-memory) | status, revisionId | task_created/started/completed/failed |
+| Plan | PlanRuntime (in-memory) | tasks, revisions | plan_created/approved/started |
+| Skill | SkillRegistry (Map) | enabled flag | skill_registered/enabled/disabled |
+| Capability | CapabilityRegistry (Map) | enabled flag | capability_registered/enabled/disabled |
+
+**Trade-off**: Event Store is audit trail, not state source. Replay reconstructs state from events but does not replace live state.
+
+**Rationale**: Avoids dual-write inconsistency. Each object has one owner.
+
+### D2: WorkspaceStore vs WorkspaceRegistry
+
+**Decision**: Split Workspace persistence from query.
+
+- `WorkspaceStore`: Source of Truth (create/get/update/delete/serialize/restore)
+- `WorkspaceRegistry`: Query layer (list/listByStatus/listByRun/getWorkspaceForRun)
+
+**Trade-off**: Two objects instead of one. Registry delegates to Store for state.
+
+**Rationale**: Registry was doing both persistence and query. Splitting allows independent scaling and testing.
+
+### D3: Event Type Deduplication
+
+**Decision**: Remove duplicate event type definitions, fix typos.
+
+- Removed: duplicate TOOL_REQUESTED, TOOL_POLICY_CHECKED, TOOL_EXECUTING, TOOL_COMPLETED, TOOL_FAILED, RUN_STARTED, RUN_COMPLETED, RUN_FAILED
+- Fixed: `task_resumend` → `task_resumed`, `run_resumend` → `run_resumed`
+- Added: EVENT_SCHEMA for validation
+
+**Trade-off**: Breaking change for any code using old event type strings. All internal references updated.
+
+**Rationale**: Duplicates caused confusion about which definition was authoritative. Typos caused event matching failures.
+
+### D4: Event Schema Validation
+
+**Decision**: Add `validateEvent()` with strict mode for development.
+
+**Trade-off**: Runtime overhead in strict mode (not for production).
+
+**Rationale**: Catches invalid events at emit time instead of during replay.
+
+### D5: No New Runtime Concepts
+
+**Decision**: V1.1.1 introduces no new Agent capabilities.
+
+**Rationale**: Stabilization phase. Existing abstractions are sufficient. Adding more layers increases maintenance burden.
+
 ## Decision 1 — ESM Module System
 
 **状态**: 已采纳（V0.1）

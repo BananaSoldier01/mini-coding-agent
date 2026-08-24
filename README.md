@@ -2,7 +2,7 @@
 
 一个可在本地 workspace 中执行编码任务的轻量级 Agent Harness。
 
-**当前版本**: V1.1.0 — Workspace Runtime & Context Management
+**当前版本**: V1.1.1 — Runtime Hardening & Architecture Stabilization
 
 ## 特性
 

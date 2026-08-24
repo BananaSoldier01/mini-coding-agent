@@ -13,6 +13,7 @@ export * from './sandbox.js';
 export * from './skill-runtime.js';
 export * from './workspace.js';
 export * from './workspace-registry.js';
+export * from './workspace-store.js';
 export * from './context-manager.js';
 export * from './artifact-store.js';
 export * from './context.js';

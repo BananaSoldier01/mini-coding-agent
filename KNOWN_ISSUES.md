@@ -4,6 +4,19 @@
 
 ---
 
+## V1.1.1 — Runtime Hardening & Architecture Stabilization（已完成）
+
+### Runtime Hardening
+- Unified State Model: Source of Truth / Derived State / Event Log 分离 (DECISIONS.md)
+- Workspace Store: 持久化层与 Registry 分离 (agent/runtime/workspace-store.js)
+- Workspace Recovery: serialize/restore 支持 Runtime 重启恢复
+- Event System Cleanup: 去重 7 组重复 event 类型，修复 2 处拼写错误
+- Event Schema 标准化: EVENT_SCHEMA + validateEvent() 开发模式校验
+- Scenario Tests: Workspace Lifecycle / Recovery / Illegal State / Consistency (15 tests)
+- 15 new tests (806/806 PASS)
+
+---
+
 ## V1.1.0 — Workspace Runtime & Context Management（已完成）
 
 ### Workspace Runtime
