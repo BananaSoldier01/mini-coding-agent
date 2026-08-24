@@ -372,9 +372,10 @@ class RevisionEngine {
           if (status === TASK_STATUS.RUNNING && this.autoProtectRunning) {
             const task = planChanges.tasks.find(t => t.id === taskId);
             if (task) {
-              task.deprecated = true;
-              task.deprecatedAt = Date.now();
-              task.deprecatedReason = 'Plan revision — task superseded';
+              // V0.9.6.1: Use SUPERSEDED status instead of deprecated flag
+              task.status = TASK_STATUS.SUPERSEDED;
+              task.supersededAt = Date.now();
+              task.supersededReason = 'Plan revision — task superseded';
             }
           }
         }
@@ -385,13 +386,15 @@ class RevisionEngine {
     newPlan.revisionReason = revision.reason;
     newPlan.revisionSource = revision.source;
 
-    // Mark superseded tasks
+    // V0.9.6.1: Mark superseded tasks with SUPERSEDED status
     for (const taskId of supersededIds) {
       const task = newPlan.tasks.find(t => t.id === taskId);
       if (task) {
-        task.deprecated = true;
-        task.deprecatedAt = Date.now();
-        task.deprecatedReason = 'Plan revision — task superseded';
+        task.status = TASK_STATUS.SUPERSEDED;
+        task.supersededAt = Date.now();
+        task.supersededReason = 'Plan revision — task superseded';
+        // Update taskStatusMap for scheduler
+        this.taskStatusMap.set(taskId, TASK_STATUS.SUPERSEDED);
       }
     }
 

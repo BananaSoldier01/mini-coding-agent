@@ -4,6 +4,16 @@
 
 ---
 
+## V0.9.6.1 — Task Superseded Integration（已完成）
+
+### Superseded Integration
+- 统一 deprecated → SUPERSEDED: revision.js 使用 status=SUPERSEDED 替代 deprecated=true
+- supersedeTask() 保留 evidence 和 previousStatus
+- scheduler 通过 taskStatusMap 阻止 SUPERSEDED 任务调度
+- 9 new tests (648/648 PASS)
+
+---
+
 ## V0.9.6 — Runtime Consistency & Revision Hardening（已完成）
 
 ### Revision Hardening

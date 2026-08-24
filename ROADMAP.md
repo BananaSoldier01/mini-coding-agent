@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.9.6 — Runtime Consistency & Revision Hardening**（已完成）
+**V0.9.6.1 — Task Superseded Integration**（已完成）
 
 **Next: V0.9.7 — Runtime Integration Tests**
 
@@ -126,6 +126,13 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.9.6.1 — Task Superseded Integration
+- 统一 deprecated → SUPERSEDED: revision.js 使用 status=SUPERSEDED 替代 deprecated=true
+- supersedeTask() 保留 evidence 和 previousStatus
+- scheduler 通过 taskStatusMap 阻止 SUPERSEDED 任务调度
+- 9 new tests (648/648 PASS)
 - 状态：已完成
 
 ### V0.9.6 — Runtime Consistency & Revision Hardening
