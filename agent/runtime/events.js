@@ -97,6 +97,18 @@ const RUNTIME_EVENT_TYPES = {
   RUN_STARTED: 'run_started',
   RUN_COMPLETED: 'run_completed',
   RUN_FAILED: 'run_failed',
+
+  // V0.9.9: Capability events
+  CAPABILITY_REGISTERED: 'capability_registered',
+  CAPABILITY_ENABLED: 'capability_enabled',
+  CAPABILITY_DISABLED: 'capability_disabled',
+  CAPABILITY_CHECKED: 'capability_checked',
+  CAPABILITY_DENIED: 'capability_denied',
+
+  // V0.9.9: Tool events
+  TOOL_REGISTERED: 'tool_registered',
+  TOOL_EXECUTION_REQUESTED: 'tool_execution_requested',
+  TOOL_EXECUTION_BLOCKED: 'tool_execution_blocked',
 };
 
 // ── Runtime Event Log ─────────────────────────────────────

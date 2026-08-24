@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.9.8 — Runtime Governance & Human Approval Workflow**（已完成）
+**V0.9.9 — Capability Runtime & Tool Governance**（已完成）
 
-**Next: V0.9.9 — Capability Runtime**
+**Next: V1.0 — Agent Productization Layer**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,15 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.9.9 — Capability Runtime & Tool Governance
+- Capability Model: lifecycle + permission check (agent/runtime/capability.js)
+- Tool Registry: register/query + map to capabilities (agent/runtime/tool-registry.js)
+- Sandbox Boundary: workspace path restrictions (agent/runtime/sandbox.js)
+- Tool Execution Governance: capability→policy→approval→execute
+- Capability Events: REGISTERED/ENABLED/DISABLED/CHECKED/DENIED + TOOL events
+- 35 new tests (740/740 PASS)
 - 状态：已完成
 
 ### V0.9.8 — Runtime Governance & Human Approval Workflow

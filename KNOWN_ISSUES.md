@@ -4,6 +4,18 @@
 
 ---
 
+## V0.9.9 — Capability Runtime & Tool Governance（已完成）
+
+### Capability & Tool Governance
+- Capability Model: lifecycle + permission check (agent/runtime/capability.js)
+- Tool Registry: register/query + map to capabilities (agent/runtime/tool-registry.js)
+- Sandbox Boundary: workspace path restrictions (agent/runtime/sandbox.js)
+- Tool Execution Governance: capability→policy→approval→execute
+- Capability Events: REGISTERED/ENABLED/DISABLED/CHECKED/DENIED + TOOL events
+- 35 new tests (740/740 PASS)
+
+---
+
 ## V0.9.8 — Runtime Governance & Human Approval Workflow（已完成）
 
 ### Governance & Approval
