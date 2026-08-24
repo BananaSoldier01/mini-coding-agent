@@ -72,6 +72,20 @@ const RUNTIME_EVENT_TYPES = {
   TASK_VERIFYING: 'task_verifying',
   TASK_SUPERSEDED: 'task_superseded',
 
+  // V0.9.8: Governance & Human Approval events
+  APPROVAL_REQUESTED: 'approval_requested',
+  APPROVAL_GRANTED: 'approval_granted',
+  APPROVAL_REJECTED: 'approval_rejected',
+  APPROVAL_EXPIRED: 'approval_expired',
+  TASK_PAUSED: 'task_paused',
+  TASK_RESUMED: 'task_resumend',
+  HUMAN_OVERRIDE: 'human_override',
+  RUN_PAUSED: 'run_paused',
+  RUN_RESUMED: 'run_resumend',
+
+  // V0.9.8: Task waiting approval
+  TASK_WAITING_APPROVAL: 'task_waiting_approval',
+
   // V0.9.7: Tool execution events
   TOOL_REQUESTED: 'tool_requested',
   TOOL_POLICY_CHECKED: 'tool_policy_checked',

@@ -2,7 +2,7 @@
 
 一个可在本地 workspace 中执行编码任务的轻量级 Agent Harness。
 
-**当前版本**: V0.9.7 — Runtime Event Log & Replay
+**当前版本**: V0.9.8 — Runtime Governance & Human Approval Workflow
 
 ## 特性
 

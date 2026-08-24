@@ -14,6 +14,8 @@ import { RUNTIME_EVENT_TYPES } from './events.js';
 const TASK_STATUS = {
   PENDING: 'pending',
   RUNNING: 'running',
+  // V0.9.8: Task waiting for human approval
+  WAITING_APPROVAL: 'waiting_approval',
   VERIFYING: 'verifying',
   COMPLETED: 'completed',
   FAILED: 'failed',
@@ -25,7 +27,9 @@ const TASK_STATUS = {
 const TASK_TRANSITIONS = {
   [TASK_STATUS.PENDING]: [TASK_STATUS.RUNNING, TASK_STATUS.CANCELLED],
   // V0.9.0.1: RUNNING cannot directly go to COMPLETED — must pass through VERIFYING
-  [TASK_STATUS.RUNNING]: [TASK_STATUS.VERIFYING, TASK_STATUS.FAILED, TASK_STATUS.CANCELLED, TASK_STATUS.SUPERSEDED],
+  [TASK_STATUS.RUNNING]: [TASK_STATUS.VERIFYING, TASK_STATUS.FAILED, TASK_STATUS.CANCELLED, TASK_STATUS.SUPERSEDED, TASK_STATUS.WAITING_APPROVAL],
+  // V0.9.8: WAITING_APPROVAL can go to RUNNING (approved) or FAILED/CANCELLED (rejected)
+  [TASK_STATUS.WAITING_APPROVAL]: [TASK_STATUS.RUNNING, TASK_STATUS.FAILED, TASK_STATUS.CANCELLED],
   [TASK_STATUS.VERIFYING]: [TASK_STATUS.COMPLETED, TASK_STATUS.FAILED, TASK_STATUS.CANCELLED, TASK_STATUS.SUPERSEDED],
   [TASK_STATUS.COMPLETED]: [],
   [TASK_STATUS.FAILED]: [],
@@ -251,6 +255,215 @@ function supersedeTask(task, emitter, context = {}) {
   return true;
 }
 
+/**
+ * V0.9.8: Request human approval — RUNNING → WAITING_APPROVAL.
+ * Emits TASK_WAITING_APPROVAL and APPROVAL_REQUESTED events.
+ */
+function requestApproval(task, emitter, context = {}) {
+  if (!task) return false;
+  if (task.status !== TASK_STATUS.RUNNING) {
+    console.warn(`[Task] Cannot request approval in status: ${task.status}`);
+    return false;
+  }
+
+  task.status = TASK_STATUS.WAITING_APPROVAL;
+  task.updatedAt = Date.now();
+  task.approvalRequestedAt = Date.now();
+  task.approvalReason = context.reason || 'Human approval required';
+  task.approvalRiskLevel = context.riskLevel || 'medium';
+
+  if (emitter) {
+    emitter.emit({
+      runId: task.runId,
+      taskId: task.id,
+      type: RUNTIME_EVENT_TYPES.TASK_WAITING_APPROVAL,
+      data: {
+        reason: task.approvalReason,
+        riskLevel: task.approvalRiskLevel,
+      },
+    });
+    emitter.emit({
+      runId: task.runId,
+      taskId: task.id,
+      type: RUNTIME_EVENT_TYPES.APPROVAL_REQUESTED,
+      data: {
+        reason: task.approvalReason,
+        riskLevel: task.approvalRiskLevel,
+        operator: context.operator || 'system',
+      },
+    });
+  }
+
+  return true;
+}
+
+/**
+ * V0.9.8: Approve task — WAITING_APPROVAL → RUNNING.
+ * Emits APPROVAL_GRANTED and TASK_RESUMED events.
+ */
+function approveTask(task, emitter, context = {}) {
+  if (!task) return false;
+  if (task.status !== TASK_STATUS.WAITING_APPROVAL) {
+    console.warn(`[Task] Cannot approve task in status: ${task.status}`);
+    return false;
+  }
+
+  task.status = TASK_STATUS.RUNNING;
+  task.updatedAt = Date.now();
+  task.approvedAt = Date.now();
+  task.approvedBy = context.operator || 'user';
+  task.approvalReason = null;
+
+  if (emitter) {
+    emitter.emit({
+      runId: task.runId,
+      taskId: task.id,
+      type: RUNTIME_EVENT_TYPES.APPROVAL_GRANTED,
+      data: {
+        operator: task.approvedBy,
+        reason: context.reason || 'Approved',
+      },
+    });
+    emitter.emit({
+      runId: task.runId,
+      taskId: task.id,
+      type: RUNTIME_EVENT_TYPES.TASK_RESUMED,
+      data: { resumedBy: task.approvedBy },
+    });
+  }
+
+  return true;
+}
+
+/**
+ * V0.9.8: Reject task — WAITING_APPROVAL → FAILED.
+ * Emits APPROVAL_REJECTED event.
+ */
+function rejectTask(task, emitter, context = {}) {
+  if (!task) return false;
+  if (task.status !== TASK_STATUS.WAITING_APPROVAL) {
+    console.warn(`[Task] Cannot reject task in status: ${task.status}`);
+    return false;
+  }
+
+  task.status = TASK_STATUS.FAILED;
+  task.updatedAt = Date.now();
+  task.failedAt = Date.now();
+  task.reason = context.reason || 'Human rejection';
+  task.rejectedAt = Date.now();
+  task.rejectedBy = context.operator || 'user';
+
+  if (emitter) {
+    emitter.emit({
+      runId: task.runId,
+      taskId: task.id,
+      type: RUNTIME_EVENT_TYPES.APPROVAL_REJECTED,
+      data: {
+        operator: task.rejectedBy,
+        reason: task.reason,
+      },
+    });
+  }
+
+  return true;
+}
+
+/**
+ * V0.9.8: Pause a task — RUNNING → WAITING_APPROVAL (same state, different semantics).
+ * Emits TASK_PAUSED event.
+ * Note: Paused tasks are held in WAITING_APPROVAL state until resumed.
+ */
+function pauseTask(task, emitter, context = {}) {
+  if (!task) return false;
+  if (task.status !== TASK_STATUS.RUNNING) {
+    console.warn(`[Task] Cannot pause task in status: ${task.status}`);
+    return false;
+  }
+
+  task.status = TASK_STATUS.WAITING_APPROVAL;
+  task.updatedAt = Date.now();
+  task.pausedAt = Date.now();
+  task.pauseReason = context.reason || 'Human pause';
+
+  if (emitter) {
+    emitter.emit({
+      runId: task.runId,
+      taskId: task.id,
+      type: RUNTIME_EVENT_TYPES.TASK_PAUSED,
+      data: {
+        reason: task.pauseReason,
+        operator: context.operator || 'user',
+      },
+    });
+  }
+
+  return true;
+}
+
+/**
+ * V0.9.8: Resume a paused task — WAITING_APPROVAL → RUNNING.
+ * Emits TASK_RESUMED event.
+ */
+function resumeTask(task, emitter, context = {}) {
+  if (!task) return false;
+  if (task.status !== TASK_STATUS.WAITING_APPROVAL) {
+    console.warn(`[Task] Cannot resume task in status: ${task.status}`);
+    return false;
+  }
+
+  task.status = TASK_STATUS.RUNNING;
+  task.updatedAt = Date.now();
+  task.resumedAt = Date.now();
+  task.pauseReason = null;
+
+  if (emitter) {
+    emitter.emit({
+      runId: task.runId,
+      taskId: task.id,
+      type: RUNTIME_EVENT_TYPES.TASK_RESUMED,
+      data: {
+        resumedBy: context.operator || 'user',
+        reason: context.reason || 'Resumed',
+      },
+    });
+  }
+
+  return true;
+}
+
+/**
+ * V0.9.8: Human override — force task to a specific state.
+ * Emits HUMAN_OVERRIDE event.
+ */
+function humanOverride(task, emitter, context = {}) {
+  if (!task) return false;
+  const targetStatus = context.targetStatus;
+  if (!targetStatus) return false;
+
+  const previousStatus = task.status;
+  task.status = targetStatus;
+  task.updatedAt = Date.now();
+  task.overriddenAt = Date.now();
+  task.overriddenBy = context.operator || 'user';
+  task.overrideReason = context.reason || 'Human override';
+
+  if (emitter) {
+    emitter.emit({
+      runId: task.runId,
+      taskId: task.id,
+      type: RUNTIME_EVENT_TYPES.HUMAN_OVERRIDE,
+      data: {
+        previousStatus,
+        targetStatus,
+        operator: task.overriddenBy,
+        reason: task.overrideReason,
+      },
+    });
+  }
+
+  return true;
+}
+
 export {
   TASK_STATUS,
   TASK_TRANSITIONS,
@@ -263,4 +476,11 @@ export {
   startTaskVerification,
   getTaskStatus,
   canTransitionTask,
+  // V0.9.8: Governance
+  requestApproval,
+  approveTask,
+  rejectTask,
+  pauseTask,
+  resumeTask,
+  humanOverride,
 };

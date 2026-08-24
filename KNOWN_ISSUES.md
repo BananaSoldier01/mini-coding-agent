@@ -4,6 +4,18 @@
 
 ---
 
+## V0.9.8 — Runtime Governance & Human Approval Workflow（已完成）
+
+### Governance & Approval
+- Human Approval Gate: WAITING_APPROVAL task state + requestApproval/approveTask/rejectTask
+- Runtime Pause / Resume: pauseRun/resumeRun + PAUSED run state
+- Human Intervention Events: APPROVAL_REQUESTED/GRANTED/REJECTED/TASK_PAUSED/RESUMED/HUMAN_OVERRIDE
+- Runtime Policy Control: requireApproval/maxRiskLevel/allowAutoRevision (agent/runtime/governance.js)
+- Governance State Persistence: snapshot includes governance state
+- 33 new tests (705/705 PASS)
+
+---
+
 ## V0.9.7 — Runtime Event Log & Replay（已完成）
 
 ### Event Store & Replay

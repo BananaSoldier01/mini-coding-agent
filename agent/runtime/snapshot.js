@@ -43,8 +43,9 @@ class SnapshotCompatibilityError extends Error {
  * V0.8: RuntimeSnapshot — captures the full state of a run at a point in time.
  * V0.8.1: Added version field.
  * V0.9.4.1: Added approvals field for ExecutionGate state.
+ * V0.9.8: Added governance field for GovernanceManager state.
  */
-function createSnapshot(runId, runtimeContext, evidenceRegistry, eventLog, status, executionGate) {
+function createSnapshot(runId, runtimeContext, evidenceRegistry, eventLog, status, executionGate, governance) {
   const snapshot = {
     id: `snap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     runId,
@@ -55,6 +56,11 @@ function createSnapshot(runId, runtimeContext, evidenceRegistry, eventLog, statu
     evidenceRegistry: evidenceRegistry ? evidenceRegistry.serialize() : null,
     eventLog: eventLog ? eventLog.serialize() : null,
   };
+
+  // V0.9.8: Include governance state
+  if (governance && governance.serialize) {
+    snapshot.governance = governance.serialize();
+  }
 
   // V0.9.4.1: Include approval requests from ExecutionGate
   if (executionGate && executionGate.getRequestsByRun) {

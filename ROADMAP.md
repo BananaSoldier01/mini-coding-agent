@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.9.7 — Runtime Event Log & Replay**（已完成）
+**V0.9.8 — Runtime Governance & Human Approval Workflow**（已完成）
 
-**Next: V0.9.8 — Runtime Integration Tests**
+**Next: V0.9.9 — Capability Runtime**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,15 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.9.8 — Runtime Governance & Human Approval Workflow
+- Human Approval Gate: WAITING_APPROVAL task state + requestApproval/approveTask/rejectTask
+- Runtime Pause / Resume: pauseRun/resumeRun + PAUSED run state
+- Human Intervention Events: APPROVAL_REQUESTED/GRANTED/REJECTED/TASK_PAUSED/RESUMED/HUMAN_OVERRIDE
+- Runtime Policy Control: requireApproval/maxRiskLevel/allowAutoRevision (agent/runtime/governance.js)
+- Governance State Persistence: snapshot includes governance state
+- 33 new tests (705/705 PASS)
 - 状态：已完成
 
 ### V0.9.7 — Runtime Event Log & Replay
