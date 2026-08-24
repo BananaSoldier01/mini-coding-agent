@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.9.9 — Capability Runtime & Tool Governance**（已完成）
+**V1.0.0 — Skill Runtime & Plugin System**（已完成）
 
-**Next: V1.0 — Agent Productization Layer**
+**Next: V1.1 — Agent Productization Layer**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,15 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V1.0.0 — Skill Runtime & Plugin System
+- Skill Definition Model: createSkillDefinition with tools/capabilities/config (agent/runtime/skill-runtime.js)
+- Skill Execution Runtime: executeSkill through full governance pipeline
+- Skill Capability Binding: skills declare required capabilities, must pass capability check
+- Plugin Package Format: skill.json + prompt.md + config.json local loading
+- Skill Events: REGISTERED/ENABLED/DISABLED/EXECUTION_STARTED/COMPLETED/FAILED/CAPABILITY_DENIED
+- 17 new tests (757/757 PASS)
 - 状态：已完成
 
 ### V0.9.9 — Capability Runtime & Tool Governance

@@ -4,6 +4,18 @@
 
 ---
 
+## V1.0.0 — Skill Runtime & Plugin System（已完成）
+
+### Skill Runtime
+- Skill Definition Model: createSkillDefinition with tools/capabilities/config (agent/runtime/skill-runtime.js)
+- Skill Execution Runtime: executeSkill through full governance pipeline
+- Skill Capability Binding: skills declare required capabilities, must pass capability check
+- Plugin Package Format: skill.json + prompt.md + config.json local loading
+- Skill Events: REGISTERED/ENABLED/DISABLED/EXECUTION_STARTED/COMPLETED/FAILED/CAPABILITY_DENIED
+- 17 new tests (757/757 PASS)
+
+---
+
 ## V0.9.9 — Capability Runtime & Tool Governance（已完成）
 
 ### Capability & Tool Governance

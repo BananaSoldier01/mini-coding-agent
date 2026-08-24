@@ -10,6 +10,7 @@ export * from './governance.js';
 export * from './capability.js';
 export * from './tool-registry.js';
 export * from './sandbox.js';
+export * from './skill-runtime.js';
 export * from './context.js';
 export * from './snapshot.js';
 export * from './persistence.js';

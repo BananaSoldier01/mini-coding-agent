@@ -109,6 +109,16 @@ const RUNTIME_EVENT_TYPES = {
   TOOL_REGISTERED: 'tool_registered',
   TOOL_EXECUTION_REQUESTED: 'tool_execution_requested',
   TOOL_EXECUTION_BLOCKED: 'tool_execution_blocked',
+
+  // V1.0.0: Skill Runtime events
+  SKILL_REGISTERED: 'skill_registered',
+  SKILL_ENABLED: 'skill_enabled',
+  SKILL_DISABLED: 'skill_disabled',
+  SKILL_REMOVED: 'skill_removed',
+  SKILL_EXECUTION_STARTED: 'skill_execution_started',
+  SKILL_EXECUTION_COMPLETED: 'skill_execution_completed',
+  SKILL_EXECUTION_FAILED: 'skill_execution_failed',
+  SKILL_CAPABILITY_DENIED: 'skill_capability_denied',
 };
 
 // ── Runtime Event Log ─────────────────────────────────────
