@@ -126,7 +126,7 @@ test('Supersede: full lifecycle — RUNNING → SUPERSEDED via revision', () => 
 
   // Verify conflict event
   const types = events.map(e => e.type);
-  assert.ok(types.includes('plan_revision_conflict'));
+  assert.ok(types.includes('revision_conflict'));
 });
 
 test('Supersede: SUPERSEDED task in taskStatusMap blocks scheduler', () => {

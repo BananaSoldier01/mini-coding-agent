@@ -39,7 +39,7 @@ const PLAN_TRANSITIONS = {
  * Create a new Plan.
  */
 function createPlan(runId, goal, options = {}) {
-  return {
+  const plan = {
     id: options.id || `plan_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     runId,
     goal,
@@ -58,6 +58,18 @@ function createPlan(runId, goal, options = {}) {
     cancelledAt: null,
     reason: null,
   };
+
+  // V0.9.7: Emit PLAN_CREATED event
+  if (options.emitter) {
+    options.emitter.emit({
+      runId,
+      planId: plan.id,
+      type: RUNTIME_EVENT_TYPES.PLAN_CREATED,
+      data: { goal, taskCount: plan.tasks.length },
+    });
+  }
+
+  return plan;
 }
 
 // ── Plan Lifecycle ────────────────────────────────────────
@@ -80,7 +92,7 @@ function approvePlan(plan, emitter, context = {}) {
     emitter.emit({
       runId: plan.runId,
       planId: plan.id,
-      type: 'plan_approved',
+      type: RUNTIME_EVENT_TYPES.PLAN_APPROVED,
       data: { goal: plan.goal, taskCount: plan.tasks.length },
     });
   }
@@ -105,7 +117,7 @@ function startPlan(plan, emitter, context = {}) {
     emitter.emit({
       runId: plan.runId,
       planId: plan.id,
-      type: 'plan_executing',
+      type: RUNTIME_EVENT_TYPES.PLAN_STARTED,
       data: { taskCount: plan.tasks.length },
     });
   }
@@ -160,7 +172,7 @@ function completePlan(plan, emitter, context = {}) {
     emitter.emit({
       runId: plan.runId,
       planId: plan.id,
-      type: 'plan_completed',
+      type: RUNTIME_EVENT_TYPES.PLAN_COMPLETED,
       data: { evidenceRefs: plan.evidenceRefs },
     });
   }
@@ -187,7 +199,7 @@ function failPlan(plan, emitter, context = {}) {
     emitter.emit({
       runId: plan.runId,
       planId: plan.id,
-      type: 'plan_failed',
+      type: RUNTIME_EVENT_TYPES.PLAN_FAILED,
       data: { reason: plan.reason },
     });
   }
@@ -214,7 +226,7 @@ function cancelPlan(plan, emitter, context = {}) {
     emitter.emit({
       runId: plan.runId,
       planId: plan.id,
-      type: 'plan_cancelled',
+      type: RUNTIME_EVENT_TYPES.PLAN_CANCELLED,
       data: { reason: plan.reason },
     });
   }

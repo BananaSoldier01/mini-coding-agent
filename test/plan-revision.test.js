@@ -224,7 +224,7 @@ test('Revision: applyRevision emits revision_applied event', () => {
   engine.applyRevision(revision);
 
   const types = events.map(e => e.type);
-  assert.ok(types.includes('plan_revision_applied'));
+  assert.ok(types.includes('revision_applied'));
 });
 
 test('Revision: applyRevision emits conflict event on rejection', () => {
@@ -251,7 +251,7 @@ test('Revision: applyRevision emits conflict event on rejection', () => {
   engine.applyRevision(revision);
 
   const types = events.map(e => e.type);
-  assert.ok(types.includes('plan_revision_conflict'));
+  assert.ok(types.includes('revision_conflict'));
 });
 
 // ── Test 4: Scheduler Refresh ─────────────────────────────
@@ -428,7 +428,7 @@ test('Revision: full flow — Plan v1 → Revision → Plan v2 → Scheduler Ref
 
   // 6. Verify events
   const types = events.map(e => e.type);
-  assert.ok(types.includes('plan_revision_applied'));
+  assert.ok(types.includes('revision_applied'));
   assert.ok(types.includes('scheduler_refreshed'));
 });
 
@@ -454,7 +454,7 @@ test('Revision: revision with running task protection blocks and emits conflict'
   assert.strictEqual(revision.status, REVISION_STATUS.CONFLICT);
 
   const types = events.map(e => e.type);
-  assert.ok(types.includes('plan_revision_conflict'));
+  assert.ok(types.includes('revision_conflict'));
 });
 
 test('Revision: multiple revisions increment correctly', () => {

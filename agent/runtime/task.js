@@ -189,7 +189,7 @@ function startTaskVerification(task, emitter, context = {}) {
     emitter.emit({
       runId: task.runId,
       taskId: task.id,
-      type: RUNTIME_EVENT_TYPES.VERIFICATION_STARTED,
+      type: RUNTIME_EVENT_TYPES.TASK_VERIFYING,
       data: { skillCount: task.assignedSkills.length },
     });
   }
@@ -239,7 +239,7 @@ function supersedeTask(task, emitter, context = {}) {
     emitter.emit({
       runId: task.runId,
       taskId: task.id,
-      type: 'task_superseded',
+      type: RUNTIME_EVENT_TYPES.TASK_SUPERSEDED,
       data: {
         previousStatus,
         reason: task.supersededReason,

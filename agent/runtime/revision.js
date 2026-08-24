@@ -281,6 +281,7 @@ class RevisionEngine {
 
   /**
    * V0.9.6: Prepare — snapshot current state for rollback.
+   * Emits REVISION_REQUESTED event.
    */
   prepare(revision) {
     revision._snapshot = {
@@ -289,15 +290,48 @@ class RevisionEngine {
       revision: this.plan.revision || 1,
       timestamp: Date.now(),
     };
+
+    // V0.9.7: Emit REVISION_REQUESTED
+    if (this.emitter) {
+      this.emitter.emit({
+        runId: this.plan.runId,
+        planId: this.plan.id,
+        type: RUNTIME_EVENT_TYPES.REVISION_REQUESTED,
+        data: {
+          revisionId: revision.id,
+          reason: revision.reason,
+          parentRevision: revision.parentRevision,
+          changes: revision.changes,
+        },
+      });
+    }
+
     return revision;
   }
 
   /**
    * V0.9.6: Validate — check compatibility.
+   * Emits REVISION_VALIDATED event.
    */
   validate(revision) {
     const compat = this.checkCompatibility(revision);
     revision.compatibility = compat;
+
+    // V0.9.7: Emit REVISION_VALIDATED
+    if (this.emitter) {
+      this.emitter.emit({
+        runId: this.plan.runId,
+        planId: this.plan.id,
+        type: RUNTIME_EVENT_TYPES.REVISION_VALIDATED,
+        data: {
+          revisionId: revision.id,
+          compatible: compat.compatible,
+          issues: compat.issues,
+          protectedTasks: compat.protectedTasks,
+        },
+      });
+    }
+
     return compat;
   }
 
@@ -321,7 +355,8 @@ class RevisionEngine {
       if (this.emitter) {
         this.emitter.emit({
           runId: this.plan.runId,
-          type: 'plan_revision_conflict',
+          planId: this.plan.id,
+          type: RUNTIME_EVENT_TYPES.REVISION_CONFLICT,
           data: { revisionId: revision.id, reason: revision.conflictReason },
         });
       }
@@ -426,7 +461,7 @@ class RevisionEngine {
       this.emitter.emit({
         runId: this.plan.runId,
         planId: this.plan.id,
-        type: 'plan_revision_applied',
+        type: RUNTIME_EVENT_TYPES.REVISION_APPLIED,
         data: {
           revisionId: revision.id,
           fromRevision: revision.parentRevision,
@@ -460,7 +495,8 @@ class RevisionEngine {
     if (this.emitter) {
       this.emitter.emit({
         runId: this.plan.runId,
-        type: 'scheduler_refreshed',
+        planId: this.plan.id,
+        type: RUNTIME_EVENT_TYPES.SCHEDULER_REFRESHED,
         data: { readyTasks, summary },
       });
     }
@@ -496,7 +532,7 @@ class RevisionEngine {
       this.emitter.emit({
         runId: this.plan.runId,
         planId: this.plan.id,
-        type: 'plan_revision_rolled_back',
+        type: RUNTIME_EVENT_TYPES.REVISION_ROLLED_BACK,
         data: {
           revisionId: revision.id,
           fromRevision: revision.parentRevision,
@@ -525,7 +561,8 @@ class RevisionEngine {
       if (this.emitter) {
         this.emitter.emit({
           runId: this.plan.runId,
-          type: 'plan_revision_conflict',
+          planId: this.plan.id,
+          type: RUNTIME_EVENT_TYPES.REVISION_CONFLICT,
           data: { revisionId: revision.id, reason: revision.conflictReason },
         });
       }
@@ -564,7 +601,7 @@ class RevisionEngine {
       this.emitter.emit({
         runId: this.plan.runId,
         planId: this.plan.id,
-        type: 'plan_revision_rejected',
+        type: RUNTIME_EVENT_TYPES.REVISION_REJECTED,
         data: { revisionId: revision.id, reason },
       });
     }

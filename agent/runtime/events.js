@@ -47,6 +47,42 @@ const RUNTIME_EVENT_TYPES = {
   // Snapshot events
   SNAPSHOT_SAVED: 'snapshot_saved',
   SNAPSHOT_RESTORED: 'snapshot_restored',
+
+  // V0.9.7: Unified event types — standardized schema
+  PLAN_CREATED: 'plan_created',
+  PLAN_APPROVED: 'plan_approved',
+  PLAN_STARTED: 'plan_started',
+  PLAN_COMPLETED: 'plan_completed',
+  PLAN_FAILED: 'plan_failed',
+  PLAN_CANCELLED: 'plan_cancelled',
+
+  // V0.9.7: Revision events
+  REVISION_REQUESTED: 'revision_requested',
+  REVISION_VALIDATED: 'revision_validated',
+  REVISION_APPLIED: 'revision_applied',
+  REVISION_REJECTED: 'revision_rejected',
+  REVISION_CONFLICT: 'revision_conflict',
+  REVISION_ROLLED_BACK: 'revision_rolled_back',
+
+  // V0.9.7: Scheduler events
+  SCHEDULER_REFRESHED: 'scheduler_refreshed',
+  TASK_READY: 'task_ready',
+
+  // V0.9.7: Task verification events
+  TASK_VERIFYING: 'task_verifying',
+  TASK_SUPERSEDED: 'task_superseded',
+
+  // V0.9.7: Tool execution events
+  TOOL_REQUESTED: 'tool_requested',
+  TOOL_POLICY_CHECKED: 'tool_policy_checked',
+  TOOL_EXECUTING: 'tool_executing',
+  TOOL_COMPLETED: 'tool_completed',
+  TOOL_FAILED: 'tool_failed',
+
+  // V0.9.7: Run events
+  RUN_STARTED: 'run_started',
+  RUN_COMPLETED: 'run_completed',
+  RUN_FAILED: 'run_failed',
 };
 
 // ── Runtime Event Log ─────────────────────────────────────
@@ -157,6 +193,23 @@ class RuntimeEventEmitter {
   constructor() {
     this.handlers = new Map(); // eventType → [handlers]
     this.allHandlers = [];     // wildcard handlers
+    // V0.9.7: Event Store integration — all emitted events are persisted
+    this.store = null;
+  }
+
+  /**
+   * V0.9.7: Set the RuntimeEventStore for persistence.
+   * All emitted events are also appended to the store.
+   */
+  setStore(store) {
+    this.store = store;
+  }
+
+  /**
+   * V0.9.7: Get the current event store.
+   */
+  getStore() {
+    return this.store;
   }
 
   /**
@@ -201,6 +254,11 @@ class RuntimeEventEmitter {
       timestamp: Date.now(),
       ...event,
     };
+
+    // V0.9.7: Persist to Event Store
+    if (this.store) {
+      this.store.append(ev);
+    }
 
     // Type-specific handlers
     const handlers = this.handlers.get(ev.type) || [];

@@ -431,7 +431,7 @@ test('ControlPlane: full integration flow — Task → Tool → Evidence → Com
   assert.ok(types.includes(RUNTIME_EVENT_TYPES.TOOL_POLICY_CHECKED));
   assert.ok(types.includes(RUNTIME_EVENT_TYPES.TOOL_EXECUTING));
   assert.ok(types.includes(RUNTIME_EVENT_TYPES.TOOL_COMPLETED));
-  assert.ok(types.includes(RUNTIME_EVENT_TYPES.VERIFICATION_STARTED));
+  assert.ok(types.includes(RUNTIME_EVENT_TYPES.TASK_VERIFYING));
   assert.ok(types.includes(RUNTIME_EVENT_TYPES.TASK_COMPLETED));
 
   // Verify evidence was created

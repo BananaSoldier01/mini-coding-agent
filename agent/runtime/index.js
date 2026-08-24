@@ -5,6 +5,7 @@
  */
 
 export * from './events.js';
+export * from './event-store.js';
 export * from './context.js';
 export * from './snapshot.js';
 export * from './persistence.js';

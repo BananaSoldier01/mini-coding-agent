@@ -4,6 +4,19 @@
 
 ---
 
+## V0.9.7 — Runtime Event Log & Replay（已完成）
+
+### Event Store & Replay
+- Runtime Event Store: append/query/serialize (agent/runtime/event-store.js)
+- Unified Event Schema: { id, runId, planId, taskId, type, timestamp, data, source }
+- Emitter Integration: setStore() routes all events to store
+- Runtime Replay: replayRuntime(events) reconstructs plan/task/revision state
+- Debug Query API: getEventsByRun, getEventsByTask, getRevisionTimeline, getTaskTimeline
+- Snapshot + Event Integration: serialize/deserialize round trip
+- 24 new tests (672/672 PASS)
+
+---
+
 ## V0.9.6.1 — Task Superseded Integration（已完成）
 
 ### Superseded Integration

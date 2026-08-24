@@ -419,7 +419,7 @@ test('Hardening: full transaction — supersede running task via revision', () =
   assert.ok(engine.plan.tasks.some(t => t.id === 't1'));
 
   const types = events.map(e => e.type);
-  assert.ok(types.includes('plan_revision_conflict'));
+  assert.ok(types.includes('revision_conflict'));
 });
 
 test('Hardening: full transaction — add task and refresh scheduler', () => {

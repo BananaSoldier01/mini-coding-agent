@@ -13,6 +13,7 @@
 
 import { canTaskExecute } from './plan.js';
 import { TASK_STATUS } from './task.js';
+import { RUNTIME_EVENT_TYPES } from './events.js';
 
 /**
  * V0.9.4: TaskScheduler — pure scheduling decisions.
@@ -27,12 +28,21 @@ import { TASK_STATUS } from './task.js';
  * - Depend on Planner
  */
 class TaskScheduler {
-  constructor(plan, taskStatusMap, approvalStatusMap) {
+  constructor(plan, taskStatusMap, approvalStatusMap, emitter = null) {
     this.plan = plan;
     this.taskStatusMap = taskStatusMap; // taskId → TASK_STATUS
     this.approvalStatusMap = approvalStatusMap; // taskId → 'approved'|'rejected'|'pending'|null
     this.paused = false;
     this.scheduledCount = 0;
+    // V0.9.7: Event emitter for scheduler events
+    this.emitter = emitter;
+  }
+
+  /**
+   * V0.9.7: Set the event emitter.
+   */
+  setEmitter(emitter) {
+    this.emitter = emitter;
   }
 
   /**
@@ -52,6 +62,19 @@ class TaskScheduler {
     for (const task of this.plan.tasks) {
       if (this.isTaskReady(task.id)) {
         ready.push(task.id);
+      }
+    }
+
+    // V0.9.7: Emit TASK_READY event for each ready task
+    if (this.emitter && ready.length > 0) {
+      for (const taskId of ready) {
+        this.emitter.emit({
+          runId: this.plan?.runId,
+          planId: this.plan?.id,
+          taskId,
+          type: RUNTIME_EVENT_TYPES.TASK_READY,
+          data: { taskId },
+        });
       }
     }
 
@@ -177,8 +200,8 @@ class TaskScheduler {
 /**
  * V0.9.4: Create a TaskScheduler from a plan and task states.
  */
-function createScheduler(plan, taskStatusMap, approvalStatusMap) {
-  return new TaskScheduler(plan, taskStatusMap, approvalStatusMap);
+function createScheduler(plan, taskStatusMap, approvalStatusMap, emitter = null) {
+  return new TaskScheduler(plan, taskStatusMap, approvalStatusMap, emitter);
 }
 
 export {

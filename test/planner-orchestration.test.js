@@ -389,7 +389,7 @@ test('Orchestration: full flow — Planner creates plan, Runtime executes', () =
   const events = eventLog.getEvents('run-1');
   const types = events.map(e => e.type);
   assert.ok(types.includes('plan_approved'));
-  assert.ok(types.includes('plan_executing'));
+  assert.ok(types.includes('plan_started'));
   assert.ok(types.includes('plan_completed'));
 });
 
