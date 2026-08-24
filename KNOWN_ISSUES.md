@@ -4,6 +4,18 @@
 
 ---
 
+## V1.2.2 — Runtime State Ownership & Persistence Layer（已完成）
+
+### Runtime State Ownership
+- Runtime Store Layer: RunStore / PlanStore / TaskStore (agent/runtime/run-store.js, plan-store.js, task-store.js)
+- ExecutionEngine去状态化: 移除 runs/plans/tasks Maps, 委托给 Store
+- Manager依赖解耦: 移除 engine:this, 改为显式 Store 依赖
+- RecoveryManager执行恢复: resumeAfterCrash 驱动 TaskExecutor 恢复执行
+- State Consistency: verifyConsistency() 检查 Store vs Event Store 一致性
+- 11 new state consistency tests (858/858 PASS)
+
+---
+
 ## V1.2.1 — Execution Engine Stabilization & Runtime Consistency（已完成）
 
 ### Execution Engine Stabilization

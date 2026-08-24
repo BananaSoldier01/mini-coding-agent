@@ -26,8 +26,13 @@ class RecoveryManager {
       emitter: options.emitter,
       eventStore: options.eventStore,
     });
-    // V1.2.1: References to engine components (set by ExecutionEngine)
-    this.engine = options.engine || null;
+    // V1.2.2: Explicit Store dependencies — NOT engine:this
+    this.runStore = options.runStore || null;
+    this.planStore = options.planStore || null;
+    this.taskStore = options.taskStore || null;
+    this.workspaceStore = options.workspaceStore || null;
+    this.contextMgr = options.contextMgr || null;
+    this.taskExecutor = options.taskExecutor || null;
   }
 
   // ── Full Recovery ──────────────────────────────────────
@@ -54,8 +59,8 @@ class RecoveryManager {
 
     // Step 2: Restore Workspace
     let workspace = null;
-    if (this.engine) {
-      const ws = this.engine.workspaceStore.get(run.workspaceId);
+    if (this.workspaceStore) {
+      const ws = this.workspaceStore.get(run.workspaceId);
       if (ws) {
         workspace = ws;
       }
@@ -63,8 +68,8 @@ class RecoveryManager {
 
     // Step 3: Restore Context
     let context = null;
-    if (this.engine) {
-      context = this.engine.contextMgr.getByRun(runId);
+    if (this.contextMgr) {
+      context = this.contextMgr.getByRun(runId);
     }
 
     // Step 4: Find and validate unfinished tasks
@@ -218,6 +223,73 @@ class RecoveryManager {
     }
 
     return categories;
+  }
+
+  /**
+   * V1.2.2: Resume execution after crash recovery.
+   * This is execution resumption, not just state restoration.
+   */
+  async resumeAfterCrash(runId, engine) {
+    const recovery = this.recover(runId);
+    if (!recovery.success) return recovery;
+
+    // Store recovered run in RunStore
+    if (this.runStore && recovery.run) {
+      this.runStore.create({
+        runId: recovery.run.id,
+        goal: recovery.run.goal,
+        workspaceId: recovery.run.workspaceId,
+      });
+      // Override with recovered state
+      const existing = this.runStore.get(runId);
+      if (existing) {
+        Object.assign(existing, recovery.run);
+        existing.updatedAt = Date.now();
+      }
+    }
+
+    const actions = [];
+
+    // 1. Resume running tasks
+    for (const task of recovery.taskPlan.running) {
+      if (engine && engine.executeTask) {
+        const result = await engine.executeTask(task.id);
+        actions.push({ action: 'resume_task', taskId: task.id, result: result.success });
+      } else {
+        actions.push({ action: 'resume_task', taskId: task.id, result: false, reason: 'no engine' });
+      }
+    }
+
+    // 2. Retry failed tasks
+    for (const task of recovery.taskPlan.failed) {
+      if (engine && engine.executeTask) {
+        // Reset task to pending first
+        task.status = 'pending';
+        task.error = null;
+        task.failedAt = null;
+        const result = await engine.executeTask(task.id);
+        actions.push({ action: 'retry_task', taskId: task.id, result: result.success });
+      } else {
+        actions.push({ action: 'retry_task', taskId: task.id, result: false, reason: 'no engine' });
+      }
+    }
+
+    // 3. Execute pending tasks
+    for (const task of recovery.taskPlan.pending) {
+      if (engine && engine.executeTask) {
+        const result = await engine.executeTask(task.id);
+        actions.push({ action: 'execute_task', taskId: task.id, result: result.success });
+      } else {
+        actions.push({ action: 'execute_task', taskId: task.id, result: false, reason: 'no engine' });
+      }
+    }
+
+    return {
+      success: true,
+      recovery,
+      actions,
+      resumedAt: Date.now(),
+    };
   }
 
   /**

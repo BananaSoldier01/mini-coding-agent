@@ -1,18 +1,17 @@
 /**
  * agent/runtime/execution-engine.js — Runtime Execution Engine
  *
- * V1.2.1
+ * V1.2.2
  * - Unified entry point for Agent execution
  * - Orchestrates: Run → Workspace → Context → Plan → Task → Skill → Tool → Artifact
+ * - State is owned by Store layer (RunStore/PlanStore/TaskStore), NOT duplicated here
  * - Delegates to: RunManager, TaskExecutor, RecoveryManager, TransitionManager
- * - No new Runtime concepts introduced
  *
  * Design:
  *   ExecutionEngine is the ORCHESTRATOR only.
- *   State storage is owned by the engine (runs/plans/tasks Maps).
- *   Lifecycle logic is delegated to RunManager/TaskExecutor.
- *   Transitions are validated by TransitionManager.
- *   Recovery is handled by RecoveryManager.
+ *   It does NOT store entity state — that's the Store layer's job.
+ *   It holds references to Stores and Managers.
+ *   All state transitions go through TransitionManager.
  */
 
 import { RUNTIME_EVENT_TYPES } from './events.js';
@@ -28,15 +27,7 @@ import {
 } from './plan.js';
 import {
   createTask,
-  startTask,
-  completeTask,
-  failTask,
-  cancelTask,
-  supersedeTask,
-  startTaskVerification,
   TASK_STATUS,
-  TASK_TRANSITIONS,
-  canTransitionTask,
 } from './task.js';
 import {
   TaskScheduler,
@@ -73,7 +64,6 @@ import {
 import {
   GovernanceManager,
   createGovernanceManager,
-  createPolicy,
 } from './governance.js';
 import {
   RuntimeEventStore,
@@ -96,11 +86,37 @@ import {
   RecoveryManager,
   createRecoveryManager,
 } from './recovery-manager.js';
+import {
+  RunStore,
+  createRunStore,
+} from './run-store.js';
+import {
+  PlanStore,
+  createPlanStore,
+} from './plan-store.js';
+import {
+  TaskStore,
+  createTaskStore,
+} from './task-store.js';
 
 // ── Execution Engine ──────────────────────────────────────
 
 class ExecutionEngine {
   constructor(options = {}) {
+    // V1.2.2: Store layer — Source of Truth for entity state
+    this.runStore = options.runStore || createRunStore({
+      emitter: options.emitter,
+      eventStore: options.eventStore,
+    });
+    this.planStore = options.planStore || createPlanStore({
+      emitter: options.emitter,
+      eventStore: options.eventStore,
+    });
+    this.taskStore = options.taskStore || createTaskStore({
+      emitter: options.emitter,
+      eventStore: options.eventStore,
+    });
+
     // Core components
     this.workspaceStore = options.workspaceStore || createWorkspaceStore(options);
     this.contextMgr = options.contextMgr || createContextManager({
@@ -130,18 +146,20 @@ class ExecutionEngine {
     this.eventStore = options.eventStore || createEventStore(options);
     this.emitter = options.emitter || null;
 
-    // V1.2.1: Shared TransitionManager
+    // V1.2.2: Shared TransitionManager — single entry for all state transitions
     this.transitionMgr = options.transitionManager || createTransitionManager({
       emitter: this.emitter,
       eventStore: this.eventStore,
     });
 
-    // V1.2.1: Sub-managers (delegate lifecycle logic)
+    // V1.2.2: Sub-managers — pass explicit Store dependencies, NOT engine:this
     this.runMgr = options.runManager || createRunManager({
       emitter: this.emitter,
       eventStore: this.eventStore,
       transitionManager: this.transitionMgr,
-      engine: this,
+      runStore: this.runStore,
+      workspaceStore: this.workspaceStore,
+      contextMgr: this.contextMgr,
     });
     this.taskExecutor = options.taskExecutor || createTaskExecutor({
       emitter: this.emitter,
@@ -151,90 +169,98 @@ class ExecutionEngine {
       artifactStore: this.artifactStore,
       workspaceStore: this.workspaceStore,
       contextMgr: this.contextMgr,
+      taskStore: this.taskStore,
     });
     this.recoveryMgr = options.recoveryManager || createRecoveryManager({
       emitter: this.emitter,
       eventStore: this.eventStore,
       transitionManager: this.transitionMgr,
-      engine: this,
+      runStore: this.runStore,
+      planStore: this.planStore,
+      taskStore: this.taskStore,
+      workspaceStore: this.workspaceStore,
+      contextMgr: this.contextMgr,
     });
 
-    // V1.2.1: State storage (owned by engine, not duplicated)
-    this.runs = new Map();
-    this.plans = new Map();
-    this.tasks = new Map();
+    // V1.2.2: Active run tracking (reference only, not state storage)
     this.activeRunId = null;
   }
 
   // ═══════════════════════════════════════════════════════════
-  // Run Lifecycle (delegated to RunManager)
+  // Run Lifecycle (delegated to RunManager, state in RunStore)
   // ═══════════════════════════════════════════════════════════
 
   /**
-   * V1.2.1: Create a new Run.
+   * V1.2.2: Create a new Run.
    */
   createRun(config = {}) {
     const result = this.runMgr.create(config);
     if (!result.run) return result;
 
-    this.runs.set(result.run.id, result.run);
+    // Persist to RunStore
+    this.runStore.create({
+      runId: result.run.id,
+      goal: result.run.goal,
+      workspaceId: result.run.workspaceId,
+      metadata: result.run.metadata,
+    });
 
     return { success: true, run: result.run, workspace: result.workspace };
   }
 
   /**
-   * V1.2.1: Start a Run.
+   * V1.2.2: Start a Run.
    */
   startRun(runId) {
-    const run = this.runs.get(runId);
+    const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
 
     const result = this.runMgr.start(run);
     if (!result.success) return result;
 
-    this.plans.set(result.plan.id, result.plan);
+    // Store plan in PlanStore
+    this.planStore.create(result.plan);
     this.activeRunId = runId;
 
     return { success: true, run: result.run, plan: result.plan };
   }
 
   /**
-   * V1.2.1: Pause a Run.
+   * V1.2.2: Pause a Run.
    */
   pauseRun(runId) {
-    const run = this.runs.get(runId);
+    const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
-
     return this.runMgr.pause(run);
   }
 
   /**
-   * V1.2.1: Resume a Run.
+   * V1.2.2: Resume a Run.
    */
   resumeRun(runId) {
-    const run = this.runs.get(runId);
+    const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
-
     const result = this.runMgr.resume(run);
     if (result.success) this.activeRunId = runId;
     return result;
   }
 
   /**
-   * V1.2.1: Complete a Run.
+   * V1.2.2: Complete a Run.
    */
   completeRun(runId) {
-    const run = this.runs.get(runId);
+    const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
 
     const result = this.runMgr.complete(run);
     if (!result.success) return result;
 
-    // Complete plan
+    // Complete plan in PlanStore
     if (run.planId) {
-      const plan = this.plans.get(run.planId);
+      const plan = this.planStore.get(run.planId);
       if (plan && plan.status === PLAN_STATUS.EXECUTING) {
         completePlan(plan, this.emitter, { runId });
+        this.planStore.update(run.planId, plan);
       }
     }
 
@@ -242,20 +268,20 @@ class ExecutionEngine {
   }
 
   /**
-   * V1.2.1: Fail a Run.
+   * V1.2.2: Fail a Run.
    */
   failRun(runId, error) {
-    const run = this.runs.get(runId);
+    const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
 
     const result = this.runMgr.fail(run, error);
     if (!result.success) return result;
 
-    // Fail plan
     if (run.planId) {
-      const plan = this.plans.get(run.planId);
+      const plan = this.planStore.get(run.planId);
       if (plan) {
         failPlan(plan, this.emitter, { runId, error });
+        this.planStore.update(run.planId, plan);
       }
     }
 
@@ -263,20 +289,20 @@ class ExecutionEngine {
   }
 
   /**
-   * V1.2.1: Cancel a Run.
+   * V1.2.2: Cancel a Run.
    */
   cancelRun(runId) {
-    const run = this.runs.get(runId);
+    const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
 
     const result = this.runMgr.cancel(run);
     if (!result.success) return result;
 
-    // Cancel plan
     if (run.planId) {
-      const plan = this.plans.get(run.planId);
+      const plan = this.planStore.get(run.planId);
       if (plan) {
         cancelPlan(plan, this.emitter, { runId });
+        this.planStore.update(run.planId, plan);
       }
     }
 
@@ -284,14 +310,14 @@ class ExecutionEngine {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // Task Management
+  // Task Management (state in TaskStore)
   // ═══════════════════════════════════════════════════════════
 
   /**
-   * V1.2.1: Add a task to a run.
+   * V1.2.2: Add a task to a run.
    */
   addTask(runId, taskConfig) {
-    const run = this.runs.get(runId);
+    const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
 
     const task = createTask(runId, taskConfig.goal, {
@@ -299,8 +325,13 @@ class ExecutionEngine {
       assignedSkills: taskConfig.assignedSkills || (taskConfig.skillId ? [taskConfig.skillId] : []),
       dependencies: taskConfig.dependencies || [],
     });
-    this.tasks.set(task.id, task);
+
+    const result = this.taskStore.create(task);
+    if (!result.success) return result;
+
+    // Add to run's task list
     run.taskIds.push(task.id);
+    this.runStore.update(runId, run);
 
     if (this.emitter) {
       this.emitter.emit({
@@ -312,46 +343,50 @@ class ExecutionEngine {
       });
     }
 
-    return { success: true, task };
+    return { success: true, task: result.task };
   }
 
   /**
-   * V1.2.1: Execute a single task.
+   * V1.2.2: Execute a single task.
    */
   async executeTask(taskId, context = {}) {
-    const task = this.tasks.get(taskId);
+    const task = this.taskStore.get(taskId);
     if (!task) return { success: false, reason: `Task ${taskId} not found` };
 
-    const run = this.runs.get(task.runId);
+    const run = this.runStore.get(task.runId);
     if (!run) return { success: false, reason: `Run ${task.runId} not found` };
 
-    // Delegate to TaskExecutor
     const result = await this.taskExecutor.execute(task, {
       ...context,
       workspaceId: run.workspaceId,
     });
 
+    // Update task in store
+    if (result.task) {
+      this.taskStore.update(taskId, result.task);
+    }
+
     return result;
   }
 
   /**
-   * V1.2.1: Execute all ready tasks in a run.
+   * V1.2.2: Execute all ready tasks in a run.
    */
   async executeRun(runId) {
-    const run = this.runs.get(runId);
+    const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
     if (run.status !== RUN_STATUS.STARTED) {
       return { success: false, reason: `Run must be started: ${run.status}` };
     }
 
-    const plan = this.plans.get(run.planId);
+    const plan = this.planStore.get(run.planId);
     if (!plan) return { success: false, reason: `Plan not found` };
 
     const order = getExecutionOrder(plan);
     const results = [];
 
     for (const taskId of order) {
-      const task = this.tasks.get(taskId);
+      const task = this.taskStore.get(taskId);
       if (!task) continue;
       if (task.status !== TASK_STATUS.PENDING) continue;
 
@@ -372,85 +407,135 @@ class ExecutionEngine {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // Recovery (delegated to RecoveryManager)
+  // Recovery (delegated to RecoveryManager, uses Stores)
   // ═══════════════════════════════════════════════════════════
 
   /**
-   * V1.2.1: Full recovery after crash.
+   * V1.2.2: Full recovery after crash.
    */
   recover(runId) {
     return this.recoveryMgr.recover(runId);
   }
 
   /**
-   * V1.2.1: Get recovery plan.
+   * V1.2.2: Get recovery plan.
    */
   getRecoveryPlan(runId) {
     return this.recoveryMgr.getRecoveryPlan(runId);
   }
 
   /**
-   * V1.2.1: Resume after failure.
+   * V1.2.2: Get recovery plan with execution resumption.
    */
-  async resumeAfterFailure(runId) {
-    const run = this.runs.get(runId);
-    if (!run) return { success: false, reason: `Run ${runId} not found` };
-    if (run.status !== RUN_STATUS.FAILED) {
-      return { success: false, reason: `Run must be failed: ${run.status}` };
-    }
-
-    // Reset run to started
-    run.status = RUN_STATUS.STARTED;
-    run.error = null;
-    run.failedAt = null;
-    run.updatedAt = Date.now();
-
-    // Reset failed tasks
-    const failedTasks = Array.from(this.tasks.values())
-      .filter(t => t.runId === runId && t.status === TASK_STATUS.FAILED);
-    for (const task of failedTasks) {
-      task.status = TASK_STATUS.PENDING;
-      task.error = null;
-      task.failedAt = null;
-    }
-
-    if (this.emitter) {
-      this.emitter.emit({
-        runId,
-        workspaceId: run.workspaceId,
-        type: 'run_resumed',
-        data: { runId, reason: 'failure_recovery' },
-      });
-    }
-
-    return this.executeRun(runId);
+  async resumeAfterCrash(runId) {
+    const result = await this.recoveryMgr.resumeAfterCrash(runId, this);
+    return result;
   }
 
   // ═══════════════════════════════════════════════════════════
-  // Query
+  // Query (all from Store layer)
   // ═══════════════════════════════════════════════════════════
 
-  getRun(runId) { return this.runs.get(runId) || null; }
-  getTask(taskId) { return this.tasks.get(taskId) || null; }
-  getPlan(planId) { return this.plans.get(planId) || null; }
-  listRuns() { return Array.from(this.runs.values()); }
+  getRun(runId) { return this.runStore.get(runId); }
+  getTask(taskId) { return this.taskStore.get(taskId); }
+  getPlan(planId) { return this.planStore.get(planId); }
+  listRuns() { return this.runStore.list(); }
 
   getActiveRun() {
     if (!this.activeRunId) return null;
-    return this.runs.get(this.activeRunId) || null;
+    return this.runStore.get(this.activeRunId);
   }
 
   getRunSummary(runId) {
-    const run = this.runs.get(runId);
+    const run = this.runStore.get(runId);
     if (!run) return null;
-    const tasks = Array.from(this.tasks.values()).filter(t => t.runId === runId);
-    const plan = run.planId ? this.plans.get(run.planId) : null;
+    const tasks = this.taskStore.listByRun(runId);
+    const plan = run.planId ? this.planStore.get(run.planId) : null;
     return {
       run,
       taskCount: tasks.length,
       completedTasks: tasks.filter(t => t.status === 'completed').length,
       failedTasks: tasks.filter(t => t.status === 'failed').length,
       plan,
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // State Consistency
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * V1.2.2: Verify Store state consistency with Event Store.
+   */
+  verifyConsistency(runId) {
+    const issues = [];
+
+    // Check Run state
+    const run = this.runStore.get(runId);
+    if (!run) {
+      issues.push({ type: 'missing_run', runId });
+      return { consistent: false, issues };
+    }
+
+    // Check Run status matches events
+    const events = this.eventStore.getEventsByRun(runId);
+    const runEvents = events.filter(e =>
+      ['run_started', 'run_completed', 'run_failed', 'run_paused', 'run_resumed'].includes(e.type)
+    );
+
+    const lastRunEvent = runEvents[runEvents.length - 1];
+    if (lastRunEvent) {
+      const expectedStatus = {
+        'run_started': RUN_STATUS.STARTED,
+        'run_completed': RUN_STATUS.COMPLETED,
+        'run_failed': RUN_STATUS.FAILED,
+        'run_paused': RUN_STATUS.PAUSED,
+        'run_resumed': RUN_STATUS.STARTED,
+      }[lastRunEvent.type];
+
+      if (expectedStatus && run.status !== expectedStatus) {
+        issues.push({
+          type: 'status_mismatch',
+          entity: 'run',
+          runId,
+          storeStatus: run.status,
+          eventStatus: expectedStatus,
+          lastEventType: lastRunEvent.type,
+        });
+      }
+    }
+
+    // Check Task states
+    const tasks = this.taskStore.listByRun(runId);
+    for (const task of tasks) {
+      const taskEvents = events.filter(e =>
+        e.data?.taskId === task.id &&
+        ['task_created', 'task_started', 'task_completed', 'task_failed'].includes(e.type)
+      );
+      const lastTaskEvent = taskEvents[taskEvents.length - 1];
+      if (lastTaskEvent) {
+        const expectedTaskStatus = {
+          'task_created': 'pending',
+          'task_started': 'running',
+          'task_completed': 'completed',
+          'task_failed': 'failed',
+        }[lastTaskEvent.type];
+
+        if (expectedTaskStatus && task.status !== expectedTaskStatus) {
+          issues.push({
+            type: 'task_status_mismatch',
+            taskId: task.id,
+            storeStatus: task.status,
+            eventStatus: expectedTaskStatus,
+          });
+        }
+      }
+    }
+
+    return {
+      consistent: issues.length === 0,
+      issues,
+      checkedAt: Date.now(),
     };
   }
 }

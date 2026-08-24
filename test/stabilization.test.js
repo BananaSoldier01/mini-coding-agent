@@ -91,7 +91,7 @@ test('Scenario 1: Full Execution Flow', async () => {
   // 4. Create Tasks
   const t1 = engine.addTask(created.run.id, { goal: 'task 1' });
   const t2 = engine.addTask(created.run.id, { goal: 'task 2' });
-  assert.strictEqual(created.run.taskIds.length, 2);
+  assert.strictEqual(engine.runStore.get(created.run.id).taskIds.length, 2);
 
   // 5. Execute Tasks (no skill binding = no-op completion)
   const r1 = await engine.executeTask(t1.task.id);
@@ -149,10 +149,10 @@ test('Scenario 2: Crash Recovery — restore and continue', () => {
   engine.addTask(created.run.id, { goal: 'task 1' });
   engine.addTask(created.run.id, { goal: 'task 2' });
 
-  // Simulate crash — clear in-memory state
-  engine.runs.clear();
-  engine.tasks.clear();
-  engine.plans.clear();
+  // Simulate crash — clear Store state
+  engine.runStore.clear();
+  engine.taskStore.clear();
+  engine.planStore.clear();
 
   // Recover from event store
   const recovery = engine.recover('run-recover');
@@ -185,12 +185,10 @@ test('Scenario 2b: Recovery categorizes tasks correctly', () => {
   const t2 = engine.addTask(created.run.id, { goal: 'task 2' });
 
   // Complete t1
-  engine.tasks.get(t1.task.id).status = 'completed';
-  engine.tasks.get(t1.task.id).completedAt = Date.now();
+  engine.taskStore.update(t1.task.id, { status: 'completed', completedAt: Date.now() });
 
   // Fail t2
-  engine.tasks.get(t2.task.id).status = 'failed';
-  engine.tasks.get(t2.task.id).error = 'test error';
+  engine.taskStore.update(t2.task.id, { status: 'failed', error: 'test error' });
 
   // Recover
   const recovery = engine.recover('run-cat');

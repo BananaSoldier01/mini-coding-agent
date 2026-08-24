@@ -32,8 +32,10 @@ class RunManager {
       emitter: options.emitter,
       eventStore: options.eventStore,
     });
-    // V1.2.1: Run state is owned by ExecutionEngine, not duplicated here
-    this.engine = options.engine || null;
+    // V1.2.2: Explicit Store dependencies — NOT engine:this
+    this.runStore = options.runStore || null;
+    this.workspaceStore = options.workspaceStore || null;
+    this.contextMgr = options.contextMgr || null;
   }
 
   // ── Lifecycle ──────────────────────────────────────────
@@ -46,19 +48,19 @@ class RunManager {
     const runId = config.runId || `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const goal = config.goal || 'Untitled Run';
 
-    // Create workspace via engine
+    // Create workspace via workspaceStore
     let workspace = null;
-    if (this.engine) {
-      const wsResult = this.engine.workspaceStore.create({
+    if (this.workspaceStore) {
+      const wsResult = this.workspaceStore.create({
         name: `run_${runId}`,
         runId,
       });
       if (wsResult.success) workspace = wsResult.workspace;
     }
 
-    // Create context via engine
-    if (this.engine && workspace) {
-      this.engine.contextMgr.createForRun(runId, workspace.id);
+    // Create context via contextMgr
+    if (this.contextMgr && workspace) {
+      this.contextMgr.createForRun(runId, workspace.id);
     }
 
     // Build run object

@@ -4,6 +4,45 @@
 
 ---
 
+## V1.2.2 — Runtime State Ownership & Persistence Layer
+
+### D12: Store Layer as Single Source of Truth
+
+**Decision**: Create RunStore, PlanStore, TaskStore as the authoritative state owners.
+
+- `RunStore`: Run state (create/get/update/delete/serialize/restore)
+- `PlanStore`: Plan state (create/get/update/delete/serialize/restore)
+- `TaskStore`: Task state (create/get/update/delete/serialize/restore)
+- ExecutionEngine holds references to Stores, NOT duplicate Maps
+
+**Trade-off**: Three new objects. Engine becomes thinner.
+
+**Rationale**: V1.1.1 established Store = Source of Truth for Workspace. V1.2.2 extends this to Run/Plan/Task. Eliminates dual-state inconsistency risk.
+
+### D13: Manager Dependency Decoupling
+
+**Decision**: Managers receive explicit Store dependencies, NOT `engine: this`.
+
+- `RunManager({ runStore, workspaceStore, contextMgr, ... })`
+- `TaskExecutor({ taskStore, skillRuntime, artifactStore, ... })`
+- `RecoveryManager({ runStore, taskStore, workspaceStore, ... })`
+
+**Trade-off**: More constructor parameters. Managers are less convenient to use.
+
+**Rationale**: `engine: this` creates hidden circular dependencies. Explicit dependencies make the graph visible and testable.
+
+### D14: Recovery as Execution Resumption
+
+**Decision**: RecoveryManager.resumeAfterCrash() drives actual execution, not just state restoration.
+
+- Restore Run → Load Workspace → Restore Context
+- Categorize tasks: completed (skip) / failed (retry) / running (resume) / pending (execute)
+- Drive TaskExecutor for each category
+
+**Trade-off**: RecoveryManager now depends on TaskExecutor.
+
+**Rationale**: State-only recovery leaves the Agent in an unknown execution context. Execution resumption ensures continuity.
+
 ## V1.2.1 — Execution Engine Stabilization & Runtime Consistency
 
 ### D9: Execution Engine Split

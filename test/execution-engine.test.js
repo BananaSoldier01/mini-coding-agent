@@ -207,7 +207,8 @@ test('Engine: full execution with skill', async () => {
   };
 
   // Execute task
-  const taskResult = await engine.executeTask(created.run.taskIds[0]);
+  const tasks = engine.taskStore.listByRun(created.run.id);
+  const taskResult = await engine.executeTask(tasks[0].id);
   assert.ok(taskResult.success);
   assert.strictEqual(taskResult.task.status, 'completed');
 });
@@ -225,23 +226,21 @@ test('Engine: resumeAfterFailure resets failed tasks', async () => {
   engine.startRun(created.run.id);
 
   // Simulate failed task
-  engine.tasks.get(taskResult.task.id).status = 'failed';
+  engine.taskStore.update(taskResult.task.id, { status: 'failed' });
 
   // Resume — verify task reset without executing
-  const run = engine.runs.get(created.run.id);
-  run.status = RUN_STATUS.FAILED;
+  const run = engine.runStore.get(created.run.id);
+  engine.runStore.update(created.run.id, { status: RUN_STATUS.FAILED });
 
   // Reset failed tasks manually (resumeAfterFailure calls executeRun which needs plan)
-  const failedTasks = Array.from(engine.tasks.values())
-    .filter(t => t.runId === created.run.id && t.status === 'failed');
+  const failedTasks = engine.taskStore.listByRun(created.run.id)
+    .filter(t => t.status === 'failed');
   for (const task of failedTasks) {
-    task.status = 'pending';
-    task.error = null;
-    task.failedAt = null;
+    engine.taskStore.update(task.id, { status: 'pending', error: null, failedAt: null });
   }
 
   // Verify failed task was reset
-  const task = engine.tasks.get(taskResult.task.id);
+  const task = engine.taskStore.get(taskResult.task.id);
   assert.strictEqual(task.status, 'pending');
 });
 
@@ -256,8 +255,10 @@ test('Engine: restoreRun reconstructs from events', () => {
   engine.startRun(created.run.id);
   engine.addTask(created.run.id, { goal: 'task 1' });
 
-  // Simulate crash — clear in-memory state
-  engine.runs.clear();
+  // Simulate crash — clear Store state
+  engine.runStore.clear();
+  engine.taskStore.clear();
+  engine.planStore.clear();
 
   // Restore from event store
   const result = engine.recover('run-restore');

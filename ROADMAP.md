@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V1.2.1 — Execution Engine Stabilization & Runtime Consistency**（已完成）
+**V1.2.2 — Runtime State Ownership & Persistence Layer**（已完成）
 
 **Next: V1.3 — Agent Productization Layer**
 
@@ -126,6 +126,15 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V1.2.2 — Runtime State Ownership & Persistence Layer
+- Runtime Store Layer: RunStore / PlanStore / TaskStore (agent/runtime/run-store.js, plan-store.js, task-store.js)
+- ExecutionEngine去状态化: 移除 runs/plans/tasks Maps, 委托给 Store
+- Manager依赖解耦: 移除 engine:this, 改为显式 Store 依赖
+- RecoveryManager执行恢复: resumeAfterCrash 驱动 TaskExecutor 恢复执行
+- State Consistency: verifyConsistency() 检查 Store vs Event Store 一致性
+- 11 new state consistency tests (858/858 PASS)
 - 状态：已完成
 
 ### V1.2.1 — Execution Engine Stabilization & Runtime Consistency

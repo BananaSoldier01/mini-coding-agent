@@ -33,6 +33,7 @@ class TaskExecutor {
     this.artifactStore = options.artifactStore || null;
     this.workspaceStore = options.workspaceStore || null;
     this.contextMgr = options.contextMgr || null;
+    this.taskStore = options.taskStore || null;
   }
 
   // ── Execution ──────────────────────────────────────────
