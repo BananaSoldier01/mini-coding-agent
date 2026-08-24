@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V1.0.0 — Skill Runtime & Plugin System**（已完成）
+**V1.1.0 — Workspace Runtime & Context Management**（已完成）
 
-**Next: V1.1 — Agent Productization Layer**
+**Next: V1.2 — Agent Productization Layer**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,15 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V1.1.0 — Workspace Runtime & Context Management
+- Workspace Model: lifecycle + run binding (agent/runtime/workspace.js)
+- Workspace Registry: create/get/archive/list (agent/runtime/workspace-registry.js)
+- Context Management: create/update/get context (agent/runtime/context-manager.js)
+- Artifact Management: create/get/list artifacts (agent/runtime/artifact-store.js)
+- Workspace Events: CREATED/ACTIVATED/ARCHIVED/CONTEXT_UPDATED/ARTIFACT_CREATED
+- 34 new tests (791/791 PASS)
 - 状态：已完成
 
 ### V1.0.0 — Skill Runtime & Plugin System

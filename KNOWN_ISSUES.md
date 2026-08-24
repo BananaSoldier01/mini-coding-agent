@@ -4,6 +4,18 @@
 
 ---
 
+## V1.1.0 — Workspace Runtime & Context Management（已完成）
+
+### Workspace Runtime
+- Workspace Model: lifecycle + run binding (agent/runtime/workspace.js)
+- Workspace Registry: create/get/archive/list (agent/runtime/workspace-registry.js)
+- Context Management: create/update/get context (agent/runtime/context-manager.js)
+- Artifact Management: create/get/list artifacts (agent/runtime/artifact-store.js)
+- Workspace Events: CREATED/ACTIVATED/ARCHIVED/CONTEXT_UPDATED/ARTIFACT_CREATED
+- 34 new tests (791/791 PASS)
+
+---
+
 ## V1.0.0 — Skill Runtime & Plugin System（已完成）
 
 ### Skill Runtime

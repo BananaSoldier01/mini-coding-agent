@@ -119,6 +119,15 @@ const RUNTIME_EVENT_TYPES = {
   SKILL_EXECUTION_COMPLETED: 'skill_execution_completed',
   SKILL_EXECUTION_FAILED: 'skill_execution_failed',
   SKILL_CAPABILITY_DENIED: 'skill_capability_denied',
+
+  // V1.1.0: Workspace events
+  WORKSPACE_CREATED: 'workspace_created',
+  WORKSPACE_ACTIVATED: 'workspace_activated',
+  WORKSPACE_ARCHIVED: 'workspace_archived',
+  CONTEXT_UPDATED: 'context_updated',
+  ARTIFACT_CREATED: 'artifact_created',
+  ARTIFACT_DELETED: 'artifact_deleted',
+  WORKSPACE_SNAPSHOT_CREATED: 'workspace_snapshot_created',
 };
 
 // ── Runtime Event Log ─────────────────────────────────────
