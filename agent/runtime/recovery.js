@@ -300,11 +300,11 @@ class RuntimeRecoveryManager {
 /**
  * V0.9.4.1: Create a RuntimeRecoveryManager.
  */
-function createRecoveryManager(options) {
+function createRuntimeRecoveryManager(options) {
   return new RuntimeRecoveryManager(options);
 }
 
 export {
   RuntimeRecoveryManager,
-  createRecoveryManager,
+  createRuntimeRecoveryManager,
 };

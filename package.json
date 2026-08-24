@@ -1,6 +1,6 @@
 {
   "name": "mini-coding-agent",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Mini Coding Agent / Mini DSH — 本地轻量级 Coding Agent Harness",
   "main": "server.js",
   "type": "module",

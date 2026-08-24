@@ -4,6 +4,45 @@
 
 ---
 
+## V1.2.1 — Execution Engine Stabilization & Runtime Consistency
+
+### D9: Execution Engine Split
+
+**Decision**: Split ExecutionEngine into four focused sub-managers.
+
+- `RunManager`: Run lifecycle (create/start/pause/resume/complete/fail/cancel)
+- `TaskExecutor`: Individual task execution through Skill Runtime
+- `RecoveryManager`: Crash recovery and task state validation
+- `TransitionManager`: Unified state transition validation and event emission
+
+**Trade-off**: Four objects instead of one. Each has a single responsibility.
+
+**Rationale**: V1.2.0 ExecutionEngine was becoming a God Object. Splitting improves testability and maintainability.
+
+### D10: TransitionManager as Single Entry Point
+
+**Decision**: All entity state transitions go through TransitionManager.
+
+- Pattern: Transition Request → Validate → Apply → Emit Event
+- Covers: Run, Task, Plan, Workspace
+- Prevents: `entity.status = xxx` direct modification
+
+**Trade-off**: Adds one indirection layer for every state change.
+
+**Rationale**: Ensures events are always emitted for state changes, maintaining audit trail consistency.
+
+### D11: Recovery as Execution Flow, Not Just State
+
+**Decision**: Recovery restores not just objects but the execution flow.
+
+- Restore Run → Load Workspace → Restore Context
+- Find unfinished Tasks → Validate State → Continue Execution
+- Categorize: completed (skip), failed (retry), running (resume), pending (execute)
+
+**Trade-off**: More complex recovery logic.
+
+**Rationale**: State-only recovery leaves the Agent in an unknown execution context. Flow recovery ensures continuity.
+
 ## V1.2.0 — Runtime Execution Engine & Orchestration
 
 ### D6: Execution Engine as Unified Entry Point

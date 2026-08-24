@@ -4,6 +4,19 @@
 
 ---
 
+## V1.2.1 — Execution Engine Stabilization & Runtime Consistency（已完成）
+
+### Execution Engine Stabilization
+- Engine职责收敛: 拆分为 RunManager / TaskExecutor / RecoveryManager / TransitionManager
+- Unified Lifecycle Pattern: Transition Request → Validate → Apply → Emit Event (agent/runtime/transition-manager.js)
+- Bug Fix: Date.now → Date.now() 引用错误修复
+- Bug Fix: createPlan 参数传递错误修复
+- Bug Fix: Event Type 映射 task.running → task_started 修复
+- Recovery: 完整崩溃恢复流程 (Restore Run → Load Workspace → Restore Context → Validate Tasks → Continue)
+- 14 new stabilization tests (847/847 PASS)
+
+---
+
 ## V1.2.0 — Runtime Execution Engine & Orchestration（已完成）
 
 ### Execution Engine

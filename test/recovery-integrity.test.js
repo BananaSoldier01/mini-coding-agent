@@ -14,7 +14,7 @@ import {
   approveRequest,
   rejectRequest,
   RuntimeRecoveryManager,
-  createRecoveryManager,
+  createRuntimeRecoveryManager,
   createPlan,
   approvePlan,
   startPlan,
@@ -36,7 +36,7 @@ import {
 
 test('Recovery: pending approval restored to ExecutionGate', () => {
   const gate = new ExecutionGate();
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   // Create a pending approval request
   const request = gate.requestApproval('run-1', { id: 't1', type: 'task', name: 'Delete file' }, 'Destructive op', { toolName: 'delete_file' });
@@ -73,7 +73,7 @@ test('Recovery: pending approval restored to ExecutionGate', () => {
 
 test('Recovery: approved approval restored to ExecutionGate', () => {
   const gate = new ExecutionGate();
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   // Create and approve a request
   const request = gate.requestApproval('run-1', { id: 't1', type: 'task', name: 'Read file' }, 'Test', { toolName: 'read_file' });
@@ -98,7 +98,7 @@ test('Recovery: approved approval restored to ExecutionGate', () => {
 
 test('Recovery: rejected approval restored to ExecutionGate', () => {
   const gate = new ExecutionGate();
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   // Create and reject a request
   const request = gate.requestApproval('run-1', { id: 't1', type: 'task', name: 'Delete file' }, 'Test', { toolName: 'delete_file' });
@@ -123,7 +123,7 @@ test('Recovery: rejected approval restored to ExecutionGate', () => {
 
 test('Recovery: no duplicate approval request after restore', () => {
   const gate = new ExecutionGate();
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   // Create a pending approval
   const request = gate.requestApproval('run-1', { id: 't1', type: 'task', name: 'Delete file' }, 'Test', { toolName: 'delete_file' });
@@ -151,7 +151,7 @@ test('Recovery: no duplicate approval request after restore', () => {
 
 test('Recovery: restore without executionGate still captures approval data', () => {
   const gate = new ExecutionGate();
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   gate.requestApproval('run-1', { id: 't1', type: 'task', name: 'Test' }, 'Test', {});
 
@@ -169,7 +169,7 @@ test('Recovery: restore without executionGate still captures approval data', () 
 // ── Test 2: canAutoContinue() Fix ──────────────────────────
 
 test('canAutoContinue: returns false when pending approvals exist', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   const recoveryResult = {
     restored: true,
@@ -186,7 +186,7 @@ test('canAutoContinue: returns false when pending approvals exist', () => {
 });
 
 test('canAutoContinue: returns false when plan is failed', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   const recoveryResult = {
     restored: true,
@@ -201,7 +201,7 @@ test('canAutoContinue: returns false when plan is failed', () => {
 });
 
 test('canAutoContinue: returns false when plan is cancelled', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   const recoveryResult = {
     restored: true,
@@ -216,7 +216,7 @@ test('canAutoContinue: returns false when plan is cancelled', () => {
 });
 
 test('canAutoContinue: returns true for clean recovery', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   const recoveryResult = {
     restored: true,
@@ -231,7 +231,7 @@ test('canAutoContinue: returns true for clean recovery', () => {
 });
 
 test('canAutoContinue: returns false when critical issues exist', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   const recoveryResult = {
     restored: true,
@@ -248,7 +248,7 @@ test('canAutoContinue: returns false when critical issues exist', () => {
 });
 
 test('canAutoContinue: returns false when approval expired', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   const recoveryResult = {
     restored: true,
@@ -270,7 +270,7 @@ test('canAutoContinue: returns false when approval expired', () => {
 });
 
 test('canAutoContinue: returns false when no recovery provided', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
   assert.ok(!recovery.canAutoContinue(null));
 });
 
@@ -278,7 +278,7 @@ test('canAutoContinue: returns false when no recovery provided', () => {
 
 test('Recovery: snapshot round trip preserves approval state', () => {
   const gate = new ExecutionGate();
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   // Create and approve a request
   const request = gate.requestApproval('run-1', { id: 't1', type: 'task', name: 'Test' }, 'Test', {});
@@ -301,7 +301,7 @@ test('Recovery: snapshot round trip preserves approval state', () => {
 });
 
 test('Recovery: snapshot round trip preserves task state', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   const plan = createPlan('run-1', 'Goal', {
     tasks: [
@@ -324,7 +324,7 @@ test('Recovery: snapshot round trip preserves task state', () => {
 
 test('Recovery: does not auto-approve after restore', () => {
   const gate = new ExecutionGate();
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   // Create pending approval
   gate.requestApproval('run-1', { id: 't1', type: 'task', name: 'Delete file' }, 'Test', { toolName: 'delete_file' });
@@ -347,7 +347,7 @@ test('Recovery: does not auto-approve after restore', () => {
 
 test('Recovery: does not auto-execute dangerous operations after restore', () => {
   const gate = new ExecutionGate();
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   // Create pending approval for dangerous op
   gate.requestApproval('run-1', { id: 't1', type: 'task', name: 'Delete file' }, 'Test', { toolName: 'delete_file' });
@@ -368,7 +368,7 @@ test('Recovery: does not auto-execute dangerous operations after restore', () =>
 
 test('Recovery: hasPendingApprovals detects pending after restore', () => {
   const gate = new ExecutionGate();
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   gate.requestApproval('run-1', { id: 't1', type: 'task', name: 'Test' }, 'Test', {});
 
@@ -382,7 +382,7 @@ test('Recovery: hasPendingApprovals detects pending after restore', () => {
 });
 
 test('Recovery: hasPendingApprovals returns false when no pending', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   const recoveryResult = {
     restored: true,
@@ -397,7 +397,7 @@ test('Recovery: hasPendingApprovals returns false when no pending', () => {
 
 test('Recovery: full approval chain — Policy→Approval→Snapshot→Recovery→Human→Continue', () => {
   const gate = new ExecutionGate();
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
   const emitter = new RuntimeEventEmitter();
 
   // 1. Policy Decision → Approval Request
@@ -435,7 +435,7 @@ test('Recovery: recovery event includes approval count', () => {
   const events = [];
   emitter.onAll((ev) => events.push(ev));
 
-  const recovery = createRecoveryManager({ emitter });
+  const recovery = createRuntimeRecoveryManager({ emitter });
 
   gate.requestApproval('run-1', { id: 't1', type: 'task', name: 'Test' }, 'Test', {});
 

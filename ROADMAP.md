@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V1.2.0 — Runtime Execution Engine & Orchestration**（已完成）
+**V1.2.1 — Execution Engine Stabilization & Runtime Consistency**（已完成）
 
 **Next: V1.3 — Agent Productization Layer**
 
@@ -126,6 +126,16 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V1.2.1 — Execution Engine Stabilization & Runtime Consistency
+- Execution Engine职责收敛: 拆分为 RunManager / TaskExecutor / RecoveryManager / TransitionManager
+- Unified Lifecycle Pattern: Transition Request → Validate → Apply → Emit Event (agent/runtime/transition-manager.js)
+- Bug Fix: Date.now → Date.now() 引用错误修复
+- Bug Fix: createPlan 参数传递错误修复
+- Bug Fix: Event Type 映射 task.running → task_started 修复
+- Recovery: 完整崩溃恢复流程 (Restore Run → Load Workspace → Restore Context → Validate Tasks → Continue)
+- 14 new stabilization tests (847/847 PASS)
 - 状态：已完成
 
 ### V1.2.0 — Runtime Execution Engine & Orchestration

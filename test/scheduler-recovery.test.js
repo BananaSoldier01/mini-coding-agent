@@ -13,7 +13,7 @@ import {
   ExecutionCoordinator,
   createExecutionCoordinator,
   RuntimeRecoveryManager,
-  createRecoveryManager,
+  createRuntimeRecoveryManager,
   createPlan,
   approvePlan,
   startPlan,
@@ -279,7 +279,7 @@ test('Coordinator: pause and resume work', () => {
 // ── Test 3: RuntimeRecoveryManager ────────────────────────
 
 test('Recovery: restore handles null snapshot', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
   const result = recovery.restore(null);
   assert.ok(!result.restored);
   assert.ok(result.issues.length > 0);
@@ -308,7 +308,7 @@ test('Recovery: restore recovers plan from snapshot', () => {
     },
   };
 
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
   const result = recovery.restore(snapshot);
 
   assert.ok(result.restored);
@@ -337,7 +337,7 @@ test('Recovery: restore recovers task statuses', () => {
     },
   };
 
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
   const result = recovery.restore(snapshot);
 
   assert.strictEqual(result.taskStatusMap.get('t1'), TASK_STATUS.COMPLETED);
@@ -361,7 +361,7 @@ test('Recovery: autoResetRunning resets running tasks to pending', () => {
     },
   };
 
-  const recovery = createRecoveryManager({ autoResetRunning: true });
+  const recovery = createRuntimeRecoveryManager({ autoResetRunning: true });
   const result = recovery.restore(snapshot);
 
   assert.strictEqual(result.taskStatusMap.get('t1'), TASK_STATUS.PENDING);
@@ -369,7 +369,7 @@ test('Recovery: autoResetRunning resets running tasks to pending', () => {
 });
 
 test('Recovery: validateConsistency detects plan_task_mismatch', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
 
   const snapshot = {
     id: 'snap-1',
@@ -400,7 +400,7 @@ test('Recovery: validateConsistency detects plan_task_mismatch', () => {
 });
 
 test('Recovery: recoverPendingTasks returns only pending', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
   const taskStatusMap = new Map([
     ['t1', TASK_STATUS.PENDING],
     ['t2', TASK_STATUS.COMPLETED],
@@ -412,7 +412,7 @@ test('Recovery: recoverPendingTasks returns only pending', () => {
 });
 
 test('Recovery: canAutoContinue returns false when plan failed', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
   const recoveryResult = {
     plan: { status: 'failed' },
   };
@@ -421,7 +421,7 @@ test('Recovery: canAutoContinue returns false when plan failed', () => {
 });
 
 test('Recovery: canAutoContinue returns true when plan executing', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
   const recoveryResult = {
     plan: { status: PLAN_STATUS.EXECUTING },
   };
@@ -443,7 +443,7 @@ test('Recovery: recovery event emitted on restore', () => {
     plan: { ...plan, tasks: [] },
   };
 
-  const recovery = createRecoveryManager({ emitter });
+  const recovery = createRuntimeRecoveryManager({ emitter });
   recovery.restore(snapshot);
 
   const types = events.map(e => e.type);
@@ -468,7 +468,7 @@ test('INVARIANT: scheduler does not execute tools', () => {
 });
 
 test('INVARIANT: recovery does not auto-approve pending requests', () => {
-  const recovery = createRecoveryManager();
+  const recovery = createRuntimeRecoveryManager();
   const approvalStatusMap = new Map([
     ['t1', 'pending'],
     ['t2', 'approved'],
@@ -554,7 +554,7 @@ test('INVARIANT: full flow — Plan → Scheduler → Approval → Execution →
   assert.ok(snapshot.plan);
 
   // 5. Recovery
-  const recovery = createRecoveryManager({ emitter });
+  const recovery = createRuntimeRecoveryManager({ emitter });
   const recoveryResult = recovery.restore(snapshot);
   assert.ok(recoveryResult.restored);
   assert.ok(recoveryResult.plan);

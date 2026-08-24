@@ -260,7 +260,7 @@ test('Engine: restoreRun reconstructs from events', () => {
   engine.runs.clear();
 
   // Restore from event store
-  const result = engine.restoreRun('run-restore');
+  const result = engine.recover('run-restore');
   assert.ok(result.success);
   assert.ok(result.restored);
   assert.strictEqual(result.run.status, RUN_STATUS.STARTED);
