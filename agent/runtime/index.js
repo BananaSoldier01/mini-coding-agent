@@ -16,6 +16,7 @@ export * from './workspace-registry.js';
 export * from './workspace-store.js';
 export * from './context-manager.js';
 export * from './artifact-store.js';
+export * from './execution-engine.js';
 export * from './context.js';
 export * from './snapshot.js';
 export * from './persistence.js';

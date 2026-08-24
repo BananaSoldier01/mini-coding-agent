@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V1.1.1 — Runtime Hardening & Architecture Stabilization**（已完成）
+**V1.2.0 — Runtime Execution Engine & Orchestration**（已完成）
 
-**Next: V1.2 — Agent Productization Layer**
+**Next: V1.3 — Agent Productization Layer**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,16 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V1.2.0 — Runtime Execution Engine & Orchestration
+- Execution Engine: unified Run lifecycle + Task execution loop (agent/runtime/execution-engine.js)
+- Run Lifecycle: createRun/startRun/pauseRun/resumeRun/completeRun/failRun/cancelRun
+- Task Execution Loop: Pending → Check Dependency → Ready → Execute Skill → Artifact → Verify → Complete
+- Scheduler-Executor Integration: Scheduler returns ready tasks, Engine executes
+- Failure Recovery: resumeAfterFailure + restoreRun from event store
+- State Transition Protection: invalid transitions rejected
+- 27 new tests (833/833 PASS)
 - 状态：已完成
 
 ### V1.1.1 — Runtime Hardening & Architecture Stabilization

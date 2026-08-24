@@ -4,6 +4,43 @@
 
 ---
 
+## V1.2.0 — Runtime Execution Engine & Orchestration
+
+### D6: Execution Engine as Unified Entry Point
+
+**Decision**: Create ExecutionEngine as the single entry point for Agent execution.
+
+- ExecutionEngine owns: Run lifecycle, Task execution loop, Scheduler integration
+- It delegates to existing components: WorkspaceStore, ContextMgr, ArtifactStore, SkillRuntime, ToolRegistry
+- No new Runtime concepts introduced
+
+**Trade-off**: Engine is a orchestrator, not a replacement for existing modules.
+
+**Rationale**: Existing modules are independent capabilities. Engine ties them into a complete execution loop.
+
+### D7: Scheduler → Engine → SkillRuntime Chain
+
+**Decision**: Clarify the relationship between Scheduler, Execution Engine, and Skill Runtime.
+
+- Scheduler: determines which tasks are ready (dependency check)
+- Execution Engine: executes ready tasks through Skill Runtime
+- Skill Runtime: executes skills through Tool Registry → Capability Check → Governance
+
+**Trade-off**: Scheduler is query-only, Engine is execution-only.
+
+**Rationale**: Previous architecture had unclear boundaries between scheduler and executor.
+
+### D8: Task Execution Through VERIFYING
+
+**Decision**: Task execution must go through VERIFYING state before COMPLETED.
+
+- RUNNING → VERIFYING → COMPLETED
+- This is enforced by TASK_TRANSITIONS, not bypassed
+
+**Trade-off**: Adds one extra step to task completion.
+
+**Rationale**: Existing task model requires verification before completion. Engine respects this.
+
 ## V1.1.1 — Runtime Hardening & Architecture Stabilization
 
 ### D1: Unified Runtime State Model

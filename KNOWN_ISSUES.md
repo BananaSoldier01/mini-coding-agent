@@ -4,6 +4,18 @@
 
 ---
 
+## V1.2.0 — Runtime Execution Engine & Orchestration（已完成）
+
+### Execution Engine
+- Unified Run lifecycle: createRun/startRun/pauseRun/resumeRun/completeRun/failRun/cancelRun (agent/runtime/execution-engine.js)
+- Task Execution Loop: Pending → Check Dependency → Ready → Execute Skill → Artifact → Verify → Complete
+- Scheduler-Executor Integration: Scheduler returns ready tasks, Engine executes
+- Failure Recovery: resumeAfterFailure + restoreRun from event store
+- State Transition Protection: invalid transitions rejected
+- 27 new tests (833/833 PASS)
+
+---
+
 ## V1.1.1 — Runtime Hardening & Architecture Stabilization（已完成）
 
 ### Runtime Hardening
