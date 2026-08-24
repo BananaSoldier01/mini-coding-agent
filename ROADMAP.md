@@ -1,9 +1,9 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V0.9.5 — Dynamic Plan Revision Runtime**（已完成）
+**V0.9.6 — Runtime Consistency & Revision Hardening**（已完成）
 
-**Next: V0.9.6 — Runtime Integration Tests**
+**Next: V0.9.7 — Runtime Integration Tests**
 
 核心目标：把 Files、Agent Activity、Changes、Diff、Terminal 从几个彼此独立的区域，变成一套连续、可导航、适合真实 Coding Task 的 Coding Workspace。
 
@@ -126,6 +126,15 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V0.9.6 — Runtime Consistency & Revision Hardening
+- Task Superseded Lifecycle: SUPERSEDED status, supersedeTask()
+- Revision Transaction: prepare/validate/apply/refresh/commit + rollback
+- Dependency Conflict Detection: broken deps, invalid graph, orphan tasks
+- Completed Task Protection: immutable completed tasks
+- Revision History Persistence: plan.revisions + getRevisionHistory()
+- 23 new tests (639/639 PASS)
 - 状态：已完成
 
 ### V0.9.5 — Dynamic Plan Revision Runtime

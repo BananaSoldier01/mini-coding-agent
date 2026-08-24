@@ -114,7 +114,7 @@ test('Orchestration: revisePlan creates new revision', () => {
   assert.strictEqual(revised.previousRevision, 1);
   assert.ok(revised.updatedAt >= originalUpdatedAt);
   // Original unchanged
-  assert.strictEqual(plan.revision, undefined);
+  assert.strictEqual(plan.revision, 1);
   assert.strictEqual(plan.goal, 'Goal');
 });
 

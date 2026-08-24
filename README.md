@@ -2,7 +2,7 @@
 
 一个可在本地 workspace 中执行编码任务的轻量级 Agent Harness。
 
-**当前版本**: V0.9.5 — Dynamic Plan Revision Runtime
+**当前版本**: V0.9.6 — Runtime Consistency & Revision Hardening
 
 ## 特性
 

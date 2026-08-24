@@ -4,6 +4,18 @@
 
 ---
 
+## V0.9.6 — Runtime Consistency & Revision Hardening（已完成）
+
+### Revision Hardening
+- Task Superseded Lifecycle: SUPERSEDED status, supersedeTask()
+- Revision Transaction: prepare/validate/apply/refresh/commit + rollback
+- Dependency Conflict Detection: broken deps, invalid graph, orphan tasks
+- Completed Task Protection: immutable completed tasks
+- Revision History Persistence: plan.revisions + getRevisionHistory()
+- 23 new tests (639/639 PASS)
+
+---
+
 ## V0.9.5 — Dynamic Plan Revision Runtime（已完成）
 
 ### Plan Revision

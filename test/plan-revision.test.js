@@ -113,7 +113,7 @@ test('Revision: checkCompatibility warns on running task modification', () => {
   assert.ok(compat.issues.some(i => i.type === 'running_task_modified'));
 });
 
-test('Revision: checkCompatibility allows deletion of completed task', () => {
+test('Revision: checkCompatibility allows deletion of completed task when protection disabled', () => {
   const plan = createPlan('run-1', 'Goal', {
     tasks: [{ id: 't1', goal: 'Done' }, { id: 't2', goal: 'Also done' }],
   });
@@ -121,7 +121,11 @@ test('Revision: checkCompatibility allows deletion of completed task', () => {
     ['t1', TASK_STATUS.COMPLETED],
     ['t2', TASK_STATUS.COMPLETED],
   ]);
-  const engine = createRevisionEngine({ plan, taskStatusMap: taskStatus });
+  const engine = createRevisionEngine({
+    plan,
+    taskStatusMap: taskStatus,
+    autoProtectCompleted: false,
+  });
 
   const revision = createRevisionRequest(
     plan,
@@ -334,7 +338,7 @@ test('Revision: deprecated task preserved in plan', () => {
   const result = engine.applyRevision(revision);
   assert.ok(!result.success);
   assert.strictEqual(engine.checkCompatibility(revision).protectedTasks.length, 1);
-  assert.ok(engine.checkCompatibility(revision).protectedTasks[0].reason.includes('deprecated'));
+  assert.ok(engine.checkCompatibility(revision).protectedTasks[0].reason.includes('superseded'));
 });
 
 // ── Test 6: Serialization ─────────────────────────────────

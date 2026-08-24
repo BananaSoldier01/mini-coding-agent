@@ -47,6 +47,9 @@ function createPlan(runId, goal, options = {}) {
     tasks: options.tasks || [],
     dependencies: options.dependencies || [],
     evidenceRefs: options.evidenceRefs || [],
+    // V0.9.6: Revision history persistence
+    revisions: options.revisions || [],
+    revision: options.revision || 1,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     approvedAt: null,
@@ -383,6 +386,9 @@ function serializePlan(plan) {
     tasks: plan.tasks,
     dependencies: plan.dependencies,
     evidenceRefs: plan.evidenceRefs,
+    // V0.9.6: Revision history
+    revisions: plan.revisions || [],
+    revision: plan.revision || 1,
     createdAt: plan.createdAt,
     updatedAt: plan.updatedAt,
     approvedAt: plan.approvedAt,

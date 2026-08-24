@@ -18,16 +18,20 @@ const TASK_STATUS = {
   COMPLETED: 'completed',
   FAILED: 'failed',
   CANCELLED: 'cancelled',
+  // V0.9.6: Task was replaced or invalidated by plan revision
+  SUPERSEDED: 'superseded',
 };
 
 const TASK_TRANSITIONS = {
   [TASK_STATUS.PENDING]: [TASK_STATUS.RUNNING, TASK_STATUS.CANCELLED],
   // V0.9.0.1: RUNNING cannot directly go to COMPLETED — must pass through VERIFYING
-  [TASK_STATUS.RUNNING]: [TASK_STATUS.VERIFYING, TASK_STATUS.FAILED, TASK_STATUS.CANCELLED],
-  [TASK_STATUS.VERIFYING]: [TASK_STATUS.COMPLETED, TASK_STATUS.FAILED, TASK_STATUS.CANCELLED],
+  [TASK_STATUS.RUNNING]: [TASK_STATUS.VERIFYING, TASK_STATUS.FAILED, TASK_STATUS.CANCELLED, TASK_STATUS.SUPERSEDED],
+  [TASK_STATUS.VERIFYING]: [TASK_STATUS.COMPLETED, TASK_STATUS.FAILED, TASK_STATUS.CANCELLED, TASK_STATUS.SUPERSEDED],
   [TASK_STATUS.COMPLETED]: [],
   [TASK_STATUS.FAILED]: [],
   [TASK_STATUS.CANCELLED]: [],
+  // V0.9.6: SUPERSEDED is terminal — set by revision engine, not by normal lifecycle
+  [TASK_STATUS.SUPERSEDED]: [],
 };
 
 // ── Task Factory ──────────────────────────────────────────
@@ -208,11 +212,51 @@ function canTransitionTask(task, newStatus) {
   return (TASK_TRANSITIONS[task.status] || []).includes(newStatus);
 }
 
+/**
+ * V0.9.6: Mark a task as SUPERSEDED — replaced by plan revision.
+ * Preserves evidence and execution history.
+ * Only RUNNING, VERIFYING, PENDING, FAILED, CANCELLED tasks can be superseded.
+ * COMPLETED tasks cannot be superseded (immutable).
+ */
+function supersedeTask(task, emitter, context = {}) {
+  if (!task) return false;
+  if (task.status === TASK_STATUS.COMPLETED) {
+    console.warn('[Task] Cannot supersede COMPLETED task — completed tasks are immutable');
+    return false;
+  }
+  if (task.status === TASK_STATUS.SUPERSEDED) {
+    return false; // Already superseded
+  }
+
+  const previousStatus = task.status;
+  task.status = TASK_STATUS.SUPERSEDED;
+  task.updatedAt = Date.now();
+  task.supersededAt = Date.now();
+  task.supersededReason = context.reason || 'Plan revision — task superseded';
+  task.previousStatus = previousStatus;
+
+  if (emitter) {
+    emitter.emit({
+      runId: task.runId,
+      taskId: task.id,
+      type: 'task_superseded',
+      data: {
+        previousStatus,
+        reason: task.supersededReason,
+        evidenceRefs: task.evidenceRefs,
+      },
+    });
+  }
+
+  return true;
+}
+
 export {
   TASK_STATUS,
   TASK_TRANSITIONS,
   createTask,
   startTask,
+  supersedeTask,
   completeTask,
   failTask,
   cancelTask,
