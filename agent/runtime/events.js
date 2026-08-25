@@ -96,9 +96,11 @@ const RUNTIME_EVENT_TYPES = {
   VERIFICATION_COMPLETED: 'verification_completed',
 
   // ── Run events ───────────────────────────────────────
+  RUN_CREATED: 'run_created',
   RUN_STARTED: 'run_started',
   RUN_COMPLETED: 'run_completed',
   RUN_FAILED: 'run_failed',
+  RUN_CANCELLED: 'run_cancelled',
 
   // ── Snapshot events ──────────────────────────────────
   SNAPSHOT_SAVED: 'snapshot_saved',

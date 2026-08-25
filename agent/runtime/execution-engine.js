@@ -146,10 +146,15 @@ class ExecutionEngine {
     this.eventStore = options.eventStore || createEventStore(options);
     this.emitter = options.emitter || null;
 
-    // V1.2.2: Shared TransitionManager — single entry for all state transitions
+    // V1.2.3: Shared TransitionManager — single entry for all state transitions
+    // Receives Store dependencies for state mutation
     this.transitionMgr = options.transitionManager || createTransitionManager({
       emitter: this.emitter,
       eventStore: this.eventStore,
+      runStore: this.runStore,
+      taskStore: this.taskStore,
+      planStore: this.planStore,
+      workspaceStore: this.workspaceStore,
     });
 
     // V1.2.2: Sub-managers — pass explicit Store dependencies, NOT engine:this
@@ -180,6 +185,7 @@ class ExecutionEngine {
       taskStore: this.taskStore,
       workspaceStore: this.workspaceStore,
       contextMgr: this.contextMgr,
+      taskExecutor: this.taskExecutor,
     });
 
     // V1.2.2: Active run tracking (reference only, not state storage)
@@ -428,8 +434,7 @@ class ExecutionEngine {
    * V1.2.2: Get recovery plan with execution resumption.
    */
   async resumeAfterCrash(runId) {
-    const result = await this.recoveryMgr.resumeAfterCrash(runId, this);
-    return result;
+    return this.recoveryMgr.resumeAfterCrash(runId);
   }
 
   // ═══════════════════════════════════════════════════════════

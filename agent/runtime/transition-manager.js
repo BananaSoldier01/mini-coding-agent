@@ -35,6 +35,11 @@ class TransitionManager {
   constructor(options = {}) {
     this.emitter = options.emitter || null;
     this.eventStore = options.eventStore || null;
+    // V1.2.3: Store dependencies for state mutation
+    this.runStore = options.runStore || null;
+    this.taskStore = options.taskStore || null;
+    this.planStore = options.planStore || null;
+    this.workspaceStore = options.workspaceStore || null;
 
     // V1.2.1: Transition tables (single source of truth)
     this.transitions = {
@@ -47,7 +52,7 @@ class TransitionManager {
         cancelled: [],
       },
       task: {
-        pending: ['running', 'cancelled'],
+        pending: ['running', 'failed', 'completed', 'cancelled'],
         running: ['verifying', 'failed', 'cancelled', 'waiting_approval'],
         waiting_approval: ['running', 'failed', 'cancelled'],
         verifying: ['completed', 'failed', 'cancelled', 'superseded'],
@@ -77,8 +82,9 @@ class TransitionManager {
   // ── Core Transition ────────────────────────────────────
 
   /**
-   * V1.2.1: Execute a state transition.
-   * Returns { success, event, reason }
+   * V1.2.3: Execute a state transition — the single entry point for lifecycle mutation.
+   * Pattern: Validate → Apply → Persist → Emit Event
+   * Returns { success, event, reason, entity }
    */
   transition(entityType, entityId, fromStatus, toStatus, context = {}) {
     // Step 1: Validate transition
@@ -87,10 +93,10 @@ class TransitionManager {
       return { success: false, reason: validation.reason, event: null };
     }
 
-    // Step 2: Build event type
-    const eventType = this.getEventType(entityType, toStatus);
+    // Step 2: Build event type (using from→to pair)
+    const eventType = this.getEventType(entityType, fromStatus, toStatus);
     if (!eventType) {
-      return { success: false, reason: `No event type for ${entityType}.${toStatus}`, event: null };
+      return { success: false, reason: `No event type for ${entityType}: ${fromStatus}→${toStatus}`, event: null };
     }
 
     // Step 3: Create event
@@ -108,17 +114,41 @@ class TransitionManager {
       },
     };
 
-    // Step 4: Emit event
+    // Step 4: Apply state mutation through Store
+    const store = this._getStore(entityType);
+    if (store) {
+      const idField = `${entityType}Id`;
+      const updateResult = store.update(entityId, {
+        status: toStatus,
+        [`${toStatus}At`]: Date.now(),
+        updatedAt: Date.now(),
+        ...context.data,
+      });
+      if (!updateResult.success) {
+        return { success: false, reason: updateResult.reason, event: null };
+      }
+      event.entity = updateResult[entityType] || updateResult.entity;
+    }
+
+    // Step 5: Emit event (emitter handles EventStore persistence via setStore)
     if (this.emitter) {
       this.emitter.emit(event);
     }
 
-    // Step 5: Persist to event store
-    if (this.eventStore) {
-      this.eventStore.append(event);
-    }
+    return { success: true, event, reason: null, entity: event.entity };
+  }
 
-    return { success: true, event, reason: null };
+  /**
+   * V1.2.3: Map entity type to its Store.
+   */
+  _getStore(entityType) {
+    const stores = {
+      run: this.runStore,
+      task: this.taskStore,
+      plan: this.planStore,
+      workspace: this.workspaceStore,
+    };
+    return stores[entityType] || null;
   }
 
   // ── Validation ─────────────────────────────────────────
@@ -153,48 +183,58 @@ class TransitionManager {
   // ── Event Type Mapping ─────────────────────────────────
 
   /**
-   * V1.2.1: Map entity type + target status to event type.
+   * V1.2.3: Map entity type + fromStatus + toStatus to event type.
+   * Uses from→to pair to distinguish resume (PAUSED→STARTED = run_resumed)
+   * from initial start (CREATED→STARTED = run_started).
    */
-  getEventType(entityType, toStatus) {
+  getEventType(entityType, fromStatus, toStatus) {
     const map = {
       run: {
-        started: 'run_started',
-        paused: 'run_paused',
-        resumed: 'run_resumed',
-        completed: 'run_completed',
-        failed: 'run_failed',
-        cancelled: 'plan_cancelled',
+        'created→started': 'run_started',
+        'started→paused': 'run_paused',
+        'paused→started': 'run_resumed',
+        'started→completed': 'run_completed',
+        'started→failed': 'run_failed',
+        'started→cancelled': 'run_cancelled',
+        'paused→cancelled': 'run_cancelled',
       },
       task: {
-        created: 'task_created',
-        running: 'task_started',
-        verifying: 'task_verifying',
-        completed: 'task_completed',
-        failed: 'task_failed',
-        cancelled: 'task_cancelled',
-        superseded: 'task_superseded',
-        paused: 'task_paused',
-        resumed: 'task_resumed',
-        waiting_approval: 'task_waiting_approval',
+        'pending→running': 'task_started',
+        'running→verifying': 'task_verifying',
+        'verifying→completed': 'task_completed',
+        'pending→completed': 'task_completed',
+        'running→failed': 'task_failed',
+        'pending→failed': 'task_failed',
+        'running→cancelled': 'task_cancelled',
+        'verifying→cancelled': 'task_cancelled',
+        'verifying→superseded': 'task_superseded',
+        'running→waiting_approval': 'task_waiting_approval',
+        'waiting_approval→running': 'task_resumed',
+        'waiting_approval→failed': 'task_failed',
+        'waiting_approval→cancelled': 'task_cancelled',
+        'pending→cancelled': 'task_cancelled',
       },
       plan: {
-        created: 'plan_created',
-        approved: 'plan_approved',
-        started: 'plan_started',
-        completed: 'plan_completed',
-        failed: 'plan_failed',
-        cancelled: 'plan_cancelled',
+        'draft→approved': 'plan_approved',
+        'approved→started': 'plan_started',
+        'started→executing': 'plan_started',
+        'executing→verifying': 'plan_started',
+        'executing→completed': 'plan_completed',
+        'executing→failed': 'plan_failed',
+        'executing→cancelled': 'plan_cancelled',
+        '*→cancelled': 'plan_cancelled',
       },
       workspace: {
-        created: 'workspace_created',
-        active: 'workspace_activated',
-        archived: 'workspace_archived',
+        'created→active': 'workspace_activated',
+        'active→archived': 'workspace_archived',
       },
     };
 
     const entityMap = map[entityType];
     if (!entityMap) return null;
-    return entityMap[toStatus] || null;
+
+    const key = `${fromStatus}→${toStatus}`;
+    return entityMap[key] || entityMap['*→' + toStatus] || null;
   }
 
   // ── Convenience Methods ────────────────────────────────

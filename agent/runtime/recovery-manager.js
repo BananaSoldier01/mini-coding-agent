@@ -78,6 +78,40 @@ class RecoveryManager {
     // Step 5: Categorize tasks
     const taskPlan = this._categorizeTasks(unfinishedTasks);
 
+    // V1.2.3: Persist reconstructed entities back to Stores
+    if (this.runStore) {
+      this.runStore.create({
+        id: run.id,
+        goal: run.goal,
+        workspaceId: run.workspaceId,
+        metadata: run.metadata,
+      });
+      // Override with reconstructed state
+      const existing = this.runStore.get(run.id);
+      if (existing) {
+        Object.assign(existing, run);
+        existing.updatedAt = Date.now();
+      }
+    }
+
+    // Persist reconstructed tasks back to TaskStore
+    if (this.taskStore) {
+      for (const task of unfinishedTasks) {
+        this.taskStore.create({
+          id: task.id,
+          runId: run.id,
+          goal: task.goal || 'Restored Task',
+          status: task.status,
+        });
+        // Override with reconstructed state
+        const existing = this.taskStore.get(task.id);
+        if (existing) {
+          Object.assign(existing, task);
+          existing.updatedAt = Date.now();
+        }
+      }
+    }
+
     return {
       success: true,
       restored: true,
@@ -92,10 +126,11 @@ class RecoveryManager {
   // ── Run Reconstruction ─────────────────────────────────
 
   /**
-   * V1.2.1: Reconstruct Run state from event sequence.
+   * V1.2.3: Reconstruct Run state from event sequence.
+   * Uses run_created for creation, run_started for start.
    */
   _reconstructRun(runId, events) {
-    const createdEvent = events.find(e => e.type === 'run_started');
+    const createdEvent = events.find(e => e.type === 'run_created');
     if (!createdEvent) return null;
 
     const run = {
@@ -226,61 +261,76 @@ class RecoveryManager {
   }
 
   /**
-   * V1.2.2: Resume execution after crash recovery.
-   * This is execution resumption, not just state restoration.
+   * V1.2.3: Resume execution after crash recovery.
+   * Uses TaskExecutor directly — no dependency on entire ExecutionEngine.
+   * Mutates Store state before resuming execution.
    */
-  async resumeAfterCrash(runId, engine) {
+  async resumeAfterCrash(runId) {
     const recovery = this.recover(runId);
     if (!recovery.success) return recovery;
 
-    // Store recovered run in RunStore
-    if (this.runStore && recovery.run) {
-      this.runStore.create({
-        runId: recovery.run.id,
-        goal: recovery.run.goal,
-        workspaceId: recovery.run.workspaceId,
-      });
-      // Override with recovered state
-      const existing = this.runStore.get(runId);
-      if (existing) {
-        Object.assign(existing, recovery.run);
-        existing.updatedAt = Date.now();
-      }
-    }
-
     const actions = [];
 
-    // 1. Resume running tasks
+    // ── V1.2.3: Mutate Store state before resuming ──
+
+    // 1. RUNNING tasks → requeue to PENDING in TaskStore
     for (const task of recovery.taskPlan.running) {
-      if (engine && engine.executeTask) {
-        const result = await engine.executeTask(task.id);
-        actions.push({ action: 'resume_task', taskId: task.id, result: result.success });
-      } else {
-        actions.push({ action: 'resume_task', taskId: task.id, result: false, reason: 'no engine' });
-      }
+      this.taskStore.update(task.id, {
+        status: 'pending',
+        error: null,
+        failedAt: null,
+        updatedAt: Date.now(),
+      });
+      actions.push({ action: 'requeue_task', taskId: task.id, from: 'running', to: 'pending' });
     }
 
-    // 2. Retry failed tasks
+    // 2. FAILED tasks → reset to PENDING in TaskStore (for retry)
     for (const task of recovery.taskPlan.failed) {
-      if (engine && engine.executeTask) {
-        // Reset task to pending first
-        task.status = 'pending';
-        task.error = null;
-        task.failedAt = null;
-        const result = await engine.executeTask(task.id);
-        actions.push({ action: 'retry_task', taskId: task.id, result: result.success });
-      } else {
-        actions.push({ action: 'retry_task', taskId: task.id, result: false, reason: 'no engine' });
-      }
+      this.taskStore.update(task.id, {
+        status: 'pending',
+        error: null,
+        failedAt: null,
+        updatedAt: Date.now(),
+      });
+      actions.push({ action: 'retry_task', taskId: task.id, from: 'failed', to: 'pending' });
     }
 
-    // 3. Execute pending tasks
+    // 3. PENDING tasks — already correct, just execute
     for (const task of recovery.taskPlan.pending) {
-      if (engine && engine.executeTask) {
-        const result = await engine.executeTask(task.id);
-        actions.push({ action: 'execute_task', taskId: task.id, result: result.success });
-      } else {
-        actions.push({ action: 'execute_task', taskId: task.id, result: false, reason: 'no engine' });
+      actions.push({ action: 'execute_task', taskId: task.id, status: 'pending' });
+    }
+
+    // 4. COMPLETED / CANCELLED — skip
+    for (const task of recovery.taskPlan.completed) {
+      actions.push({ action: 'skip_task', taskId: task.id, reason: 'already completed' });
+    }
+    for (const task of recovery.taskPlan.cancelled) {
+      actions.push({ action: 'skip_task', taskId: task.id, reason: 'was cancelled' });
+    }
+
+    // ── V1.2.3: Execute through TaskExecutor if available ──
+    if (this.taskExecutor) {
+      const allTasks = [
+        ...recovery.taskPlan.running,
+        ...recovery.taskPlan.failed,
+        ...recovery.taskPlan.pending,
+      ];
+
+      for (const task of allTasks) {
+        // Re-read from Store to get updated state
+        const storedTask = this.taskStore.get(task.id);
+        if (!storedTask || storedTask.status !== 'pending') continue;
+
+        const result = await this.taskExecutor.execute(storedTask, {
+          runId,
+          workspaceId: recovery.run?.workspaceId,
+        });
+        actions.push({
+          action: 'executed_task',
+          taskId: task.id,
+          success: result.success,
+          status: result.task?.status,
+        });
       }
     }
 

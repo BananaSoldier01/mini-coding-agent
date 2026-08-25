@@ -4,6 +4,31 @@
 
 ---
 
+## V1.2.3 — Runtime Lifecycle & Recovery Correctness（已完成）
+
+### Runtime Lifecycle
+- Run Event Semantics: run_created 与 run_started 明确分离
+- Lifecycle Event Mapping: fromStatus+toStatus 基于对
+- 修复: run_cancelled (非 plan_cancelled), run_resumed (非 run_started)
+- TransitionManager 成为 lifecycle mutation 唯一入口
+
+### Store Mutation Boundary
+- get()/list() 返回 shallow clone
+- 外部不可通过 live reference 绕过 Store API
+- 所有写入通过 update() 或 TransitionManager
+
+### Crash Execution Recovery
+- RUNNING → requeue → PENDING → execute
+- FAILED → retry → PENDING → execute
+- COMPLETED/CANCELLED → skip
+- RecoveryManager 不再依赖整个 Engine
+
+### Relationship Integrity
+- verifyConsistency 检查 5 组关系
+- 16 lifecycle correctness tests (879/879 PASS)
+
+---
+
 ## V1.2.2 — Runtime State Ownership & Persistence Layer（已完成）
 
 ### Runtime State Ownership

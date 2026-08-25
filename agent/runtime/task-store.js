@@ -25,7 +25,9 @@ class TaskStore {
   }
 
   get(taskId) {
-    return this.tasks.get(taskId) || null;
+    const task = this.tasks.get(taskId);
+    if (!task) return null;
+    return { ...task };
   }
 
   update(taskId, updates) {
@@ -44,7 +46,7 @@ class TaskStore {
 
   // ── Query ─────────────────────────────────────────────
 
-  list() { return Array.from(this.tasks.values()); }
+  list() { return Array.from(this.tasks.values()).map(t => ({ ...t })); }
   listByRun(runId) { return this.list().filter(t => t.runId === runId); }
   listByStatus(status) { return this.list().filter(t => t.status === status); }
   count() { return this.tasks.size; }

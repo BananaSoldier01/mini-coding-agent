@@ -1,7 +1,7 @@
 # ROADMAP — Mini Coding Agent
 
 ## 当前阶段
-**V1.2.2 — Runtime State Ownership & Persistence Layer**（已完成）
+**V1.2.3 — Runtime Lifecycle & Recovery Correctness**（已完成）
 
 **Next: V1.3 — Agent Productization Layer**
 
@@ -126,6 +126,17 @@
 - Layout responsive hardening（1280×720 / 1440×900 / 1920×1080）
 - Directory Delete 完整 runAgent E2E
 - CI/Release Gate 标准化（test:all 必须 100% PASS）
+- 状态：已完成
+
+### V1.2.3 — Runtime Lifecycle & Recovery Correctness
+- Run Event Semantics: run_created vs run_started 明确分离
+- Lifecycle Event Mapping: fromStatus+toStatus 基于对，修复 run_cancelled / run_resumed
+- TransitionManager 单一入口: Validate → Apply → Store → Emit
+- Store Mutation Boundary: get()/list() 返回 clone，禁止外部直接修改
+- Crash Execution Recovery: RUNNING→PENDING requeue, FAILED→PENDING retry
+- RecoveryManager 解耦: 移除 engine 参数，直接依赖 TaskExecutor
+- Relationship Integrity: verifyConsistency 检查 5 组关系
+- 16 lifecycle correctness tests (879/879 PASS)
 - 状态：已完成
 
 ### V1.2.2 — Runtime State Ownership & Persistence Layer

@@ -25,7 +25,9 @@ class PlanStore {
   }
 
   get(planId) {
-    return this.plans.get(planId) || null;
+    const plan = this.plans.get(planId);
+    if (!plan) return null;
+    return { ...plan };
   }
 
   update(planId, updates) {
@@ -44,7 +46,7 @@ class PlanStore {
 
   // ── Query ─────────────────────────────────────────────
 
-  list() { return Array.from(this.plans.values()); }
+  list() { return Array.from(this.plans.values()).map(p => ({ ...p })); }
   listByRun(runId) { return this.list().filter(p => p.runId === runId); }
   count() { return this.plans.size; }
   has(planId) { return this.plans.has(planId); }

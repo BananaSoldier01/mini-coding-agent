@@ -367,7 +367,7 @@ test('Engine: getActiveRun returns active run', () => {
 // Test 7: Event Integration
 // ═══════════════════════════════════════════════════════════
 
-test('Engine: createRun emits run_started event', () => {
+test('Engine: createRun emits run_created event', () => {
   const store = createEventStore();
   const emitter = new RuntimeEventEmitter();
   emitter.setStore(store);
@@ -376,7 +376,7 @@ test('Engine: createRun emits run_started event', () => {
   engine.createRun({ goal: 'test', runId: 'run-evt' });
 
   const events = store.getEventsByRun('run-evt');
-  assert.ok(events.some(e => e.type === 'run_started'));
+  assert.ok(events.some(e => e.type === 'run_created'));
 });
 
 test('Engine: addTask emits task_created event', () => {

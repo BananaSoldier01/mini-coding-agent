@@ -28,6 +28,10 @@ class TaskExecutor {
     this.transitionMgr = options.transitionManager || createTransitionManager({
       emitter: options.emitter,
       eventStore: options.eventStore,
+      runStore: options.runStore,
+      taskStore: options.taskStore,
+      planStore: options.planStore,
+      workspaceStore: options.workspaceStore,
     });
     this.skillRuntime = options.skillRuntime || null;
     this.artifactStore = options.artifactStore || null;

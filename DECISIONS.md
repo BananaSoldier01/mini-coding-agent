@@ -4,6 +4,51 @@
 
 ---
 
+## V1.2.3 — Runtime Lifecycle & Recovery Correctness
+
+### D15: Run Created and Run Started Are Distinct Events
+
+**Decision**: `run_created` is emitted by `createRun()`, `run_started` is emitted by `startRun()`. They are separate lifecycle events.
+
+**Trade-off**: One more event type to maintain.
+
+**Rationale**: Conflating creation with start corrupts audit trails, consistency checks, and crash recovery. The Event Store must faithfully record each lifecycle step.
+
+### D16: Event Type Derived from fromStatus + toStatus Pair
+
+**Decision**: `getEventType(entityType, fromStatus, toStatus)` uses the transition pair, not just the target status.
+
+- `CREATED → STARTED` = `run_started`
+- `PAUSED → STARTED` = `run_resumed`
+
+**Trade-off**: More complex event type mapping.
+
+**Rationale**: Target-status-only mapping cannot distinguish initial start from resume. Both produce `STARTED` but are semantically different.
+
+### D17: TransitionManager Is the Sole Lifecycle Mutation Entry Point
+
+**Decision**: All lifecycle state changes flow through `TransitionManager.transition()`: Validate → Apply (Store) → Emit Event. Managers no longer directly mutate `entity.status`.
+
+**Trade-off**: Managers must issue transition requests instead of direct mutations.
+
+**Rationale**: Scattered `entity.status = xxx` bypasses validation, event emission, and Store persistence. Centralizing ensures consistency across all three.
+
+### D18: Store Read API Returns Clones
+
+**Decision**: `store.get()` and `store.list()` return shallow clones, not live references. External code cannot mutate internal Store state directly.
+
+**Trade-off**: Slight memory overhead for clones.
+
+**Rationale**: Live references enable accidental Store corruption. Clones enforce the update API as the only mutation path.
+
+### D19: Crash Recovery Mutates Store Before Resuming Execution
+
+**Decision**: `resumeAfterCrash()` first resets task states in TaskStore (RUNNING→PENDING, FAILED→PENDING), then drives `TaskExecutor.execute()`.
+
+**Trade-off**: RecoveryManager now depends on TaskExecutor.
+
+**Rationale**: State-only recovery leaves tasks in an unexecutable state. Store mutation is required before execution can resume.
+
 ## V1.2.2 — Runtime State Ownership & Persistence Layer
 
 ### D12: Store Layer as Single Source of Truth

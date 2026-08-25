@@ -31,6 +31,10 @@ class RunManager {
     this.transitionMgr = options.transitionManager || createTransitionManager({
       emitter: options.emitter,
       eventStore: options.eventStore,
+      runStore: options.runStore,
+      taskStore: options.taskStore,
+      planStore: options.planStore,
+      workspaceStore: options.workspaceStore,
     });
     // V1.2.2: Explicit Store dependencies — NOT engine:this
     this.runStore = options.runStore || null;
@@ -41,7 +45,8 @@ class RunManager {
   // ── Lifecycle ──────────────────────────────────────────
 
   /**
-   * V1.2.1: Create a new Run.
+   * V1.2.3: Create a new Run.
+   * Emits run_created (NOT run_started) — startRun() will emit run_started.
    * Returns { run, workspace, plan }
    */
   create(config = {}) {
@@ -80,13 +85,23 @@ class RunManager {
       metadata: config.metadata || {},
     };
 
-    // Emit creation event
+    // V1.2.3: Emit run_created — distinct from run_started (emitted by startRun)
     if (this.emitter) {
       this.emitter.emit({
         runId,
         workspaceId: run.workspaceId,
-        type: 'run_started',
+        type: 'run_created',
         data: { runId, goal, workspaceId: run.workspaceId },
+      });
+    }
+
+    // Persist to RunStore
+    if (this.runStore) {
+      this.runStore.create({
+        runId: run.id,
+        goal: run.goal,
+        workspaceId: run.workspaceId,
+        metadata: run.metadata,
       });
     }
 
@@ -101,7 +116,7 @@ class RunManager {
       return { success: false, reason: `Cannot start run in status: ${run.status}` };
     }
 
-    // Transition through TransitionManager
+    // Transition through TransitionManager — single event emission point
     const result = this.transitionMgr.transitionRun(
       run.id, RUN_STATUS.CREATED, RUN_STATUS.STARTED,
       { runId: run.id, workspaceId: run.workspaceId, ...config }
@@ -111,16 +126,31 @@ class RunManager {
       return result;
     }
 
-    // Update run state
-    run.status = RUN_STATUS.STARTED;
-    run.startedAt = Date.now();
-    run.updatedAt = Date.now();
+    // V1.2.3: TransitionManager already mutated Store and emitted event.
+    // Sync local run object from Store.
+    const updatedRun = this.runStore.get(run.id);
+    if (updatedRun) {
+      run.status = updatedRun.status;
+      run.startedAt = updatedRun.startedAt;
+      run.updatedAt = updatedRun.updatedAt;
+    }
 
     // Create plan
     const plan = createPlan(run.id, run.goal, {
       tasks: run.taskIds.map(id => ({ taskId: id })),
     });
     run.planId = plan.id;
+
+    // Persist plan to PlanStore
+    if (this.planStore) {
+      this.planStore.create({
+        id: plan.id,
+        runId: run.id,
+        goal: run.goal,
+        status: 'approved',
+        tasks: plan.tasks,
+      });
+    }
 
     // Emit plan_created event
     if (this.emitter) {
@@ -151,8 +181,9 @@ class RunManager {
 
     if (!result.success) return result;
 
-    run.status = RUN_STATUS.PAUSED;
-    run.updatedAt = Date.now();
+    // V1.2.3: Sync from Store (TransitionManager already mutated)
+    const updated = this.runStore.get(run.id);
+    if (updated) { run.status = updated.status; run.updatedAt = updated.updatedAt; }
 
     return { success: true, run, event: result.event };
   }
@@ -172,8 +203,9 @@ class RunManager {
 
     if (!result.success) return result;
 
-    run.status = RUN_STATUS.STARTED;
-    run.updatedAt = Date.now();
+    // V1.2.3: Sync from Store
+    const updated = this.runStore.get(run.id);
+    if (updated) { run.status = updated.status; run.updatedAt = updated.updatedAt; }
 
     return { success: true, run, event: result.event };
   }
@@ -193,9 +225,13 @@ class RunManager {
 
     if (!result.success) return result;
 
-    run.status = RUN_STATUS.COMPLETED;
-    run.completedAt = Date.now();
-    run.updatedAt = Date.now();
+    // V1.2.3: Sync from Store
+    const updated = this.runStore.get(run.id);
+    if (updated) {
+      run.status = updated.status;
+      run.completedAt = updated.completedAt;
+      run.updatedAt = updated.updatedAt;
+    }
 
     return { success: true, run, event: result.event };
   }
@@ -215,10 +251,14 @@ class RunManager {
 
     if (!result.success) return result;
 
-    run.status = RUN_STATUS.FAILED;
-    run.error = error;
-    run.failedAt = Date.now();
-    run.updatedAt = Date.now();
+    // V1.2.3: Sync from Store
+    const updated = this.runStore.get(run.id);
+    if (updated) {
+      run.status = updated.status;
+      run.error = updated.error;
+      run.failedAt = updated.failedAt;
+      run.updatedAt = updated.updatedAt;
+    }
 
     return { success: true, run, event: result.event };
   }
@@ -238,8 +278,9 @@ class RunManager {
 
     if (!result.success) return result;
 
-    run.status = RUN_STATUS.CANCELLED;
-    run.updatedAt = Date.now();
+    // V1.2.3: Sync from Store
+    const updated = this.runStore.get(run.id);
+    if (updated) { run.status = updated.status; run.updatedAt = updated.updatedAt; }
 
     return { success: true, run, event: result.event };
   }

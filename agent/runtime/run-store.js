@@ -61,23 +61,20 @@ class RunStore {
 
     this.runs.set(runId, run);
 
-    if (this.emitter) {
-      this.emitter.emit({
-        runId,
-        workspaceId: run.workspaceId,
-        type: 'run_started',
-        data: { runId, goal, workspaceId: run.workspaceId },
-      });
-    }
+    // V1.2.3: Store does NOT emit lifecycle events — that's the Manager/Transition layer's job.
+    // RunManager.create() emits run_created; startRun() emits run_started.
 
     return { success: true, run };
   }
 
   /**
-   * V1.2.2: Get run by ID.
+   * V1.2.3: Get run by ID — returns a shallow clone to prevent
+   * external mutation of internal Store state.
    */
   get(runId) {
-    return this.runs.get(runId) || null;
+    const run = this.runs.get(runId);
+    if (!run) return null;
+    return { ...run };
   }
 
   /**
@@ -105,7 +102,7 @@ class RunStore {
 
   // ── Query ─────────────────────────────────────────────
 
-  list() { return Array.from(this.runs.values()); }
+  list() { return Array.from(this.runs.values()).map(r => ({ ...r })); }
   listByStatus(status) { return this.list().filter(r => r.status === status); }
   count() { return this.runs.size; }
   has(runId) { return this.runs.has(runId); }

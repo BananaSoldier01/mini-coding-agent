@@ -2,7 +2,7 @@
 
 一个可在本地 workspace 中执行编码任务的轻量级 Agent Harness。
 
-**当前版本**: V1.2.2 — Runtime State Ownership & Persistence Layer
+**当前版本**: V1.2.3 — Runtime Lifecycle & Recovery Correctness
 
 ## 特性
 
