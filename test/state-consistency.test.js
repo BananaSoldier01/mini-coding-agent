@@ -228,3 +228,79 @@ test('Ownership: full lifecycle state is in Store only', () => {
   assert.strictEqual(engine.tasks, undefined);
   assert.strictEqual(engine.plans, undefined);
 });
+
+// ═══════════════════════════════════════════════════════════
+// Test 6: Relationship Integrity
+// ═══════════════════════════════════════════════════════════
+
+test('Integrity: detects Run references missing Plan', () => {
+  const engine = createExecutionEngine();
+  const created = engine.createRun({ goal: 'test', runId: 'run-rel1' });
+
+  // Manually corrupt: set planId to non-existent plan
+  engine.runStore.update(created.run.id, { planId: 'plan-nonexistent' });
+
+  const result = engine.verifyConsistency('run-rel1');
+  assert.ok(!result.consistent);
+  assert.ok(result.issues.some(i => i.type === 'missing_plan'));
+});
+
+test('Integrity: detects Run references missing Task', () => {
+  const engine = createExecutionEngine();
+  const created = engine.createRun({ goal: 'test', runId: 'run-rel2' });
+
+  // Manually corrupt: add non-existent task ID
+  engine.runStore.update(created.run.id, { taskIds: ['task-nonexistent'] });
+
+  const result = engine.verifyConsistency('run-rel2');
+  assert.ok(!result.consistent);
+  assert.ok(result.issues.some(i => i.type === 'missing_task'));
+});
+
+test('Integrity: detects Task references missing Run', () => {
+  const engine = createExecutionEngine();
+  const created = engine.createRun({ goal: 'test', runId: 'run-rel3' });
+
+  // Create a task with wrong runId and add to run's taskIds
+  engine.taskStore.create({
+    id: 'task-orphan',
+    runId: 'run-nonexistent',
+    goal: 'orphan task',
+    status: 'pending',
+  });
+  // Add to run so it gets checked
+  engine.runStore.update(created.run.id, { taskIds: ['task-orphan'] });
+
+  const result = engine.verifyConsistency('run-rel3');
+  assert.ok(result.issues.some(i => i.type === 'missing_run' && i.entity === 'task'));
+});
+
+test('Integrity: detects Workspace references missing Run', () => {
+  const engine = createExecutionEngine();
+  const created = engine.createRun({ goal: 'test', runId: 'run-rel4' });
+
+  // Manually corrupt workspace runIds
+  engine.workspaceStore.update(created.run.workspaceId, {
+    runIds: ['run-nonexistent'],
+  });
+
+  const result = engine.verifyConsistency('run-rel4');
+  assert.ok(!result.consistent);
+  assert.ok(result.issues.some(i => i.type === 'missing_run' && i.entity === 'workspace'));
+});
+
+test('Integrity: valid state passes consistency check', () => {
+  const emitter = new RuntimeEventEmitter();
+  const store = createEventStore();
+  emitter.setStore(store);
+  const engine = createExecutionEngine({ emitter, eventStore: store });
+
+  const created = engine.createRun({ goal: 'test', runId: 'run-valid' });
+  engine.startRun(created.run.id);
+  engine.addTask(created.run.id, { goal: 'task 1' });
+  engine.completeRun(created.run.id);
+
+  const result = engine.verifyConsistency('run-valid');
+  assert.ok(result.consistent);
+  assert.strictEqual(result.issues.length, 0);
+});

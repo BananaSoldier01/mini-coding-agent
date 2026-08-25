@@ -465,19 +465,95 @@ class ExecutionEngine {
   // ═══════════════════════════════════════════════════════════
 
   /**
-   * V1.2.2: Verify Store state consistency with Event Store.
+   * V1.2.2: Verify Store state consistency — status + relationship integrity.
    */
   verifyConsistency(runId) {
     const issues = [];
 
-    // Check Run state
+    // ── Check Run exists ──
     const run = this.runStore.get(runId);
     if (!run) {
       issues.push({ type: 'missing_run', runId });
       return { consistent: false, issues };
     }
 
-    // Check Run status matches events
+    // ── Relationship: Run.planId → Plan must exist ──
+    if (run.planId) {
+      const plan = this.planStore.get(run.planId);
+      if (!plan) {
+        issues.push({
+          type: 'missing_plan',
+          entity: 'run',
+          runId,
+          missingId: run.planId,
+          detail: `Run ${runId} references missing Plan ${run.planId}`,
+        });
+      }
+    }
+
+    // ── Relationship: Run.taskIds → Tasks must exist ──
+    // (checked together with Task.runId validation below)
+
+    // ── Relationship: Task.runId → Run must exist ──
+    for (const taskId of run.taskIds) {
+      const task = this.taskStore.get(taskId);
+      if (!task) {
+        issues.push({
+          type: 'missing_task',
+          entity: 'run',
+          runId,
+          missingId: taskId,
+          detail: `Run ${runId} references missing Task ${taskId}`,
+        });
+        continue;
+      }
+
+      const taskRun = this.runStore.get(task.runId);
+      if (!taskRun) {
+        issues.push({
+          type: 'missing_run',
+          entity: 'task',
+          taskId: task.id,
+          missingId: task.runId,
+          detail: `Task ${task.id} references missing Run ${task.runId}`,
+        });
+      }
+
+      // ── Relationship: Task.planId → Plan must exist ──
+      if (task.planId) {
+        const taskPlan = this.planStore.get(task.planId);
+        if (!taskPlan) {
+          issues.push({
+            type: 'missing_plan',
+            entity: 'task',
+            taskId: task.id,
+            missingId: task.planId,
+            detail: `Task ${task.id} references missing Plan ${task.planId}`,
+          });
+        }
+      }
+    }
+
+    // ── Relationship: Workspace.runIds → Run must exist ──
+    if (run.workspaceId) {
+      const ws = this.workspaceStore.get(run.workspaceId);
+      if (ws) {
+        for (const wsRunId of ws.runIds) {
+          const wsRun = this.runStore.get(wsRunId);
+          if (!wsRun) {
+            issues.push({
+              type: 'missing_run',
+              entity: 'workspace',
+              workspaceId: ws.id,
+              missingId: wsRunId,
+              detail: `Workspace ${ws.id} references missing Run ${wsRunId}`,
+            });
+          }
+        }
+      }
+    }
+
+    // ── Status consistency with Event Store ──
     const events = this.eventStore.getEventsByRun(runId);
     const runEvents = events.filter(e =>
       ['run_started', 'run_completed', 'run_failed', 'run_paused', 'run_resumed'].includes(e.type)
@@ -505,7 +581,7 @@ class ExecutionEngine {
       }
     }
 
-    // Check Task states
+    // Check Task status consistency
     const tasks = this.taskStore.listByRun(runId);
     for (const task of tasks) {
       const taskEvents = events.filter(e =>
