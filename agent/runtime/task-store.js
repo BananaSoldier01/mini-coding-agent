@@ -7,6 +7,8 @@
  * - Supports serialize/restore
  */
 
+import { cloneEntity } from './clone.js';
+
 class TaskStore {
   constructor(options = {}) {
     this.tasks = new Map(); // taskId → task
@@ -27,7 +29,7 @@ class TaskStore {
   get(taskId) {
     const task = this.tasks.get(taskId);
     if (!task) return null;
-    return { ...task };
+    return cloneEntity(task);
   }
 
   update(taskId, updates) {
@@ -46,7 +48,7 @@ class TaskStore {
 
   // ── Query ─────────────────────────────────────────────
 
-  list() { return Array.from(this.tasks.values()).map(t => ({ ...t })); }
+  list() { return Array.from(this.tasks.values()).map(t => cloneEntity(t)); }
   listByRun(runId) { return this.list().filter(t => t.runId === runId); }
   listByStatus(status) { return this.list().filter(t => t.status === status); }
   count() { return this.tasks.size; }
@@ -57,7 +59,7 @@ class TaskStore {
   serialize() {
     const result = {};
     for (const [id, task] of this.tasks) {
-      result[id] = { ...task };
+      result[id] = cloneEntity(task);
     }
     return result;
   }

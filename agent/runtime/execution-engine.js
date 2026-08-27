@@ -14,7 +14,7 @@
  *   All state transitions go through TransitionManager.
  */
 
-import { RUNTIME_EVENT_TYPES } from './events.js';
+import { RUNTIME_EVENT_TYPES, RuntimeEventEmitter } from './events.js';
 import {
   createPlan,
   approvePlan,
@@ -144,7 +144,20 @@ class ExecutionEngine {
     });
     this.governance = options.governance || createGovernanceManager(options);
     this.eventStore = options.eventStore || createEventStore(options);
-    this.emitter = options.emitter || null;
+    // V1.2.3 fix: when no emitter is supplied, auto-create one and wire it to
+    // the event store. Without this the default ExecutionEngine has an empty
+    // EventStore and recover() fails with "No events found".
+    if (options.emitter) {
+      this.emitter = options.emitter;
+      // Wire a caller emitter to this engine's event store only if it has no
+      // store of its own — a caller that already called setStore() owns it.
+      if (!this.emitter.getStore()) {
+        this.emitter.setStore(this.eventStore);
+      }
+    } else {
+      this.emitter = new RuntimeEventEmitter();
+      this.emitter.setStore(this.eventStore);
+    }
 
     // V1.2.3: Shared TransitionManager — single entry for all state transitions
     // Receives Store dependencies for state mutation
@@ -163,6 +176,7 @@ class ExecutionEngine {
       eventStore: this.eventStore,
       transitionManager: this.transitionMgr,
       runStore: this.runStore,
+      planStore: this.planStore,
       workspaceStore: this.workspaceStore,
       contextMgr: this.contextMgr,
     });
@@ -224,8 +238,9 @@ class ExecutionEngine {
     const result = this.runMgr.start(run);
     if (!result.success) return result;
 
-    // Store plan in PlanStore
-    this.planStore.create(result.plan);
+    // V1.2.3: Plan persistence is now owned by RunManager.start() (which has
+    // planStore wired). It also writes planId back to RunStore so that
+    // executeRun() can resolve run.planId → PlanStore.get().
     this.activeRunId = runId;
 
     return { success: true, run: result.run, plan: result.plan };

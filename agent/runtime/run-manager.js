@@ -40,6 +40,9 @@ class RunManager {
     this.runStore = options.runStore || null;
     this.workspaceStore = options.workspaceStore || null;
     this.contextMgr = options.contextMgr || null;
+    // V1.2.3 fix: planStore was referenced in start() but never assigned,
+    // so the plan-persistence block was silently dead. Wire it explicitly.
+    this.planStore = options.planStore || null;
   }
 
   // ── Lifecycle ──────────────────────────────────────────
@@ -137,19 +140,21 @@ class RunManager {
 
     // Create plan
     const plan = createPlan(run.id, run.goal, {
-      tasks: run.taskIds.map(id => ({ taskId: id })),
+      // V1.2.3 fix: getExecutionOrder() reads task.id, not task.taskId.
+      tasks: run.taskIds.map(id => ({ id })),
     });
     run.planId = plan.id;
 
-    // Persist plan to PlanStore
+    // V1.2.3 fix: run is a clone from runStore.get(); without this writeback
+    // the RunStore row keeps planId=null and executeRun() cannot find the plan.
+    if (this.runStore) {
+      this.runStore.update(run.id, { planId: plan.id });
+    }
+
+    // Persist the full plan to PlanStore (createPlan already populated
+    // tasks/dependencies/evidenceRefs/revisions — don't drop them).
     if (this.planStore) {
-      this.planStore.create({
-        id: plan.id,
-        runId: run.id,
-        goal: run.goal,
-        status: 'approved',
-        tasks: plan.tasks,
-      });
+      this.planStore.create(plan);
     }
 
     // Emit plan_created event

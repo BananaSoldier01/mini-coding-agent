@@ -48,6 +48,7 @@ const RUNTIME_EVENT_TYPES = {
   PLAN_CREATED: 'plan_created',
   PLAN_APPROVED: 'plan_approved',
   PLAN_STARTED: 'plan_started',
+  PLAN_VERIFYING: 'plan_verifying',
   PLAN_COMPLETED: 'plan_completed',
   PLAN_FAILED: 'plan_failed',
   PLAN_CANCELLED: 'plan_cancelled',
@@ -147,6 +148,7 @@ const EVENT_SCHEMA = {
   plan_created: ['type', 'timestamp', 'runId', 'planId', 'data'],
   plan_approved: ['type', 'timestamp', 'runId', 'planId', 'data'],
   plan_started: ['type', 'timestamp', 'runId', 'planId', 'data'],
+  plan_verifying: ['type', 'timestamp', 'runId', 'planId', 'data'],
   plan_completed: ['type', 'timestamp', 'runId', 'planId', 'data'],
   plan_failed: ['type', 'timestamp', 'runId', 'planId', 'data'],
 

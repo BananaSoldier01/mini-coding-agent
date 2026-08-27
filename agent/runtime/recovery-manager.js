@@ -78,37 +78,53 @@ class RecoveryManager {
     // Step 5: Categorize tasks
     const taskPlan = this._categorizeTasks(unfinishedTasks);
 
-    // V1.2.3: Persist reconstructed entities back to Stores
+    // V1.2.3 fix: Persist reconstructed entities back to Stores.
+    // The old code called create({ id: ... }) — but RunStore.create expects
+    // config.runId, so the run was stored under a random id — and then
+    // Object.assign()'d a clone from get(), which never reached the Store.
+    // Write reconstructed state through update() so status/planId/taskIds
+    // actually land on the entity the caller asked to recover.
     if (this.runStore) {
-      this.runStore.create({
-        id: run.id,
-        goal: run.goal,
-        workspaceId: run.workspaceId,
-        metadata: run.metadata,
-      });
-      // Override with reconstructed state
-      const existing = this.runStore.get(run.id);
-      if (existing) {
-        Object.assign(existing, run);
-        existing.updatedAt = Date.now();
+      if (!this.runStore.has(run.id)) {
+        this.runStore.create({
+          runId: run.id,
+          goal: run.goal,
+          workspaceId: run.workspaceId,
+          metadata: run.metadata,
+        });
       }
+      this.runStore.update(run.id, {
+        status: run.status,
+        planId: run.planId,
+        taskIds: run.taskIds,
+        startedAt: run.startedAt,
+        completedAt: run.completedAt,
+        failedAt: run.failedAt,
+        error: run.error,
+        metadata: run.metadata,
+        updatedAt: Date.now(),
+      });
     }
 
     // Persist reconstructed tasks back to TaskStore
     if (this.taskStore) {
       for (const task of unfinishedTasks) {
-        this.taskStore.create({
-          id: task.id,
-          runId: run.id,
-          goal: task.goal || 'Restored Task',
-          status: task.status,
-        });
-        // Override with reconstructed state
-        const existing = this.taskStore.get(task.id);
-        if (existing) {
-          Object.assign(existing, task);
-          existing.updatedAt = Date.now();
+        if (!this.taskStore.has(task.id)) {
+          this.taskStore.create({
+            id: task.id,
+            runId: run.id,
+            goal: task.goal || 'Restored Task',
+            status: task.status,
+          });
         }
+        this.taskStore.update(task.id, {
+          status: task.status,
+          goal: task.goal || 'Restored Task',
+          error: task.error || null,
+          failedAt: task.failedAt || null,
+          completedAt: task.completedAt || null,
+          updatedAt: Date.now(),
+        });
       }
     }
 

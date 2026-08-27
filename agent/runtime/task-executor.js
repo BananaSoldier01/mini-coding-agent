@@ -49,18 +49,29 @@ class TaskExecutor {
     const runId = task.runId;
     const workspaceId = context.workspaceId || (this.workspaceStore?.getWorkspaceForRun(runId)?.id);
 
+    // V1.2.3 fix: re-read fresh state from the Store. The task arg may be a
+    // stale clone, and TransitionManager now validates the Store's current
+    // status against fromStatus — so pass the real current status.
+    if (this.taskStore) {
+      const stored = this.taskStore.get(task.id);
+      if (stored) task = stored;
+    }
+    const currentStatus = task.status;
+
     // Validate transition
-    if (!this.transitionMgr.canTransition('task', task.status, TASK_STATUS.RUNNING)) {
+    if (!this.transitionMgr.canTransition('task', currentStatus, TASK_STATUS.RUNNING)) {
       return {
         success: false,
-        reason: `Task ${task.id} cannot start from status: ${task.status}`,
+        reason: `Task ${task.id} cannot start from status: ${currentStatus}`,
         task,
       };
     }
 
     // Transition: PENDING → RUNNING
+    // V1.2.3: TransitionManager is the single owner of task lifecycle events.
+    // It validates the Store state, mutates the Store, and emits task_started.
     const startResult = this.transitionMgr.transitionTask(
-      task.id, task.status, TASK_STATUS.RUNNING,
+      task.id, currentStatus, TASK_STATUS.RUNNING,
       { runId, workspaceId, taskId: task.id, data: { skillId: task.assignedSkills?.[0] } }
     );
 
@@ -68,20 +79,9 @@ class TaskExecutor {
       return { success: false, reason: startResult.reason, task };
     }
 
-    // Update task state
+    // Update local task state (Store was already mutated by TransitionManager)
     task.status = TASK_STATUS.RUNNING;
     task.updatedAt = Date.now();
-
-    // Emit task_started event
-    if (this.emitter) {
-      this.emitter.emit({
-        runId,
-        workspaceId,
-        taskId: task.id,
-        type: 'task_started',
-        data: { taskId: task.id },
-      });
-    }
 
     try {
       // Execute skill if task has a skill binding
@@ -166,16 +166,8 @@ class TaskExecutor {
     task.completedAt = Date.now();
     task.updatedAt = Date.now();
 
-    // Emit task_completed event
-    if (this.emitter) {
-      this.emitter.emit({
-        runId,
-        workspaceId,
-        taskId: task.id,
-        type: 'task_completed',
-        data: { taskId: task.id },
-      });
-    }
+    // V1.2.3: task_completed is emitted by TransitionManager
+    // (verifying→completed). TaskExecutor is no longer an event owner.
 
     return { success: true, task };
   }
@@ -203,16 +195,8 @@ class TaskExecutor {
     task.failedAt = Date.now();
     task.updatedAt = Date.now();
 
-    // Emit task_failed event
-    if (this.emitter) {
-      this.emitter.emit({
-        runId,
-        workspaceId,
-        taskId: task.id,
-        type: 'task_failed',
-        data: { taskId: task.id, error },
-      });
-    }
+    // V1.2.3: task_failed is emitted by TransitionManager
+    // (running→failed). TaskExecutor is no longer an event owner.
 
     return { success: false, task, error };
   }
@@ -227,11 +211,25 @@ class TaskExecutor {
       return { success: false, reason: `Can only retry failed tasks, got: ${task.status}` };
     }
 
-    // Reset to pending
-    task.status = TASK_STATUS.PENDING;
-    task.error = null;
-    task.failedAt = null;
-    task.updatedAt = Date.now();
+    // V1.2.3 fix: reset to PENDING in the STORE, not just on the clone.
+    // TransitionManager now validates the Store's current status, so a clone
+    // mutation alone leaves the Store in FAILED and execute() is rejected.
+    if (this.taskStore) {
+      this.taskStore.update(task.id, {
+        status: TASK_STATUS.PENDING,
+        error: null,
+        failedAt: null,
+        completedAt: null,
+        updatedAt: Date.now(),
+      });
+      const stored = this.taskStore.get(task.id);
+      if (stored) task = stored;
+    } else {
+      task.status = TASK_STATUS.PENDING;
+      task.error = null;
+      task.failedAt = null;
+      task.updatedAt = Date.now();
+    }
 
     // Execute
     return this.execute(task, context);

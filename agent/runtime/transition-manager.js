@@ -52,8 +52,12 @@ class TransitionManager {
         cancelled: [],
       },
       task: {
-        pending: ['running', 'failed', 'completed', 'cancelled'],
-        running: ['verifying', 'failed', 'cancelled', 'waiting_approval'],
+        // V1.2.3: Restored strict machine — matches task.js TASK_TRANSITIONS.
+        // PENDING may only advance to RUNNING or be CANCELLED. The loose
+        // PENDING→COMPLETED / PENDING→FAILED shortcuts let tests bypass the
+        // RUNNING→VERIFYING→COMPLETED invariant and are removed.
+        pending: ['running', 'cancelled'],
+        running: ['verifying', 'failed', 'cancelled', 'waiting_approval', 'superseded'],
         waiting_approval: ['running', 'failed', 'cancelled'],
         verifying: ['completed', 'failed', 'cancelled', 'superseded'],
         completed: [],
@@ -91,6 +95,25 @@ class TransitionManager {
     const validation = this.validate(entityType, fromStatus, toStatus);
     if (!validation.valid) {
       return { success: false, reason: validation.reason, event: null };
+    }
+
+    // Step 1b: Verify the Store's CURRENT status matches the requested
+    // fromStatus. TransitionManager owns lifecycle mutation, so it must not
+    // trust the caller's claimed source state — a lying caller could move a
+    // FAILED entity back to RUNNING by passing fromStatus=PENDING.
+    const currentStore = this._getStore(entityType);
+    if (currentStore) {
+      const entity = currentStore.get(entityId);
+      if (!entity) {
+        return { success: false, reason: `${entityType} ${entityId} not found in store`, event: null };
+      }
+      if (entity.status !== fromStatus) {
+        return {
+          success: false,
+          reason: `Stale transition: ${entityType} ${entityId} current status is '${entity.status}', not '${fromStatus}'`,
+          event: null,
+        };
+      }
     }
 
     // Step 2: Build event type (using from→to pair)
@@ -202,9 +225,7 @@ class TransitionManager {
         'pending→running': 'task_started',
         'running→verifying': 'task_verifying',
         'verifying→completed': 'task_completed',
-        'pending→completed': 'task_completed',
         'running→failed': 'task_failed',
-        'pending→failed': 'task_failed',
         'running→cancelled': 'task_cancelled',
         'verifying→cancelled': 'task_cancelled',
         'verifying→superseded': 'task_superseded',
@@ -218,10 +239,17 @@ class TransitionManager {
         'draft→approved': 'plan_approved',
         'approved→started': 'plan_started',
         'started→executing': 'plan_started',
-        'executing→verifying': 'plan_started',
+        'executing→verifying': 'plan_verifying',
+        'verifying→completed': 'plan_completed',
+        'verifying→failed': 'plan_failed',
+        'started→failed': 'plan_failed',
         'executing→completed': 'plan_completed',
         'executing→failed': 'plan_failed',
         'executing→cancelled': 'plan_cancelled',
+        'started→cancelled': 'plan_cancelled',
+        'approved→cancelled': 'plan_cancelled',
+        'verifying→cancelled': 'plan_cancelled',
+        'draft→cancelled': 'plan_cancelled',
         '*→cancelled': 'plan_cancelled',
       },
       workspace: {

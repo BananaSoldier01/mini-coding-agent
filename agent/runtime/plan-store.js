@@ -7,6 +7,8 @@
  * - Supports serialize/restore
  */
 
+import { cloneEntity } from './clone.js';
+
 class PlanStore {
   constructor(options = {}) {
     this.plans = new Map(); // planId → plan
@@ -27,7 +29,7 @@ class PlanStore {
   get(planId) {
     const plan = this.plans.get(planId);
     if (!plan) return null;
-    return { ...plan };
+    return cloneEntity(plan);
   }
 
   update(planId, updates) {
@@ -46,7 +48,7 @@ class PlanStore {
 
   // ── Query ─────────────────────────────────────────────
 
-  list() { return Array.from(this.plans.values()).map(p => ({ ...p })); }
+  list() { return Array.from(this.plans.values()).map(p => cloneEntity(p)); }
   listByRun(runId) { return this.list().filter(p => p.runId === runId); }
   count() { return this.plans.size; }
   has(planId) { return this.plans.has(planId); }
@@ -56,7 +58,7 @@ class PlanStore {
   serialize() {
     const result = {};
     for (const [id, plan] of this.plans) {
-      result[id] = { ...plan };
+      result[id] = cloneEntity(plan);
     }
     return result;
   }

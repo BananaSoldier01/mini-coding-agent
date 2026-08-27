@@ -13,6 +13,7 @@
  */
 
 import { RUNTIME_EVENT_TYPES } from './events.js';
+import { cloneEntity } from './clone.js';
 
 const RUN_STATUS = {
   CREATED: 'created',
@@ -68,13 +69,13 @@ class RunStore {
   }
 
   /**
-   * V1.2.3: Get run by ID — returns a shallow clone to prevent
-   * external mutation of internal Store state.
+   * V1.2.3: Get run by ID — returns a deep clone to prevent
+   * external mutation of internal Store state at any nesting level.
    */
   get(runId) {
     const run = this.runs.get(runId);
     if (!run) return null;
-    return { ...run };
+    return cloneEntity(run);
   }
 
   /**
@@ -102,7 +103,7 @@ class RunStore {
 
   // ── Query ─────────────────────────────────────────────
 
-  list() { return Array.from(this.runs.values()).map(r => ({ ...r })); }
+  list() { return Array.from(this.runs.values()).map(r => cloneEntity(r)); }
   listByStatus(status) { return this.list().filter(r => r.status === status); }
   count() { return this.runs.size; }
   has(runId) { return this.runs.has(runId); }
@@ -115,7 +116,7 @@ class RunStore {
   serialize() {
     const result = {};
     for (const [id, run] of this.runs) {
-      result[id] = { ...run };
+      result[id] = cloneEntity(run);
     }
     return result;
   }

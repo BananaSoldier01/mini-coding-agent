@@ -159,22 +159,27 @@ test('Recovery: RUNNING task actually executes after crash resume', async () => 
   engine.startRun('run-crash2');
   engine.addTask('run-crash2', { goal: 'task 1' });
 
-  // Start the task (emits task_started event)
+  // Leave the task in RUNNING state — simulates a crash mid-execution.
+  // (The previous version completed the task before the crash, which only
+  // proved a COMPLETED task stays completed — not that a RUNNING task re-runs.)
   const tasks = engine.taskStore.listByRun('run-crash2');
-  await engine.executeTask(tasks[0].id);
+  engine.transitionMgr.transitionTask(
+    tasks[0].id, 'pending', 'running',
+    { runId: 'run-crash2', workspaceId: tasks[0].runId, taskId: tasks[0].id }
+  );
 
   // Simulate crash
   engine.runStore.clear();
   engine.taskStore.clear();
   engine.planStore.clear();
 
-  // Recover and resume
+  // Recover and resume — RUNNING task should be requeued to PENDING and then
+  // executed through the full RUNNING→VERIFYING→COMPLETED chain.
   await engine.resumeAfterCrash('run-crash2');
 
   // Verify task was actually executed
   const recoveredTasks = engine.taskStore.listByRun('run-crash2');
   assert.ok(recoveredTasks.length > 0);
-  // Task should have been requeued to pending and then executed to completed
   const task = recoveredTasks[0];
   assert.strictEqual(task.status, 'completed');
 });
@@ -193,10 +198,14 @@ test('Recovery: FAILED task resets error and failedAt before retry', async () =>
   engine.startRun('run-retry1');
   engine.addTask('run-retry1', { goal: 'task 1' });
 
-  // Transition task to FAILED via TransitionManager (emits task_failed)
+  // Transition task to FAILED via the normal lifecycle (PENDING→RUNNING→FAILED)
   const tasks = engine.taskStore.listByRun('run-retry1');
   engine.transitionMgr.transitionTask(
-    tasks[0].id, 'pending', 'failed',
+    tasks[0].id, 'pending', 'running',
+    { runId: 'run-retry1', workspaceId: tasks[0].runId, taskId: tasks[0].id }
+  );
+  engine.transitionMgr.transitionTask(
+    tasks[0].id, 'running', 'failed',
     { runId: 'run-retry1', workspaceId: tasks[0].runId, taskId: tasks[0].id, data: { error: 'previous error' } }
   );
 
@@ -231,10 +240,19 @@ test('Recovery: COMPLETED task is skipped, not re-executed', async () => {
   engine.startRun('run-skip1');
   engine.addTask('run-skip1', { goal: 'task 1' });
 
-  // Transition task to COMPLETED via TransitionManager (emits task_completed)
+  // Transition task to COMPLETED via the normal lifecycle
+  // (PENDING→RUNNING→VERIFYING→COMPLETED)
   const tasks = engine.taskStore.listByRun('run-skip1');
   engine.transitionMgr.transitionTask(
-    tasks[0].id, 'pending', 'completed',
+    tasks[0].id, 'pending', 'running',
+    { runId: 'run-skip1', workspaceId: tasks[0].runId, taskId: tasks[0].id }
+  );
+  engine.transitionMgr.transitionTask(
+    tasks[0].id, 'running', 'verifying',
+    { runId: 'run-skip1', workspaceId: tasks[0].runId, taskId: tasks[0].id }
+  );
+  engine.transitionMgr.transitionTask(
+    tasks[0].id, 'verifying', 'completed',
     { runId: 'run-skip1', workspaceId: tasks[0].runId, taskId: tasks[0].id }
   );
 
@@ -354,7 +372,10 @@ test('Transition: STARTED→CANCELLED produces run_cancelled', () => {
   const events = store.getEventsByRun('run-tc3');
   const cancelledEvents = events.filter(e => e.type === 'run_cancelled');
   assert.strictEqual(cancelledEvents.length, 1, 'should have run_cancelled');
-  assert.ok(!events.some(e => e.type === 'plan_cancelled'), 'should NOT have plan_cancelled for run');
+  // V1.2.3: planId is now correctly written back to RunStore, so cancelling
+  // the run also cancels its plan (previously planId was null and this block
+  // was dead). plan_cancelled is therefore expected.
+  assert.ok(events.some(e => e.type === 'plan_cancelled'), 'cancelling the run should also cancel its plan');
 });
 
 test('Transition: all lifecycle transitions are consistent', () => {
@@ -387,4 +408,91 @@ test('Transition: all lifecycle transitions are consistent', () => {
   // Verify no extra events
   assert.strictEqual(types.filter(t => t === 'run_started').length, 1);
   assert.strictEqual(types.filter(t => t === 'run_resumed').length, 1);
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 8: Full Execution Loop (executeRun E2E)
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: executeRun resolves planId, executes tasks, and completes the run', async () => {
+  const emitter = new RuntimeEventEmitter();
+  const store = createEventStore();
+  emitter.setStore(store);
+  const engine = createExecutionEngine({ emitter, eventStore: store });
+
+  const created = engine.createRun({ goal: 'e2e loop', runId: 'run-e2e' });
+  // Tasks must be added BEFORE startRun, because the plan is built from
+  // run.taskIds at start time.
+  engine.addTask('run-e2e', { goal: 'task 1' });
+  engine.addTask('run-e2e', { goal: 'task 2' });
+  engine.startRun('run-e2e');
+
+  // P0-1: planId must be written back to RunStore so executeRun can find the plan
+  const runBefore = engine.runStore.get('run-e2e');
+  assert.ok(runBefore.planId, 'RunStore.planId should be set after startRun');
+  assert.ok(engine.planStore.has(runBefore.planId), 'Plan should exist in PlanStore');
+
+  const result = await engine.executeRun('run-e2e');
+  assert.ok(result.success, `executeRun should succeed: ${JSON.stringify(result)}`);
+
+  // All tasks executed and completed
+  const tasks = engine.taskStore.listByRun('run-e2e');
+  assert.strictEqual(tasks.length, 2);
+  assert.ok(tasks.every(t => t.status === 'completed'), 'all tasks should be completed');
+
+  // Run should be auto-completed after all tasks finish
+  const runAfter = engine.runStore.get('run-e2e');
+  assert.strictEqual(runAfter.status, RUN_STATUS.COMPLETED);
+
+  // Each task transition must be emitted exactly once (no duplicates)
+  const types = store.getEventsByRun('run-e2e').map(e => e.type);
+  assert.strictEqual(types.filter(t => t === 'task_started').length, 2, 'exactly one task_started per task');
+  assert.strictEqual(types.filter(t => t === 'task_completed').length, 2, 'exactly one task_completed per task');
+  assert.strictEqual(types.filter(t => t === 'task_failed').length, 0, 'no task_failed expected');
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 9: Real crash recovery on a FRESH ExecutionEngine instance
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: recovery on a fresh ExecutionEngine instance restores Run + Tasks by original id', () => {
+  // Phase 1: engine A produces an event trail. Its stores are NOT shared with B.
+  const emitterA = new RuntimeEventEmitter();
+  const storeA = createEventStore();
+  emitterA.setStore(storeA);
+  const engineA = createExecutionEngine({ emitter: emitterA, eventStore: storeA });
+  engineA.createRun({ goal: 'crash recovery', runId: 'run-fresh' });
+  engineA.startRun('run-fresh');
+  engineA.addTask('run-fresh', { goal: 'task 1' });
+  // Leave the task RUNNING to simulate a crash mid-execution
+  const tasksA = engineA.taskStore.listByRun('run-fresh');
+  engineA.transitionMgr.transitionTask(
+    tasksA[0].id, 'pending', 'running',
+    { runId: 'run-fresh', workspaceId: tasksA[0].runId, taskId: tasksA[0].id }
+  );
+
+  // Phase 2: FRESH engine — empty stores, but the event trail persists via storeA
+  const engineB = createExecutionEngine({ emitter: emitterA, eventStore: storeA });
+  const recovery = engineB.recover('run-fresh');
+  assert.ok(recovery.success, `recovery should succeed: ${JSON.stringify(recovery)}`);
+
+  // P0-2: the run must be findable in RunStore by its ORIGINAL id, with the
+  // reconstructed status — not stored under a random id as the old code did.
+  const recoveredRun = engineB.runStore.get('run-fresh');
+  assert.ok(recoveredRun, 'recovered run should exist in RunStore by original id');
+  assert.strictEqual(recoveredRun.status, RUN_STATUS.STARTED);
+  assert.strictEqual(recoveredRun.taskIds.length, 1);
+
+  // The task must be restored to TaskStore by its original id with RUNNING status
+  const recoveredTasks = engineB.taskStore.listByRun('run-fresh');
+  assert.strictEqual(recoveredTasks.length, 1);
+  assert.strictEqual(recoveredTasks[0].status, 'running');
+  assert.strictEqual(recoveredTasks[0].id, tasksA[0].id, 'task id must be preserved');
+
+  // resumeAfterCrash on the fresh engine must requeue RUNNING → PENDING and execute
+  return engineB.resumeAfterCrash('run-fresh').then(result => {
+    assert.ok(result.success);
+    const after = engineB.taskStore.listByRun('run-fresh')[0];
+    assert.strictEqual(after.status, 'completed', 'RUNNING task should re-execute to completed');
+  });
 });
