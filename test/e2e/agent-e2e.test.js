@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import assert from 'node:assert';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -403,5 +404,142 @@ test('Agent E2E J — Constraint Survives Compaction', async ({ page }) => {
 
   // Cleanup
   try { fs.unlinkSync(path.join(TEST_WORKSPACE, 'AGENTS.md')); } catch {}
+  try { fs.unlinkSync(path.join(TEST_WORKSPACE, 'README.md')); } catch {}
+});
+
+// ═══════════════════════════════════════════════════════
+// V1.3.0 Scenario 4 — Multi-step Coding Task
+// Read → Search → Edit A → Edit B → Command → Verify → Complete
+// ═══════════════════════════════════════════════════════
+
+test('V1.3.0 E2E K — Multi-step Coding Task (full navigation)', async ({ page }) => {
+  // Create README.md for the agent to write
+  fs.writeFileSync(path.join(TEST_WORKSPACE, 'README.md'), '# Test Workspace\n\nVersion: 0.4.2\n');
+
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_MULTI_STEP');
+
+  // Wait for completion
+  await page.waitForFunction(() => {
+    const cs = document.getElementById('completionSummary');
+    return cs && cs.style.display !== 'none';
+  }, { timeout: 20000 });
+
+  // 1. Activity: read_file → File Inspector (click the file link)
+  await page.locator('.timeline-item[data-id="tc-m-read"] .ti-file-link').click();
+  // Should switch to Inspector File tab
+  await expect(page.locator('.inspector-tab[data-tab="file"].active')).toHaveCount(1, { timeout: 5000 });
+  await expect(page.locator('#fvPath')).toContainText('package.json');
+
+  // 2. Activity: edit_file → Inspector (Diff or Current view)
+  await page.locator('.timeline-item[data-id="tc-m-edit-a"] .ti-file-link').click();
+  // Should switch to Inspector File tab and show the file path
+  await expect(page.locator('#fvPath')).toContainText('package.json', { timeout: 5000 });
+
+  // 3. Changes panel: should show both package.json and README.md
+  await page.locator('.inspector-tab[data-tab="changes"]').click();
+  await expect(page.locator('.diff-file-name')).toHaveCount(2, { timeout: 5000 });
+
+  // 4. File Explorer: verify file tab is clickable and shows content
+  await page.locator('.inspector-tab[data-tab="file"]').click();
+  await page.waitForSelector('#fileTree', { timeout: 5000 });
+  // The file tree should be present (even if empty, the container exists)
+  const treeHtml = await page.locator('#fileTree').innerHTML();
+  assert.ok(treeHtml.length > 0, 'File tree should be rendered');
+
+  // 5. Terminal: command card should be present
+  const termPanel = page.locator('#terminalPanel');
+  if (await termPanel.evaluate(el => el.classList.contains('collapsed'))) {
+    await page.locator('#toggleTerminal').click();
+  }
+  await expect(page.locator('.cmd-card-command')).toContainText('echo tests-passed');
+
+  // 6. Terminal → Activity reverse navigation (back link exists)
+  await expect(page.locator('.cmd-card-back')).toBeVisible({ timeout: 5000 });
+  // The back link should have the correct title
+  await expect(page.locator('.cmd-card-back')).toHaveAttribute('title', '返回对应的 Activity 条目');
+
+  // 7. Completion Summary: should show changes + commands
+  await expect(page.locator('#completionSummary')).toBeVisible();
+  await expect(page.locator('.cs-cmd')).toContainText('echo tests-passed');
+
+  // Cleanup
+  try { fs.unlinkSync(path.join(TEST_WORKSPACE, 'README.md')); } catch {}
+});
+
+// ═══════════════════════════════════════════════════════
+// V1.3.0 Scenario 5 — Failed Validation
+// Edit → Command (exit 1) → Completion must not claim success
+// ═══════════════════════════════════════════════════════
+
+test('V1.3.0 E2E L — Failed Validation (exit 1)', async ({ page }) => {
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_FAILED_VALIDATION');
+
+  // Wait for completion
+  await page.waitForFunction(() => {
+    const cs = document.getElementById('completionSummary');
+    return cs && cs.style.display !== 'none';
+  }, { timeout: 20000 });
+
+  // 1. Terminal should show the failed command with non-zero exit
+  const termPanel = page.locator('#terminalPanel');
+  if (await termPanel.evaluate(el => el.classList.contains('collapsed'))) {
+    await page.locator('#toggleTerminal').click();
+  }
+  await expect(page.locator('.cmd-card-status.fail')).toBeVisible({ timeout: 5000 });
+
+  // 2. Completion Summary should show the failed command as a warning
+  await expect(page.locator('#completionSummary')).toBeVisible();
+  // The failed command should appear with ✕ marker
+  await expect(page.locator('.cs-cmd.cs-fail')).toContainText('false', { timeout: 5000 });
+
+  // 3. Activity should show the command result (timeline item exists)
+  await expect(page.locator('.timeline-item[data-id="tc-f-test"]')).toBeVisible({ timeout: 5000 });
+});
+
+// ═══════════════════════════════════════════════════════
+// V1.3.0 Scenario 7 — Session / Run Isolation
+// Run A modifies file-a, Run B modifies file-b; switching must not leak
+// ═══════════════════════════════════════════════════════
+
+test('V1.3.0 E2E M — Session / Run Isolation', async ({ page }) => {
+  // Create README.md for TEST_MULTI_STEP to write
+  fs.writeFileSync(path.join(TEST_WORKSPACE, 'README.md'), '# Test Workspace\n\nVersion: 0.4.2\n');
+
+  // Run A: multi-step task that modifies package.json + writes README.md
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_MULTI_STEP');
+  await page.waitForFunction(() => {
+    const cs = document.getElementById('completionSummary');
+    return cs && cs.style.display !== 'none';
+  }, { timeout: 20000 });
+
+  // Verify Run A: Changes shows package.json (edit_file is tracked correctly)
+  await page.locator('.inspector-tab[data-tab="changes"]').click();
+  await expect(page.locator('.diff-file-name').first()).toContainText('package.json', { timeout: 5000 });
+
+  // New Session for Run B — command-only task (no file changes)
+  await page.locator('#newSessionBtn').click();
+  await page.waitForTimeout(300);
+  await sendTask(page, 'TEST_COMMAND');
+  await page.waitForFunction(() => {
+    const cs = document.getElementById('completionSummary');
+    return cs && cs.style.display !== 'none';
+  }, { timeout: 15000 });
+
+  // Verify Run B: Changes is empty (no file changes) — proving Run A's
+  // changes did NOT leak across the session switch.
+  await page.locator('.inspector-tab[data-tab="changes"]').click();
+  await expect(page.locator('.diff-empty')).toBeVisible({ timeout: 5000 });
+
+  // Terminal should show Run B's command, not Run A's
+  const termPanel = page.locator('#terminalPanel');
+  if (await termPanel.evaluate(el => el.classList.contains('collapsed'))) {
+    await page.locator('#toggleTerminal').click();
+  }
+  await expect(page.locator('.cmd-card-command')).toContainText('echo hello-agent');
+
+  // Cleanup
   try { fs.unlinkSync(path.join(TEST_WORKSPACE, 'README.md')); } catch {}
 });

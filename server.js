@@ -251,6 +251,17 @@ const server = http.createServer(async (req, resp) => {
       }
     }
 
+    // ── API: V1.3.0 — List Runs for a Session ──────────
+    if (pathname === '/api/session/runs' && method === 'GET') {
+      const sessionId = parsedUrl.query.sessionId;
+      const session = sessionId ? sessionManager.get(sessionId) : null;
+      if (!session) return sendError(resp, 404, '会话不存在');
+      return sendJson(resp, {
+        sessionId: session.id,
+        runs: session.lastRunObservation ? [session.lastRunObservation] : [],
+      });
+    }
+
     // ── API: Session ─────────────────────────────────
     if (pathname === '/api/session' && method === 'POST') {
       const mv = validateMutation(req);
@@ -317,6 +328,10 @@ const server = http.createServer(async (req, resp) => {
           sourceRange: { start: 0, end: 0 },
         },
         planState: session.planState || null,
+        // V1.3.0: Restore the last Run's Coding Workspace state so the user
+        // can pick up where they left off without losing Activity / Changes /
+        // Terminal / Summary context.
+        lastRunObservation: session.lastRunObservation || null,
       });
     }
 
@@ -417,6 +432,76 @@ const server = http.createServer(async (req, resp) => {
       // 所有实时 Event 通过 sendRunEvent 携带 runId，避免遗忘
       const sendRunEvent = (event) => {
         sendEvent({ ...event, runId: activeRun.runId });
+        trackEvent(event);
+      };
+
+      // ── V1.3.0: Track Run-scoped observation data on the Server ──
+      // The frontend already collects timeline/changes/commands from SSE
+      // events, but that data is lost on session switch. Here we mirror the
+      // same collection so it can be restored when the user returns to this
+      // Session later.
+      const runObservation = {
+        runId: activeRun.runId,
+        sessionId: session.id,
+        startedAt: activeRun.startTime,
+        completedAt: null,
+        status: 'completed',
+        timeline: [],
+        commands: [],
+        changes: null,
+        approvals: { approved: 0, rejected: 0 },
+        artifacts: [],
+      };
+
+      const trackEvent = (event) => {
+        switch (event.type) {
+          case 'tool_call':
+            runObservation.timeline.push({
+              id: event.toolCall.id,
+              name: event.toolCall.name,
+              args: event.toolCall.args,
+              policy: event.policy,
+              status: 'running',
+              startTime: Date.now(),
+              result: null,
+            });
+            break;
+          case 'tool_result': {
+            const item = runObservation.timeline.find(t => t.id === event.toolCall.id);
+            if (item) {
+              item.result = event.result;
+              item.status = event.result?.error ? 'error' : 'done';
+              item.duration = Date.now() - item.startTime;
+            }
+            break;
+          }
+          case 'approval_needed':
+            runObservation.timeline.push({
+              id: event.toolCall.id,
+              name: event.toolCall.name,
+              args: event.toolCall.args,
+              policy: 'requireApproval',
+              status: 'waiting',
+              startTime: Date.now(),
+              result: null,
+            });
+            break;
+          case 'command_result':
+            runObservation.commands.push({
+              command: event.command,
+              exitCode: event.exitCode,
+              duration: event.duration,
+              stopped: event.stopped,
+              timedOut: event.timedOut,
+              terminationReason: event.terminationReason,
+            });
+            break;
+          case 'agent_done':
+            if (event.result && event.result.changes) {
+              runObservation.changes = event.result.changes;
+            }
+            break;
+        }
       };
 
       // 第一个 Event：建立 Frontend Run Identity
@@ -501,10 +586,29 @@ const server = http.createServer(async (req, resp) => {
           sendRunEvent({ type: 'error', message: err.message });
         }
       } finally {
+        // V1.3.0: Save Run observation to Session so it survives restart /
+        // session switch. The frontend already renders this in real-time;
+        // this makes it durable.
+        runObservation.completedAt = Date.now();
+        runObservation.status = activeRun.stopped ? 'stopped' : 'completed';
+        session.lastRunObservation = runObservation;
         runManager.remove(session.id, activeRun);
         resp.end();
       }
       return;
+    }
+
+    // ── API: V1.3.0 — Retrieve Run observation data (Activity / Changes / Commands) ──
+    if (pathname === '/api/run/observation' && method === 'GET') {
+      const runId = parsedUrl.query.runId;
+      if (!runId) return sendError(resp, 400, '缺少 runId 参数');
+      // Search all sessions for this runId's observation
+      for (const s of sessionManager.sessions.values()) {
+        if (s.lastRunObservation && s.lastRunObservation.runId === runId) {
+          return sendJson(resp, { ok: true, observation: s.lastRunObservation });
+        }
+      }
+      return sendError(resp, 404, `Run ${runId} 的 observation 数据不存在`);
     }
 
     // ── API: 审批响应 ────────────────────────────────

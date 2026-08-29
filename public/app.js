@@ -19,6 +19,7 @@ const state = {
   runStartTime: null,
   approvals: { approved: 0, rejected: 0 },
   commands: [],
+  artifacts: [],
   // Inspector state
   inspectorTab: 'changes',
   fvView: 'current',
@@ -365,12 +366,52 @@ async function switchSession(sessionId) {
     state.changes = [];
     state.commands = [];
     state.approvals = { approved: 0, rejected: 0 };
+    state.artifacts = [];
     state.activeRunId = null;
     state.expandedDirs.clear();
     state.expandedDirs.add('.');
     state.selectedFile = null;
     state.fvPath = null;
     state.fvContent = null;
+    state.fvDiff = null;
+
+    // V1.3.0: Restore the last Run's Coding Workspace state if available.
+    // This closes the gap where switching sessions lost all observation data
+    // (Activity / Changes / Terminal / Summary) — only chat messages were kept.
+    if (data.lastRunObservation) {
+      const obs = data.lastRunObservation;
+      state.timeline = obs.timeline || [];
+      state.changes = (obs.changes && obs.changes.files) ? obs.changes.files.map(f => ({
+        path: f.path,
+        type: f.type,
+        added: f.added || 0,
+        removed: f.removed || 0,
+        diff: f.diff || [],
+        before: f.before || '',
+        after: f.after || '',
+      })) : [];
+      state.commands = obs.commands || [];
+      state.approvals = obs.approvals || { approved: 0, rejected: 0 };
+      state.artifacts = obs.artifacts || [];
+      state.activeRunId = obs.runId;
+      if (obs.changes && obs.changes.files && obs.changes.files.length > 0) {
+        renderNetDiff(obs.changes);
+      }
+      renderTimeline();
+      // Rebuild terminal command cards from saved commands
+      const terminalBody = $('#terminalBody');
+      terminalBody.innerHTML = '';
+      for (const cmd of state.commands) {
+        terminalWrite(cmd.command, {
+          exitCode: cmd.exitCode,
+          duration: cmd.duration,
+          stopped: cmd.stopped,
+          timedOut: cmd.timedOut,
+          stdout: cmd.stdout,
+          stderr: cmd.stderr,
+        });
+      }
+    }
 
     // P0-5.0.3: 恢复 Session-scoped Context State
     if (data.contextState) {
@@ -426,11 +467,13 @@ async function newSession() {
     state.changes = [];
     state.commands = [];
     state.approvals = { approved: 0, rejected: 0 };
+    state.artifacts = [];
     state.expandedDirs.clear();
     state.expandedDirs.add('.');
     state.selectedFile = null;
     state.fvPath = null;
     state.fvContent = null;
+    state.fvDiff = null;
     state.fvView = 'current';
 
     // P0-5.0.3: New Session 重置 Session Context（Project Context 保留）
@@ -615,7 +658,14 @@ async function init() {
     if (row) {
       selectFile(row.dataset.path);
       if (row.dataset.type === 'file') {
-        openFileCurrent(row.dataset.path);
+        // V1.3.0: If this file has changes in the current Run, open Diff.
+        // Otherwise fall back to File Current view.
+        const changed = state.changes.find(c => c.path === row.dataset.path);
+        if (changed) {
+          openFileDiff(row.dataset.path);
+        } else {
+          openFileCurrent(row.dataset.path);
+        }
       } else if (row.dataset.type === 'directory') {
         const path = row.dataset.toggle || row.dataset.path;
         if (path) {
@@ -1032,6 +1082,19 @@ function terminalWrite(cmd, result) {
   cmdSpan.className = 'cmd-card-command';
   cmdSpan.textContent = '$ ' + cmd;
 
+    // V1.3.0: Reverse navigation — command card → Activity timeline item.
+    // Uses the stable toolCallId shared between the timeline entry and the
+    // command card so no human-readable string parsing is needed.
+    const backLink = document.createElement('span');
+    backLink.className = 'cmd-card-back';
+    backLink.textContent = '← 返回 Activity';
+    backLink.title = '返回对应的 Activity 条目';
+    backLink.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const tcId = card.dataset.toolCallId;
+      if (tcId) navigateToActivity(tcId);
+    });
+
   const status = document.createElement('span');
   let statusCls = 'ok';
   let statusText = '';
@@ -1042,6 +1105,8 @@ function terminalWrite(cmd, result) {
   else { statusCls = 'ok'; statusText = 'Running'; }
   status.className = 'cmd-card-status ' + statusCls;
   status.textContent = statusText;
+
+  header.appendChild(backLink);
 
   const dur = document.createElement('span');
   dur.className = 'cmd-card-duration';
@@ -1116,6 +1181,19 @@ function navigateToTerminal(toolCallId) {
   }
 }
 
+// V1.3.0: Reverse navigation — Terminal command card → Activity timeline item.
+// Uses the stable toolCallId shared between both, so no string parsing.
+function navigateToActivity(toolCallId) {
+  const item = document.querySelector('.timeline-item[data-id="' + CSS.escape(toolCallId) + '"]');
+  if (item) {
+    item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    item.classList.add('activity-highlight');
+    setTimeout(() => item.classList.remove('activity-highlight'), 1500);
+    // Expand the item's details so the user sees the full context
+    item.classList.add('open');
+  }
+}
+
 function toggleTerminal() {
   const panel = $('#terminalPanel');
   panel.classList.toggle('collapsed');
@@ -1149,6 +1227,13 @@ async function sendMessage() {
   state.timeline = [];
   state.commands = [];
   state.approvals = { approved: 0, rejected: 0 };
+  state.artifacts = [];
+  // V1.3.0: Clear Inspector state for the new Run so it doesn't show
+  // the previous Run's file.
+  state.fvPath = null;
+  state.fvContent = null;
+  state.fvDiff = null;
+  state.selectedFile = null;
 
   if (!state.sessionId) {
     try {
@@ -1766,17 +1851,21 @@ function renderTimeline() {
       const f = document.createElement('div');
       f.className = 'ti-file';
       f.style.cursor = 'pointer';
-      f.title = '点击打开文件';
+      // V1.3.0: Edit/Write → Changes → Diff (not File Current). Falls back to
+      // File Current automatically if the file isn't in the current Run's
+      // Net Diff (e.g. the change hasn't been recorded yet).
+      f.title = '点击查看 Diff（如有变更）';
       f.innerHTML = '✏️ <span class="ti-file-link">' + escapeHtml(item.args.path || '') + '</span>';
-      f.onclick = () => openFileCurrent(item.args.path);
+      f.onclick = () => openFileDiff(item.args.path);
       text.appendChild(f);
     } else if (item.name === 'edit_file') {
       const f = document.createElement('div');
       f.className = 'ti-file';
       f.style.cursor = 'pointer';
-      f.title = '点击打开文件（可切换 Diff）';
+      // V1.3.0: Edit → Changes → Diff
+      f.title = '点击查看 Diff（如有变更）';
       f.innerHTML = '✏️ <span class="ti-file-link">' + escapeHtml(item.args.path || '') + '</span>';
-      f.onclick = () => openFileCurrent(item.args.path);
+      f.onclick = () => openFileDiff(item.args.path);
       text.appendChild(f);
     } else if (item.name === 'search_files') {
       const f = document.createElement('div');
@@ -1864,7 +1953,37 @@ function renderCompletionSummary(result) {
     html += '<div class="cs-section"><span class="cs-label">Commands</span>';
     for (const cmd of state.commands) {
       const status = cmd.stopped ? '■ 停止' : cmd.timedOut ? '⏱ 超时' : cmd.exitCode === 0 ? '✓' : '✕';
-      html += `<div class="cs-cmd">${status} ${escapeHtml(cmd.command)} ${cmd.exitCode !== null ? '(exit ' + cmd.exitCode + ')' : ''} ${cmd.duration ? (cmd.duration/1000).toFixed(1)+'s' : ''}</div>`;
+      const cmdText = `${status} ${escapeHtml(cmd.command)} ${cmd.exitCode !== null ? '(exit ' + cmd.exitCode + ')' : ''} ${cmd.duration ? (cmd.duration/1000).toFixed(1)+'s' : ''}`;
+      if (cmd.toolCallId) {
+        html += `<div class="cs-cmd cs-clickable" title="点击定位到 Terminal">${cmdText}</div>`;
+      } else {
+        html += `<div class="cs-cmd">${cmdText}</div>`;
+      }
+    }
+    html += '</div>';
+  }
+
+  // V1.3.0: Artifact section — patches, reports, test results from the Run
+  if (state.artifacts && state.artifacts.length > 0) {
+    html += '<div class="cs-section"><span class="cs-label">Artifacts</span>';
+    for (const art of state.artifacts) {
+      const typeLabel = art.type === 'patch' ? '🔧 Patch' : art.type === 'report' ? '📋 Report' : art.type === 'test_result' ? '🧪 Test' : '📄 ' + (art.type || 'Artifact');
+      html += `<div class="cs-artifact">${typeLabel}: ${escapeHtml(art.name || art.id || '')}</div>`;
+    }
+    html += '</div>';
+  }
+
+  // V1.3.0: Warnings / Failed Steps — anything that didn't go smoothly
+  const failedCommands = state.commands.filter(c => c.exitCode !== null && c.exitCode !== 0);
+  const failedTimeline = state.timeline.filter(t => t.status === 'error');
+  const hasWarnings = failedCommands.length > 0 || failedTimeline.length > 0;
+  if (hasWarnings) {
+    html += '<div class="cs-section"><span class="cs-label cs-warn">⚠ Warnings</span>';
+    for (const cmd of failedCommands) {
+      html += `<div class="cs-cmd cs-fail">✕ ${escapeHtml(cmd.command)} (exit ${cmd.exitCode})</div>`;
+    }
+    for (const t of failedTimeline) {
+      html += `<div class="cs-cmd cs-fail">✕ ${escapeHtml(t.name)}: ${escapeHtml(t.result?.error || 'failed')}</div>`;
     }
     html += '</div>';
   }
@@ -1875,6 +1994,19 @@ function renderCompletionSummary(result) {
 
   container.innerHTML = html;
   container.style.display = 'block';
+
+  // V1.3.0: Attach navigation handlers after DOM insertion
+  container.querySelectorAll('.cs-clickable').forEach(el => {
+    el.addEventListener('click', () => {
+      const text = el.textContent;
+      for (const cmd of state.commands) {
+        if (cmd.toolCallId && text.includes(cmd.command)) {
+          navigateToTerminal(cmd.toolCallId);
+          break;
+        }
+      }
+    });
+  });
 }
 
 /* ── V0.4.0: Human-Readable Approval ────────────────── */

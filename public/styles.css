@@ -546,7 +546,14 @@ html, body {
   padding: 2px 0; border-bottom: 1px solid var(--border);
 }
 .completion-summary .cs-cmd .cs-cmd-ok { color: var(--ok); }
-.completion-summary .cs-cmd .cs-cmd-fail { color: var(--err); }
+  .completion-summary .cs-cmd .cs-cmd-fail { color: var(--err); }
+  .completion-summary .cs-clickable { cursor: pointer; }
+  .completion-summary .cs-clickable:hover { background: var(--bg-hover); border-radius: 3px; }
+  .completion-summary .cs-artifact {
+    font-family: var(--mono); font-size: 11px; color: var(--accent);
+    padding: 2px 0;
+  }
+  .completion-summary .cs-label.cs-warn { color: var(--warn); }
 
 /* ── Inspector ─────────────────────────────────── */
 .inspector-tabs {
@@ -776,6 +783,18 @@ html, body {
   white-space: nowrap;
 }
 .cmd-card-status { font-size: 11px; font-weight: 600; }
+  .cmd-card-back {
+    font-size: 11px;
+    color: var(--accent);
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+  }
+  .cmd-card-back:hover { opacity: 1; text-decoration: underline; }
+  .activity-highlight {
+    box-shadow: 0 0 0 2px var(--accent) inset;
+    border-radius: 4px;
+  }
 .cmd-card-status.ok { color: var(--ok); }
 .cmd-card-status.fail { color: var(--err); }
 .cmd-card-status.timeout { color: #f59e0b; }

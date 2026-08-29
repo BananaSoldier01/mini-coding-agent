@@ -32,6 +32,10 @@ class Session {
     };
     // V0.5.1: Plan State (Plan Mode & Execution Integrity)
     this.planState = null;
+    // V1.3.0: Run-scoped observation data for the most recent Run.
+    // Stored when a Run completes so session switch can restore the
+    // Coding Workspace (Activity / Changes / Terminal / Summary) state.
+    this.lastRunObservation = null;
   }
 
   /** 别名：与 API 返回字段对齐 */
@@ -73,6 +77,7 @@ class Session {
       lastActivity: this.lastActivity,
       contextState: this.contextState,
       planState: this.planState,
+      lastRunObservation: this.lastRunObservation,
     };
   }
 
@@ -90,6 +95,7 @@ class Session {
       sourceRange: { start: 0, end: 0 },
     };
     s.planState = data.planState || null;
+    s.lastRunObservation = data.lastRunObservation || null;
     return s;
   }
 }

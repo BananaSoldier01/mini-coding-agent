@@ -226,4 +226,39 @@ export const E2E_SCENARIOS = {
       [],
     ],
   },
+
+  // ── V1.3.0 Scenario 4: Multi-step Coding Task ──────
+  'TEST_MULTI_STEP': {
+    responses: ['Reading target file.', 'Searching for the pattern.', 'Editing file A.', 'Editing file B.', 'Running tests.', 'All done.'],
+    toolCalls: [
+      [
+        { id: 'tc-m-read', name: 'read_file', args: { path: 'package.json' } },
+      ],
+      [
+        { id: 'tc-m-search', name: 'search_files', args: { pattern: 'version' } },
+      ],
+      [
+        { id: 'tc-m-edit-a', name: 'edit_file', args: { path: 'package.json', oldString: '"version": "0.4.2"', newString: '"version": "0.4.3"' } },
+      ],
+      [
+        { id: 'tc-m-edit-b', name: 'write_file', args: { path: 'README.md', content: '# Test Workspace\n\nVersion: 0.4.3\n' } },
+      ],
+      [
+        { id: 'tc-m-test', name: 'run_command', args: { command: 'echo tests-passed' } },
+      ],
+      [],
+    ],
+  },
+
+  // ── V1.3.0 Scenario 5: Failed Validation ────────────
+  'TEST_FAILED_VALIDATION': {
+    responses: ['I will edit and test.', 'Done.'],
+    toolCalls: [
+      [
+        { id: 'tc-f-edit', name: 'edit_file', args: { path: 'package.json', oldString: '"version": "0.4.2"', newString: '"version": "0.4.3"' } },
+        { id: 'tc-f-test', name: 'run_command', args: { command: 'false' } },
+      ],
+      [],
+    ],
+  },
 };
