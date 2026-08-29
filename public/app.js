@@ -437,6 +437,9 @@ async function switchSession(sessionId) {
       if (diffSource && diffSource.files && diffSource.files.length > 0) {
         renderNetDiff(diffSource);
       }
+      // V1.4.0-fix P1-2: store the observation so renderTimeline can
+      // project rollback evidence into the Activity.
+      state._activeObservation = obs;
       renderTimeline();
       // Rebuild terminal command cards from saved commands
       const terminalBody = $('#terminalBody');
@@ -513,6 +516,8 @@ async function switchRun(runId) {
     if (diffSource2 && diffSource2.files && diffSource2.files.length > 0) {
       renderNetDiff(diffSource2);
     }
+    // V1.4.0-fix P1-2: store observation for rollback Activity projection
+    state._activeObservation = obs;
     renderTimeline();
     for (const cmd of state.commands) {
       terminalWrite(cmd.command, {
@@ -1455,6 +1460,11 @@ async function sendMessage() {
     setRunningUi(false);
     state.currentAssistant = null;
     state.currentThinking = null;
+    // V1.4.0-fix: save the last runId before clearing activeRunId.
+    // The SSE stream ends after agent_done, at which point the Run is
+    // finished but the observation is still queryable. We need the
+    // runId for rollback API calls.
+    state._lastRunId = state.activeRunId;
     state.activeRunId = null;
   }
 }
@@ -2087,6 +2097,37 @@ function renderTimeline() {
 
     container.appendChild(el);
   }
+
+  // V1.4.0-fix P1-2: project rollback evidence into the Activity timeline.
+  // Reads from the persisted observation.rollback field — no SSE needed.
+  if (state._activeObservation && state._activeObservation.rollback) {
+    const rb = state._activeObservation.rollback;
+    const rollbackSection = document.createElement('div');
+    rollbackSection.className = 'timeline-rollback-section';
+
+    for (const r of (rb.reverted || [])) {
+      const el = document.createElement('div');
+      el.className = 'timeline-item rollback-reverted';
+      el.innerHTML = `<span class="ti-icon done">↺</span><span class="ti-text">Reverted ${escapeHtml(r.path)}</span>`;
+      rollbackSection.appendChild(el);
+    }
+    for (const c of (rb.conflicts || [])) {
+      const el = document.createElement('div');
+      el.className = 'timeline-item rollback-conflict';
+      el.innerHTML = `<span class="ti-icon error">⚠</span><span class="ti-text">Rollback conflict ${escapeHtml(c.path)} (${conflictReasonText(c.reason)})</span>`;
+      rollbackSection.appendChild(el);
+    }
+    for (const f of (rb.failed || [])) {
+      const el = document.createElement('div');
+      el.className = 'timeline-item rollback-failed';
+      el.innerHTML = `<span class="ti-icon error">✕</span><span class="ti-text">Rollback failed ${escapeHtml(f.path)}: ${escapeHtml(f.error)}</span>`;
+      rollbackSection.appendChild(el);
+    }
+    if (rollbackSection.children.length > 0) {
+      container.appendChild(rollbackSection);
+    }
+  }
+
   container.scrollTop = container.scrollHeight;
 }
 
@@ -2352,6 +2393,9 @@ async function refreshChangesFromServer(runId) {
       if (targetRunId === state.activeRunId && data.observation.agentDone) {
         renderCompletionSummary(data.observation.agentDone, data.observation);
       }
+      // V1.4.0-fix P1-2: store observation for rollback Activity projection
+      state._activeObservation = data.observation;
+      renderTimeline();
     }
   } catch (err) {
     // Non-fatal

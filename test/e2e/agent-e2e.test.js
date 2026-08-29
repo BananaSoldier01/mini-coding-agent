@@ -844,3 +844,81 @@ test('V1.3.0 E2E T — Failed Run Summary shows failure', async ({ page }) => {
       `live title should reflect completed when obs.status=completed, got: "${liveTitle}"`);
   }
 });
+
+// ═══════════════════════════════════════════════════════
+// V1.4.0 Browser E2E — Rollback Scenarios
+// ═══════════════════════════════════════════════════════
+
+test('V1.4.0 E2E U — Revert File button exists in Changes Panel', async ({ page }) => {
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_STANDARD_EDIT');
+  await waitForRunComplete(page);
+
+  // The Changes Panel should have revert buttons when there are changes
+  const changeCount = await page.evaluate(() => {
+    return document.querySelectorAll('.diff-file').length;
+  });
+  if (changeCount > 0) {
+    await expect(page.locator('.revert-file-btn')).toBeVisible({ timeout: 5000 });
+  }
+});
+
+test('V1.4.0 E2E V — Revert Run button exists in Completion Summary', async ({ page }) => {
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_STANDARD_EDIT');
+  await waitForRunComplete(page);
+
+  // The Completion Summary should have a Revert Run button when there are changes
+  const changeCount = await page.evaluate(() => {
+    return document.querySelectorAll('.diff-file').length;
+  });
+  if (changeCount > 0) {
+    await expect(page.locator('.revert-run-btn')).toBeVisible({ timeout: 5000 });
+  }
+});
+
+test('V1.4.0 E2E W — Rollback API conflict detection via browser', async ({ page }) => {
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_STANDARD_EDIT');
+  await waitForRunComplete(page);
+
+  // V1.4.0-fix: use _lastRunId (saved before activeRunId is cleared)
+  const runId = await page.evaluate(() => state._lastRunId);
+  assert.ok(runId, 'should have last runId');
+
+  // Get the local token for authenticated requests
+  const token = await page.evaluate(() => localToken);
+
+  // Try to revert a file that doesn't exist in this Run's changes
+  const result = await page.evaluate(async (opts) => {
+    const resp = await fetch('/api/run/revert-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Local-Token': opts.token },
+      body: JSON.stringify({ runId: opts.runId, path: opts.path }),
+    });
+    return { status: resp.status, body: await resp.json() };
+  }, { runId, token, path: 'nonexistent-file.txt' });
+
+  assert.equal(result.status, 404, 'should return 404 for file not in Run changes');
+  assert.ok(result.body.error, 'should have error message');
+});
+
+test('V1.4.0 E2E X — Rollback API returns 404 for nonexistent run', async ({ page }) => {
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_STANDARD_EDIT');
+  await waitForRunComplete(page);
+
+  const token = await page.evaluate(() => localToken);
+
+  const result = await page.evaluate(async (tok) => {
+    const resp = await fetch('/api/run/revert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Local-Token': tok },
+      body: JSON.stringify({ runId: 'nonexistent-run-12345' }),
+    });
+    return { status: resp.status, body: await resp.json() };
+  }, token);
+
+  assert.equal(result.status, 404);
+  assert.ok(result.body.error, 'should have error message');
+});

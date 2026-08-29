@@ -718,6 +718,9 @@ const server = http.createServer(async (req, resp) => {
         // Record conflict evidence in observation
         if (!observation.rollback) observation.rollback = { reverted: [], conflicts: [], failed: [] };
         observation.rollback.conflicts.push({ path: filePath, reason: check.reason, timestamp: Date.now() });
+        // V1.4.0-fix P1-1: recompute the UI projection even on conflict so
+        // the Changes panel reflects the real current Workspace state.
+        observation.currentChanges = recomputeCurrentChanges(observation, fileService);
         return sendJson(resp, { ok: false, reverted: false, conflict: { path: filePath, reason: check.reason } });
       }
 

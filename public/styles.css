@@ -1258,3 +1258,23 @@ html, body {
   margin-top: 8px;
   text-align: right;
 }
+
+/* ── V1.4.0-fix: Rollback Activity timeline items ───────── */
+
+.timeline-rollback-section {
+  margin: 4px 0;
+  border-top: 1px dashed var(--border-l);
+  padding-top: 4px;
+}
+
+.timeline-item.rollback-reverted {
+  color: var(--green);
+}
+
+.timeline-item.rollback-conflict {
+  color: var(--warn, #f0c040);
+}
+
+.timeline-item.rollback-failed {
+  color: var(--error, #f06060);
+}
