@@ -712,7 +712,7 @@ const server = http.createServer(async (req, resp) => {
         currentContent = result.content;
       } catch { /* file doesn't exist — stays null */ }
 
-      const { checkRevertible, applyRevert, recomputeNetDiff } = await import('./rollback.js');
+      const { checkRevertible, applyRevert, recomputeCurrentChanges } = await import('./rollback.js');
       const check = checkRevertible(change, currentContent);
       if (!check.ok) {
         // Record conflict evidence in observation
@@ -730,9 +730,9 @@ const server = http.createServer(async (req, resp) => {
         if (!observation.rollback) observation.rollback = { reverted: [], conflicts: [], failed: [] };
         observation.rollback.reverted.push({ path: filePath, timestamp: Date.now() });
 
-        // V1.4.0-fix P1-1: re-compute the Net Diff from the real Workspace
-        // so Changes panel shows what's still different from baseline.
-        observation.changes = recomputeNetDiff(observation, fileService);
+        // V1.4.0-fix P0-1: re-compute the DERIVED currentChanges projection.
+        // observation.changes (immutable evidence) is NEVER overwritten.
+        observation.currentChanges = recomputeCurrentChanges(observation, fileService);
 
         return sendJson(resp, { ok: true, reverted: true, path: filePath });
       } catch (err) {
@@ -759,7 +759,7 @@ const server = http.createServer(async (req, resp) => {
       }
       const fileService = new WorkspaceFileService(session.workspace);
 
-      const { revertRun, recomputeNetDiff } = await import('./rollback.js');
+      const { revertRun, recomputeCurrentChanges } = await import('./rollback.js');
       const result = revertRun(observation, fileService, paths || null);
 
       // V1.4.0-fix P0-2: write evidence to the persistent observation
@@ -775,8 +775,9 @@ const server = http.createServer(async (req, resp) => {
         observation.rollback.failed.push({ ...f, timestamp: Date.now() });
       }
 
-      // V1.4.0-fix P1-1: re-compute Net Diff after rollback
-      observation.changes = recomputeNetDiff(observation, fileService);
+      // V1.4.0-fix P0-1: re-compute the DERIVED currentChanges projection.
+      // observation.changes (immutable evidence) is NEVER overwritten.
+      observation.currentChanges = recomputeCurrentChanges(observation, fileService);
 
       return sendJson(resp, {
         ok: true,

@@ -4,13 +4,16 @@
  * Pure function module. No Git dependency. No transactional semantics.
  * Per-file safety check + best-effort safe rollback.
  *
- * Evidence source: runObservation.changes (from ChangeTracker.getNetDiff())
- * which preserves baseline before/after content for every file the Run touched.
+ * Architecture (V1.4.0-fix):
+ *   observation.changes        — IMMUTABLE Run evidence (baseline before/after).
+ *                                 Never modified. checkRevertible() always
+ *                                 reads from here.
+ *   observation.currentChanges — DERIVED projection (current Workspace vs
+ *                                 baseline). Recomputed after each rollback.
+ *                                 UI renders from here.
  */
 
 import crypto from 'node:crypto';
-import fs from 'fs';
-import path from 'path';
 
 // ── Hash ─────────────────────────────────────────────────
 
@@ -28,7 +31,10 @@ export function hashContent(content) {
  * content matches change.after. Without this, a user who edits a file
  * that the Agent created would have their changes silently deleted.
  *
- * @param {object} change  — { path, type, before, after } from runObservation.changes
+ * V1.4.0-fix: always reads from observation.changes (immutable evidence),
+ * never from the derived currentChanges projection.
+ *
+ * @param {object} change  — { path, type, before, after } from immutable evidence
  * @param {string|null} currentContent — current file content (null = does not exist)
  * @returns {{ ok: true }} | {{ ok: false, reason: string }}
  */
@@ -79,7 +85,7 @@ export function checkRevertible(change, currentContent) {
 /**
  * Apply a single-file revert. Caller must have verified checkRevertible() first.
  *
- * @param {object} change  — { path, type, before }
+ * @param {object} change  — { path, type, before } from immutable evidence
  * @param {object} fileService  — WorkspaceFileService instance
  * @returns {{ path: string, reverted: true }}
  */
@@ -107,12 +113,17 @@ export function applyRevert(change, fileService) {
 /**
  * Revert all safe files from a Run's changes.
  *
- * @param {object} observation  — runObservation with .changes (array of change objects)
+ * V1.4.0-fix: always reads from observation.changes (immutable evidence),
+ * never from the derived currentChanges.
+ *
+ * @param {object} observation  — runObservation
  * @param {object} fileService   — WorkspaceFileService instance
  * @param {string[]} [paths]     — optional subset of paths to revert
  * @returns {{ revertedFiles: string[], conflicts: [], failedFiles: [] }}
  */
 export function revertRun(observation, fileService, paths = null) {
+  // V1.4.0-fix P0-1: always use immutable evidence (observation.changes),
+  // never the derived currentChanges projection.
   const changes = observation?.changes?.files || [];
   const targets = paths
     ? changes.filter(c => paths.includes(c.path))
@@ -129,7 +140,6 @@ export function revertRun(observation, fileService, paths = null) {
       const result = fileService.readFile(change.path);
       currentContent = result.content;
     } catch (err) {
-      // File doesn't exist or is binary — treat as null
       currentContent = null;
     }
 
@@ -162,20 +172,25 @@ export function revertRun(observation, fileService, paths = null) {
   };
 }
 
-// ── Re-compute Net Diff (V1.4.0-fix P1-1) ─────────────────
+// ── Re-compute Current Net Diff (DERIVED projection) ─────
 
 /**
- * After a rollback, re-compute the Net Diff between the Run's baseline
+ * Re-compute the current Net Diff between the Run's immutable baseline
  * and the current Workspace state.
  *
- * This ensures the Changes panel reflects reality: files that were
- * reverted no longer appear as changed.
+ * V1.4.0-fix P0-1: this is a DERIVED projection stored in
+ * observation.currentChanges. It NEVER overwrites observation.changes
+ * (the immutable rollback evidence).
  *
- * @param {object} observation — runObservation with .changes (baseline evidence)
+ * V1.4.0-fix P0-2: uses the original change.type to determine existence,
+ * not content emptiness. An empty file that existed before the Run is
+ * still "before exists" — its type would be 'modify', not 'create'.
+ *
+ * @param {object} observation — runObservation with .changes (immutable evidence)
  * @param {object} fileService  — WorkspaceFileService instance
- * @returns {{ files: array, totalChanges: number }} — updated Net Diff
+ * @returns {{ files: array, totalChanges: number }} — derived current Net Diff
  */
-export function recomputeNetDiff(observation, fileService) {
+export function recomputeCurrentChanges(observation, fileService) {
   const baselineFiles = observation?.changes?.files || [];
   const changedFiles = [];
 
@@ -189,20 +204,28 @@ export function recomputeNetDiff(observation, fileService) {
       currentContent = null;
     }
 
-    // Determine the current state relative to baseline
-    const beforeExists = change.before && change.before !== '';
+    // V1.4.0-fix P0-2: determine existence from the immutable change.type,
+    // NOT from whether the content string is empty.
+    //   create → before did NOT exist
+    //   modify → before existed
+    //   delete → before existed
+    const beforeExists = change.type !== 'create';
     const currentExists = currentContent !== null;
 
     // If current matches baseline, the file is no longer changed
-    const beforeKey = beforeExists ? change.before : null;
-    const currentKey = currentExists ? currentContent : null;
-
-    if (beforeKey === currentKey) {
-      // File is back to baseline — no longer a change
-      continue;
+    if (beforeExists === currentExists) {
+      // Both exist or both don't exist — check content
+      if (beforeExists && currentExists && currentContent === (change.before || '')) {
+        // File content matches baseline — no longer a change
+        continue;
+      }
+      if (!beforeExists && !currentExists) {
+        // Both don't exist — no change
+        continue;
+      }
     }
 
-    // Determine the change type
+    // Determine the current change type relative to baseline
     let type;
     if (!beforeExists && currentExists) {
       type = 'create';
@@ -215,8 +238,8 @@ export function recomputeNetDiff(observation, fileService) {
     changedFiles.push({
       path: change.path,
       type,
-      before: change.before || '',
-      after: currentContent || '',
+      before: beforeExists ? (change.before || '') : '',
+      after: currentExists ? (currentContent || '') : '',
       added: type === 'create' ? (currentContent ? currentContent.split('\n').length : 0) : 0,
       removed: type === 'delete' ? (change.before ? change.before.split('\n').length : 0) : 0,
     });

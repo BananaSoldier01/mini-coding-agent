@@ -433,8 +433,9 @@ async function switchSession(sessionId) {
       state.commands = obs.commands || [];
       state.approvals = obs.approvals || { approved: 0, rejected: 0 };
       state.activeRunId = obs.runId;
-      if (obs.changes && obs.changes.files && obs.changes.files.length > 0) {
-        renderNetDiff(obs.changes);
+      const diffSource = obs.currentChanges || obs.changes;
+      if (diffSource && diffSource.files && diffSource.files.length > 0) {
+        renderNetDiff(diffSource);
       }
       renderTimeline();
       // Rebuild terminal command cards from saved commands
@@ -508,8 +509,9 @@ async function switchRun(runId) {
     $('#fvBody').innerHTML = '<div class="fv-empty">选择一个文件或修改来查看</div>';
     $('#terminalBody').innerHTML = '';
 
-    if (obs.changes && obs.changes.files && obs.changes.files.length > 0) {
-      renderNetDiff(obs.changes);
+    const diffSource2 = obs.currentChanges || obs.changes;
+    if (diffSource2 && diffSource2.files && diffSource2.files.length > 0) {
+      renderNetDiff(diffSource2);
     }
     renderTimeline();
     for (const cmd of state.commands) {
@@ -2096,7 +2098,12 @@ function renderCompletionSummary(result, observation) {
     return;
   }
 
-  const changes = result.changes || { files: [], totalChanges: 0 };
+  // V1.4.0-fix P1-1: prefer the derived currentChanges (post-rollback
+  // projection) over the immutable agentDone.changes. This ensures the
+  // Summary matches the Changes panel after a rollback.
+  const changes = (observation && observation.currentChanges)
+    ? observation.currentChanges
+    : (result.changes || { files: [], totalChanges: 0 });
   const totalAdded = changes.files.reduce((s, f) => s + (f.added || 0), 0);
   const totalRemoved = changes.files.reduce((s, f) => s + (f.removed || 0), 0);
 
@@ -2150,6 +2157,32 @@ function renderCompletionSummary(result, observation) {
   if (obsStatus === 'failed' && obsError) {
     html += '<div class="cs-section"><span class="cs-label cs-warn">错误</span>';
     html += '<div class="cs-cmd cs-fail">✕ ' + escapeHtml(obsError) + '</div>';
+    html += '</div>';
+  }
+
+  // V1.4.0-fix P1-2: project rollback evidence into the Summary
+  const rollback = observation && observation.rollback;
+  if (rollback) {
+    const rCount = (rollback.reverted || []).length;
+    const cCount = (rollback.conflicts || []).length;
+    const fCount = (rollback.failed || []).length;
+    let rollbackText;
+    if (rCount === 0 && cCount === 0 && fCount === 0) {
+      rollbackText = 'Not reverted';
+    } else {
+      const parts = [];
+      if (rCount > 0) parts.push(`${rCount} reverted`);
+      if (cCount > 0) parts.push(`${cCount} conflict`);
+      if (fCount > 0) parts.push(`${fCount} failed`);
+      rollbackText = parts.join(' · ');
+    }
+    html += '<div class="cs-section"><span class="cs-label">Rollback</span>';
+    html += `<span class="cs-value">${rollbackText}</span>`;
+    if (cCount > 0) {
+      for (const c of rollback.conflicts) {
+        html += `<div class="cs-cmd cs-warn">⚠ ${escapeHtml(c.path)}: ${conflictReasonText(c.reason)}</div>`;
+      }
+    }
     html += '</div>';
   }
 
@@ -2295,8 +2328,8 @@ async function revertRun(runId) {
 
 /**
  * Re-render the Changes panel from the server observation.
- * The server has already re-computed the Net Diff after rollback,
- * so we just fetch and render.
+ * The server has already re-computed the currentChanges (derived projection)
+ * after rollback, so we just fetch and render.
  */
 async function refreshChangesFromServer(runId) {
   const targetRunId = runId || state.activeRunId;
@@ -2305,11 +2338,14 @@ async function refreshChangesFromServer(runId) {
     const resp = await fetch('/api/run/observation?runId=' + encodeURIComponent(targetRunId));
     const data = await resp.json();
     if (data.observation) {
-      // V1.4.0-fix: the server now returns updated changes after rollback
-      if (data.observation.changes) {
+      // V1.4.0-fix P0-1: render from the DERIVED currentChanges,
+      // NOT from observation.changes (immutable evidence).
+      if (data.observation.currentChanges) {
+        renderNetDiff(data.observation.currentChanges);
+      } else if (data.observation.changes) {
+        // Fallback: no rollback has happened yet, use original changes
         renderNetDiff(data.observation.changes);
       } else {
-        // No changes left — clear the panel
         renderNetDiff({ files: [], totalChanges: 0 });
       }
       // Also update the Completion Summary if it's showing this Run

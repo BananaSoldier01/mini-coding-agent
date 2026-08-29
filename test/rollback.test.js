@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { checkRevertible, applyRevert, revertRun, recomputeNetDiff, hashContent } from '../rollback.js';
+import { checkRevertible, applyRevert, revertRun, recomputeCurrentChanges, hashContent } from '../rollback.js';
 
 // ── Mock FileService ────────────────────────────────────
 
@@ -268,9 +268,9 @@ test('revertRun: missing observation → no-op', () => {
   assert.equal(result.revertedFiles.length, 0);
 });
 
-// ── recomputeNetDiff ─────────────────────────────────────
+// ── recomputeCurrentChanges ──────────────────────────────
 
-test('recomputeNetDiff: reverted file no longer appears', () => {
+test('recomputeCurrentChanges: reverted file no longer appears', () => {
   const fs = new MockFileService({ 'a.txt': 'original' });
   const observation = {
     changes: {
@@ -279,11 +279,11 @@ test('recomputeNetDiff: reverted file no longer appears', () => {
       ],
     },
   };
-  const result = recomputeNetDiff(observation, fs);
-  assert.equal(result.totalChanges, 0, 'reverted file should not appear in Net Diff');
+  const result = recomputeCurrentChanges(observation, fs);
+  assert.equal(result.totalChanges, 0, 'reverted file should not appear');
 });
 
-test('recomputeNetDiff: unreverted file still appears', () => {
+test('recomputeCurrentChanges: unreverted file still appears', () => {
   const fs = new MockFileService({ 'a.txt': 'user-changed' });
   const observation = {
     changes: {
@@ -292,26 +292,90 @@ test('recomputeNetDiff: unreverted file still appears', () => {
       ],
     },
   };
-  const result = recomputeNetDiff(observation, fs);
+  const result = recomputeCurrentChanges(observation, fs);
   assert.equal(result.totalChanges, 1);
   assert.equal(result.files[0].path, 'a.txt');
   assert.equal(result.files[0].type, 'modify');
 });
 
-test('recomputeNetDiff: mixed — some reverted, some not', () => {
-  const fs = new MockFileService({
-    'a.txt': 'original',     // reverted (matches baseline)
-    'b.txt': 'user-changed', // not reverted (differs from baseline)
-  });
+test('recomputeCurrentChanges: empty file baseline is NOT misidentified', () => {
+  // V1.4.0-fix P0-2: an empty file that existed before the Run must not
+  // be treated as "create" after recompute.
+  const fs = new MockFileService({ 'empty.txt': 'hello' });
   const observation = {
     changes: {
       files: [
-        { path: 'a.txt', type: 'modify', before: 'original', after: 'agent-a' },
-        { path: 'b.txt', type: 'modify', before: 'orig-b', after: 'agent-b' },
+        { path: 'empty.txt', type: 'modify', before: '', after: 'hello' },
       ],
     },
   };
-  const result = recomputeNetDiff(observation, fs);
+  const result = recomputeCurrentChanges(observation, fs);
+  // Current = 'hello', baseline = '' (empty file existed).
+  // Since current != baseline, there IS a change.
+  // Type must be 'modify' (not 'create'), because before existed.
   assert.equal(result.totalChanges, 1);
-  assert.equal(result.files[0].path, 'b.txt');
+  assert.equal(result.files[0].type, 'modify',
+    'empty baseline file should still be modify, not create');
+});
+
+test('recomputeCurrentChanges: empty file restored to empty is no change', () => {
+  const fs = new MockFileService({ 'empty.txt': '' });
+  const observation = {
+    changes: {
+      files: [
+        { path: 'empty.txt', type: 'modify', before: '', after: 'hello' },
+      ],
+    },
+  };
+  const result = recomputeCurrentChanges(observation, fs);
+  // Current = '' matches baseline = '' → no change
+  assert.equal(result.totalChanges, 0);
+});
+
+test('recomputeCurrentChanges: does NOT overwrite immutable observation.changes', () => {
+  // V1.4.0-fix P0-1: recomputeCurrentChanges returns a NEW object.
+  // It must not mutate observation.changes.
+  const fs = new MockFileService({ 'a.txt': 'original' });
+  const observation = {
+    changes: {
+      files: [
+        { path: 'a.txt', type: 'modify', before: 'original', after: 'agent-changed' },
+      ],
+    },
+  };
+  const originalChanges = observation.changes;
+  const result = recomputeCurrentChanges(observation, fs);
+  // The function returns a new object, doesn't mutate
+  assert.notEqual(result, observation.changes);
+  assert.equal(observation.changes, originalChanges, 'immutable evidence must not be mutated');
+  assert.equal(observation.changes.files[0].after, 'agent-changed',
+    'immutable evidence after field must be preserved');
+});
+
+test('recomputeCurrentChanges: create type correctly identified', () => {
+  const fs = new MockFileService({ 'new.txt': 'content' });
+  const observation = {
+    changes: {
+      files: [
+        { path: 'new.txt', type: 'create', before: '', after: 'content' },
+      ],
+    },
+  };
+  const result = recomputeCurrentChanges(observation, fs);
+  assert.equal(result.totalChanges, 1);
+  assert.equal(result.files[0].type, 'create');
+});
+
+test('recomputeCurrentChanges: delete type correctly identified', () => {
+  const fs = new MockFileService({});
+  const observation = {
+    changes: {
+      files: [
+        { path: 'old.txt', type: 'delete', before: 'hello', after: '' },
+      ],
+    },
+  };
+  const result = recomputeCurrentChanges(observation, fs);
+  assert.equal(result.totalChanges, 1);
+  assert.equal(result.files[0].type, 'delete');
 });
