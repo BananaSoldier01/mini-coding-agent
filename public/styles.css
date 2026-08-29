@@ -482,6 +482,10 @@ html, body {
   border-radius: var(--radius); font-size: 13px;
 }
 .completion-summary .cs-title { color: var(--ok); font-weight: 600; margin-bottom: 8px; }
+
+/* V1.3.0-fix: non-success status titles */
+.completion-summary .cs-title-failed { color: var(--danger, #e74c3c); }
+.completion-summary .cs-title-stopped { color: var(--warn, #f39c12); }
 .completion-summary .cs-grid {
   display: grid; grid-template-columns: auto 1fr; gap: 4px 12px;
   color: var(--text-dim);

@@ -455,7 +455,7 @@ async function switchSession(sessionId) {
       // The old code cleared the summary and never rebuilt it, so switching
       // back to a Session left the Summary panel blank.
       if (obs.agentDone) {
-        renderCompletionSummary(obs.agentDone);
+        renderCompletionSummary(obs.agentDone, obs);
       }
     }
     // V1.3.0-fix: show the Run selector when there are multiple Runs.
@@ -524,7 +524,7 @@ async function switchRun(runId) {
       });
     }
     if (obs.agentDone) {
-      renderCompletionSummary(obs.agentDone);
+      renderCompletionSummary(obs.agentDone, obs);
     }
     updateRunSelector();
     appendSystemMessage(`✅ 已切换到 Run ${runId.slice(0, 8)}`);
@@ -545,6 +545,30 @@ function updateRunSelector() {
     `<option value="${r.runId}" ${r.runId === state.activeRunId ? 'selected' : ''}>` +
     `Run ${r.runId.slice(0, 8)} · ${r.status} · ${r.commandCount || 0} cmds</option>`
   ).join('');
+}
+
+// V1.3.0-fix: refresh the Run selector after each Run completes so
+// consecutive Runs in the same Session are immediately selectable
+// without requiring a session switch. Called from the agent_done SSE
+// handler, so it must NOT block the event loop — we fire-and-forget.
+function refreshRunList() {
+  if (!state.sessionId) return;
+  // Defer so the SSE stream processing isn't blocked by the fetch.
+  setTimeout(async () => {
+    try {
+      const data = await api('/api/session/runs?sessionId=' + encodeURIComponent(state.sessionId));
+      if (data.runs) {
+        state._runList = data.runs;
+        updateRunSelector();
+        const container = $('#runSelectorContainer');
+        if (container && state._runList && state._runList.length > 1) {
+          container.style.display = 'block';
+        }
+      }
+    } catch (err) {
+      // Non-fatal — the selector will update on the next session switch.
+    }
+  }, 100);
 }
 
 async function newSession() {
@@ -1490,6 +1514,16 @@ function handleEvent(event) {
       addTimelineApproval(event);
       showApproval(event);
       break;
+    // V1.3.0-fix: approval_result is sent by the server when the user
+    // approves/rejects via /api/approve. It updates state.approvals so
+    // the Completion Summary shows the real count.
+    case 'approval_result':
+      if (event.approved) {
+        state.approvals.approved++;
+      } else {
+        state.approvals.rejected++;
+      }
+      break;
     case 'done':
       appendSystemMessage(`✅ 任务完成（${event.iteration} 轮）`);
       setStatus('done', 'done');
@@ -1499,6 +1533,8 @@ function handleEvent(event) {
       if (event.result && event.result.changes) {
         renderNetDiff(event.result.changes);
       }
+      // V1.3.0-fix: pass the active observation so the Summary uses real
+      // status/duration instead of hardcoded "✓ 任务完成".
       renderCompletionSummary(event.result);
       break;
     case 'error':

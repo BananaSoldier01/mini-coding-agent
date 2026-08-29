@@ -434,9 +434,6 @@ const server = http.createServer(async (req, resp) => {
 
       // 创建 ActiveRun（管理生命周期）
       const activeRun = runManager.create(session.id);
-      // V1.3.0-fix: expose sendEvent on the activeRun so the /api/approve
-      // handler can forward approval_result events to the SSE stream.
-      activeRun.sendEvent = sendEvent;
       const controller = activeRun.controller;
 
       // ── 统一 Run Identity：Server ActiveRun.runId 是唯一真值 ──
@@ -445,6 +442,10 @@ const server = http.createServer(async (req, resp) => {
         sendEvent({ ...event, runId: activeRun.runId });
         trackEvent(event);
       };
+      // V1.3.0-fix: expose sendRunEvent on the activeRun so the /api/approve
+      // handler can forward approval_result events to the SSE stream AND
+      // through trackEvent() so runObservation.approvals is updated.
+      activeRun.sendRunEvent = sendRunEvent;
 
       // ── V1.3.0: Track Run-scoped observation data on the Server ──
       // The frontend already collects timeline/changes/commands from SSE
@@ -496,6 +497,15 @@ const server = http.createServer(async (req, resp) => {
               startTime: Date.now(),
               result: null,
             });
+            break;
+          case 'approval_result':
+            // V1.3.0-fix: track approval outcomes in the observation so
+            // restored/historical Runs show the real approval count.
+            if (event.approved) {
+              runObservation.approvals.approved++;
+            } else {
+              runObservation.approvals.rejected++;
+            }
             break;
           case 'command_result':
             runObservation.commands.push({
@@ -668,8 +678,10 @@ const server = http.createServer(async (req, resp) => {
       // the frontend only listens for approval_result on the SSE stream.
       if (ok) {
         const activeRun = runManager.get(runId);
-        if (activeRun && activeRun.sendEvent) {
-          activeRun.sendEvent({
+        if (activeRun && activeRun.sendRunEvent) {
+          // V1.3.0-fix: use sendRunEvent (not sendEvent) so the event also
+          // goes through trackEvent() and updates runObservation.approvals.
+          activeRun.sendRunEvent({
             type: 'approval_result',
             runId,
             toolCallId,
