@@ -373,6 +373,9 @@ async function switchSession(sessionId) {
     state.approvals = { approved: 0, rejected: 0 };
     state.artifacts = [];
     state.activeRunId = null;
+    // V1.4.0-fix P1-1: also clear selectedRunId when session is cleared.
+    // It will be re-set when a Run observation is loaded.
+    state.selectedRunId = null;
     state.expandedDirs.clear();
     state.expandedDirs.add('.');
     state.selectedFile = null;
@@ -437,10 +440,12 @@ async function switchSession(sessionId) {
       })) : [];
       state.commands = obs.commands || [];
       state.approvals = obs.approvals || { approved: 0, rejected: 0 };
-      state.activeRunId = obs.runId;
-      // V1.4.0-fix: set selectedRunId so rollback works on
-      // historical Runs viewed via session switch.
+      // V1.4.0-fix P1-1: historical Run restore only sets selectedRunId,
+      // NOT activeRunId. activeRunId is for actively executing Runs only.
       state.selectedRunId = obs.runId;
+      // V1.4.0-fix P1-1: also refresh the active observation so
+      // renderTimeline can project rollback evidence.
+      state._activeObservation = obs;
       const diffSource = obs.currentChanges || obs.changes;
       if (diffSource && diffSource.files && diffSource.files.length > 0) {
         renderNetDiff(diffSource);
@@ -511,9 +516,11 @@ async function switchRun(runId) {
     })) : [];
     state.commands = obs.commands || [];
     state.approvals = obs.approvals || { approved: 0, rejected: 0 };
-    state.activeRunId = obs.runId;
-    // V1.4.0-fix: set selectedRunId for Run-switch viewing
+    // V1.4.0-fix P1-1: Run-switch only sets selectedRunId, NOT activeRunId.
+    // activeRunId is for actively executing Runs only.
     state.selectedRunId = obs.runId;
+    // V1.4.0-fix P1-1: also store the observation for rollback Activity projection
+    state._activeObservation = obs;
 
     // Clear and rebuild UI
     $('#timeline').innerHTML = '';
@@ -2200,7 +2207,7 @@ function renderCompletionSummary(result, observation) {
   html += '</div>';
 
   // V1.4.0: Revert Run button — only show for the active Run
-  const csRunId = state.activeRunId;
+  const csRunId = state.selectedRunId || state.activeRunId;
   if (csRunId && changes.totalChanges > 0) {
     html += `<div class="cs-actions"><button class="revert-run-btn" data-run-id="${csRunId}"> Conditionally Revert</button></div>`;
   }
@@ -2321,11 +2328,10 @@ async function revertFile(filePath) {
   }
 
   try {
-    const resp = await api('/api/run/revert-file', {
+    const data = await api('/api/run/revert-file', {
       method: 'POST',
       body: { runId, path: filePath },
     });
-    const data = await resp.json();
 
     if (data.ok && data.reverted) {
       appendSystemMessage(`✓ 已撤销 ${filePath}`);
@@ -2353,11 +2359,10 @@ async function revertRun(runId) {
   }
 
   try {
-    const resp = await api('/api/run/revert', {
+    const data = await api('/api/run/revert', {
       method: 'POST',
       body: { runId },
     });
-    const data = await resp.json();
 
     if (data.revertedFiles && data.revertedFiles.length > 0) {
       appendSystemMessage(`✓ 已撤销 Run ${runId.slice(0, 8)}：${data.revertedFiles.length} 个文件`);
@@ -2408,7 +2413,9 @@ async function refreshChangesFromServer(runId) {
         renderNetDiff({ files: [], totalChanges: 0 });
       }
       // Also update the Completion Summary if it's showing this Run
-      if (targetRunId === state.activeRunId && data.observation.agentDone) {
+      // V1.4.0-fix P1-1: use selectedRunId (the Run being viewed),
+      // not activeRunId (which is null after Run completes).
+      if (targetRunId === state.selectedRunId && data.observation.agentDone) {
         renderCompletionSummary(data.observation.agentDone, data.observation);
       }
       // V1.4.0-fix P1-2: store observation for rollback Activity projection
