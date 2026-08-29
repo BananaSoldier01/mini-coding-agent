@@ -809,7 +809,8 @@ test('V1.3.0 E2E T — Failed Run Summary shows failure', async ({ page }) => {
   await expect(page.locator('.cs-cmd.cs-fail')).toBeVisible({ timeout: 5000 });
   await expect(page.locator('.cs-cmd.cs-fail')).toContainText('false');
 
-  // The observation should record the command failure
+  // V1.3.0-fix: the live Summary title must be consistent with the
+  // observation status. Both are derived from the same source now.
   const sessionId = await page.evaluate(() => state.sessionId);
   const runsData = await page.evaluate(async (sid) => {
     const resp = await fetch('/api/session/runs?sessionId=' + encodeURIComponent(sid));
@@ -823,4 +824,23 @@ test('V1.3.0 E2E T — Failed Run Summary shows failure', async ({ page }) => {
   // The failed command should be recorded in the observation
   const failedCmds = obsData.observation.commands.filter(c => c.exitCode !== null && c.exitCode !== 0);
   assert.ok(failedCmds.length > 0, 'should have failed commands in observation');
+
+  // V1.3.0-fix: the observation status should match what the live UI shows.
+  // This proves the live agent_done handler and the server observation
+  // use the same outcome source — no more fabricated "✓ 任务完成".
+  const liveTitle = await page.evaluate(() => {
+    const el = document.querySelector('.cs-title');
+    return el ? el.textContent.trim() : '';
+  });
+  const obsStatus = obsData.observation.status;
+  if (obsStatus === 'failed') {
+    assert.ok(liveTitle.includes('失败') || liveTitle.includes('💥'),
+      `live title should reflect failure when obs.status=failed, got: "${liveTitle}"`);
+  } else if (obsStatus === 'stopped') {
+    assert.ok(liveTitle.includes('停止') || liveTitle.includes('■'),
+      `live title should reflect stopped when obs.status=stopped, got: "${liveTitle}"`);
+  } else {
+    assert.ok(liveTitle.includes('✓ 任务完成'),
+      `live title should reflect completed when obs.status=completed, got: "${liveTitle}"`);
+  }
 });

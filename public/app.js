@@ -1533,9 +1533,18 @@ function handleEvent(event) {
       if (event.result && event.result.changes) {
         renderNetDiff(event.result.changes);
       }
-      // V1.3.0-fix: pass the active observation so the Summary uses real
-      // status/duration instead of hardcoded "✓ 任务完成".
-      renderCompletionSummary(event.result, { status: 'completed' });
+      // V1.3.0-fix: derive the live outcome from the agent result instead
+      // of hardcoding 'completed'. The server now carries error/stopped/
+      // startedAt/completedAt in the agent_done event so Live and
+      // Historical Summary show the same fact.
+      const liveObs = {
+        status: event.result?.stopped ? 'stopped' :
+                event.result?.error ? 'failed' : 'completed',
+        error: event.result?.error || null,
+        startedAt: event.result?.startedAt || state.runStartTime,
+        completedAt: event.result?.completedAt || Date.now(),
+      };
+      renderCompletionSummary(event.result, liveObs);
       // V1.3.0-fix: refresh the Run selector after each Run completes so
       // consecutive Runs in the same Session are immediately selectable.
       // Fire-and-forget — must not block the SSE event loop.

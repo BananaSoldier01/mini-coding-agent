@@ -604,6 +604,13 @@ const server = http.createServer(async (req, resp) => {
             changes: result.changes,
             iteration: result.iteration,
             stopped: result.stopped,
+            // V1.3.0-fix: carry the agent's final outcome so the frontend
+            // can render the correct Summary status for live Runs. Without
+            // this the frontend hardcodes 'completed' even when the agent
+            // returned { error: 'context_overflow' } without throwing.
+            error: result.error || null,
+            startedAt: activeRun.startTime,
+            completedAt: Date.now(),
           },
         });
         // V1.3.0-fix: runAgent can return { error } without throwing
