@@ -434,6 +434,9 @@ const server = http.createServer(async (req, resp) => {
 
       // 创建 ActiveRun（管理生命周期）
       const activeRun = runManager.create(session.id);
+      // V1.3.0-fix: expose sendEvent on the activeRun so the /api/approve
+      // handler can forward approval_result events to the SSE stream.
+      activeRun.sendEvent = sendEvent;
       const controller = activeRun.controller;
 
       // ── 统一 Run Identity：Server ActiveRun.runId 是唯一真值 ──
@@ -510,6 +513,11 @@ const server = http.createServer(async (req, resp) => {
           case 'agent_done':
             if (event.result && event.result.changes) {
               runObservation.changes = event.result.changes;
+            }
+            // V1.3.0-fix: store the full agent_done result so the
+            // Completion Summary can be rebuilt on session switch.
+            if (event.result) {
+              runObservation.agentDone = event.result;
             }
             break;
         }
@@ -588,6 +596,13 @@ const server = http.createServer(async (req, resp) => {
             stopped: result.stopped,
           },
         });
+        // V1.3.0-fix: runAgent can return { error } without throwing
+        // (context_overflow, plan_validation_failed, etc.). The old code
+        // only caught thrown errors, so these failures were recorded as
+        // 'completed' in the observation.
+        if (result.error) {
+          runObservation.error = result.error;
+        }
       } catch (err) {
         console.error('[server] runAgent error:', err.message);
         console.error('[server] runAgent stack:', err.stack);
@@ -647,6 +662,21 @@ const server = http.createServer(async (req, resp) => {
       const body = JSON.parse(await readBody(req));
       const { runId, toolCallId, approved } = body;
       const ok = approvalRegistry.resolve(runId, toolCallId, approved);
+      // V1.3.0-fix: forward the approval result to the SSE stream so the
+      // frontend can update state.approvals. The approvalRegistry emits
+      // approval_granted / approval_denied to the RuntimeEventEmitter, but
+      // the frontend only listens for approval_result on the SSE stream.
+      if (ok) {
+        const activeRun = runManager.get(runId);
+        if (activeRun && activeRun.sendEvent) {
+          activeRun.sendEvent({
+            type: 'approval_result',
+            runId,
+            toolCallId,
+            approved,
+          });
+        }
+      }
       return sendJson(resp, { ok: true, resolved: ok });
     }
 

@@ -411,6 +411,13 @@ async function switchSession(sessionId) {
     // V1.3.0-fix: use the runObservations array (latest first), not a single
     // lastRunObservation — this lets a Session hold multiple Runs.
     const observations = data.runObservations || [];
+    // V1.3.0-fix: populate the Run selector with the full list so the user
+    // can switch between Runs within the same Session.
+    state._runList = observations.map(o => ({
+      runId: o.runId,
+      status: o.status,
+      commandCount: (o.commands || []).length,
+    }));
     if (observations.length > 0) {
       const obs = observations[observations.length - 1]; // latest
       state.timeline = obs.timeline || [];
@@ -444,6 +451,20 @@ async function switchSession(sessionId) {
           toolCallId: cmd.toolCallId,
         });
       }
+      // V1.3.0-fix: restore Completion Summary from saved agentDone data.
+      // The old code cleared the summary and never rebuilt it, so switching
+      // back to a Session left the Summary panel blank.
+      if (obs.agentDone) {
+        renderCompletionSummary(obs.agentDone);
+      }
+    }
+    // V1.3.0-fix: show the Run selector when there are multiple Runs.
+    updateRunSelector();
+    const runSelContainer = $('#runSelectorContainer');
+    if (runSelContainer && state._runList && state._runList.length > 1) {
+      runSelContainer.style.display = 'block';
+    } else if (runSelContainer) {
+      runSelContainer.style.display = 'none';
     }
   } catch (err) {
     appendSystemMessage('❌ 切换 Session 失败: ' + err.message);
@@ -451,6 +472,81 @@ async function switchSession(sessionId) {
 }
 
 /* ── New Session ───────────────────────────────────── */
+// ── V1.3.0-fix: Run Selection ──────────────────────────
+// A Session can hold multiple Runs. This lets the user switch between
+// them without losing the Coding Workspace state of each Run.
+async function switchRun(runId) {
+  if (state.running) {
+    appendSystemMessage('⚠️ 当前有正在运行的任务，请先停止再切换 Run。');
+    return;
+  }
+  try {
+    const data = await api('/api/run/observation?runId=' + encodeURIComponent(runId));
+    if (!data.observation) {
+      appendSystemMessage('❌ 找不到 Run ' + runId);
+      return;
+    }
+    const obs = data.observation;
+    state.timeline = obs.timeline || [];
+    state.changes = (obs.changes && obs.changes.files) ? obs.changes.files.map(f => ({
+      path: f.path,
+      type: f.type,
+      added: f.added || 0,
+      removed: f.removed || 0,
+      diff: f.diff || [],
+      before: f.before || '',
+      after: f.after || '',
+    })) : [];
+    state.commands = obs.commands || [];
+    state.approvals = obs.approvals || { approved: 0, rejected: 0 };
+    state.activeRunId = obs.runId;
+
+    // Clear and rebuild UI
+    $('#timeline').innerHTML = '';
+    $('#completionSummary').style.display = 'none';
+    $('#diffPanel').innerHTML = '<div class="diff-empty">文件修改将在此显示</div>';
+    $('#fvBody').innerHTML = '<div class="fv-empty">选择一个文件或修改来查看</div>';
+    $('#terminalBody').innerHTML = '';
+
+    if (obs.changes && obs.changes.files && obs.changes.files.length > 0) {
+      renderNetDiff(obs.changes);
+    }
+    renderTimeline();
+    for (const cmd of state.commands) {
+      terminalWrite(cmd.command, {
+        exitCode: cmd.exitCode,
+        duration: cmd.duration,
+        stopped: cmd.stopped,
+        timedOut: cmd.timedOut,
+        stdout: cmd.stdout,
+        stderr: cmd.stderr,
+        toolCallId: cmd.toolCallId,
+      });
+    }
+    if (obs.agentDone) {
+      renderCompletionSummary(obs.agentDone);
+    }
+    updateRunSelector();
+    appendSystemMessage(`✅ 已切换到 Run ${runId.slice(0, 8)}`);
+  } catch (err) {
+    appendSystemMessage('❌ 切换 Run 失败: ' + err.message);
+  }
+}
+
+function updateRunSelector() {
+  const sel = $('#runSelector');
+  if (!sel) return;
+  // The runObservations are populated from the last switchSession response.
+  if (!state._runList || state._runList.length === 0) {
+    sel.innerHTML = '<option value="">暂无 Run</option>';
+    return;
+  }
+  sel.innerHTML = state._runList.map(r =>
+    `<option value="${r.runId}" ${r.runId === state.activeRunId ? 'selected' : ''}>` +
+    `Run ${r.runId.slice(0, 8)} · ${r.status} · ${r.commandCount || 0} cmds</option>`
+  ).join('');
+}
+
 async function newSession() {
   if (state.running) {
     $('#newSessionBtn').disabled = true;

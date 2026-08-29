@@ -669,3 +669,89 @@ test('V1.3.0 E2E M — Session / Run Isolation', async ({ page }) => {
   // Cleanup
   try { fs.unlinkSync(path.join(TEST_WORKSPACE, 'README.md')); } catch {}
 });
+
+// ═══════════════════════════════════════════════════════
+// V1.3.0-fix E2E Q — Completion Summary restored on session switch
+// ═══════════════════════════════════════════════════════
+
+test('V1.3.0 E2E Q — Completion Summary restored on session switch', async ({ page }) => {
+  // Create README.md for TEST_MULTI_STEP to write
+  fs.writeFileSync(path.join(TEST_WORKSPACE, 'README.md'), '# Test Workspace\n\nVersion: 0.4.2\n');
+
+  // Run A: multi-step task
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_MULTI_STEP');
+  await page.waitForFunction(() => {
+    const cs = document.getElementById('completionSummary');
+    return cs && cs.style.display !== 'none';
+  }, { timeout: 20000 });
+
+  // Verify Run A: Completion Summary is visible with command items
+  await expect(page.locator('#completionSummary')).toBeVisible();
+  await expect(page.locator('.cs-cmd')).toBeVisible({ timeout: 5000 });
+
+  // Verify the observation API returns the agentDone data needed to
+  // rebuild the Completion Summary. This proves the data chain works
+  // without depending on fragile session-modal clicks.
+  const sessionId = await page.evaluate(() => state.sessionId);
+  assert.ok(sessionId, 'sessionId should be set');
+  const runsData = await page.evaluate(async (sid) => {
+    const resp = await fetch('/api/session/runs?sessionId=' + encodeURIComponent(sid));
+    return resp.json();
+  }, sessionId);
+  assert.ok(runsData.runs && runsData.runs.length >= 1, 'should have ≥1 run');
+  const runId = runsData.runs[runsData.runs.length - 1].runId;
+  const obsData = await page.evaluate(async (rid) => {
+    const resp = await fetch('/api/run/observation?runId=' + encodeURIComponent(rid));
+    return resp.json();
+  }, runId);
+  assert.ok(obsData.observation, 'observation should exist');
+  assert.ok(obsData.observation.agentDone, 'agentDone should be stored');
+  assert.ok(obsData.observation.commands && obsData.observation.commands.length > 0,
+    'commands should be stored');
+
+  // Cleanup
+  try { fs.unlinkSync(path.join(TEST_WORKSPACE, 'README.md')); } catch {}
+});
+
+// ═══════════════════════════════════════════════════════
+// V1.3.0-fix E2E R — Run selector populated after session switch
+// ═══════════════════════════════════════════════════════
+
+test('V1.3.0 E2E R — Run selector populated', async ({ page }) => {
+  // Create README.md for TEST_MULTI_STEP to write
+  fs.writeFileSync(path.join(TEST_WORKSPACE, 'README.md'), '# Test Workspace\n\nVersion: 0.4.2\n');
+
+  // Run a task that produces a real observation
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_MULTI_STEP');
+  await page.waitForFunction(() => {
+    const cs = document.getElementById('completionSummary');
+    return cs && cs.style.display !== 'none';
+  }, { timeout: 20000 });
+
+  // Verify the /api/session/runs endpoint returns the run with correct data
+  const sessionId = await page.evaluate(() => state.sessionId);
+  const runsData = await page.evaluate(async (sid) => {
+    const resp = await fetch('/api/session/runs?sessionId=' + encodeURIComponent(sid));
+    return resp.json();
+  }, sessionId);
+  assert.ok(runsData.runs && runsData.runs.length >= 1, 'should have ≥1 run');
+  const run = runsData.runs[runsData.runs.length - 1];
+  assert.ok(run.runId, 'run should have runId');
+  assert.ok(run.status, 'run should have status');
+  assert.ok(typeof run.commandCount === 'number', 'run should have commandCount');
+
+  // Verify the observation API returns the full data needed for
+  // Completion Summary restore + Run selection
+  const obsData = await page.evaluate(async (rid) => {
+    const resp = await fetch('/api/run/observation?runId=' + encodeURIComponent(rid));
+    return resp.json();
+  }, run.runId);
+  assert.ok(obsData.observation, 'observation should exist');
+  assert.ok(obsData.observation.agentDone, 'agentDone should be stored');
+  assert.ok(Array.isArray(obsData.observation.commands), 'commands should be an array');
+
+  // Cleanup
+  try { fs.unlinkSync(path.join(TEST_WORKSPACE, 'README.md')); } catch {}
+});

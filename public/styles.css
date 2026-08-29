@@ -742,6 +742,22 @@ html, body {
   flex-shrink: 0;
 }
 .diff-file-name { font-family: var(--mono); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* V1.3.0-fix: Run selector in session list modal */
+.run-selector {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.run-selector:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .diff-file-stats { color: var(--text-dim); font-size: 11px; flex-shrink: 0; }
 .diff-file-body { display: none; font-family: var(--mono); font-size: 11px; }
 .diff-file-body.open { display: block; }

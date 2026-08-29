@@ -141,6 +141,13 @@
       </div>
       <div class="modal-body">
         <div id="sessionList"></div>
+        <!-- V1.3.0-fix: Run selector — shows the Runs inside the selected Session -->
+        <div id="runSelectorContainer" style="margin-top:12px;display:none;">
+          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:4px;">当前 Session 的 Runs</div>
+          <select id="runSelector" class="run-selector" onchange="switchRun(this.value)">
+            <option value="">加载中…</option>
+          </select>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" id="newSessionFromList">新 Session</button>
