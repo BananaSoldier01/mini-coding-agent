@@ -1013,3 +1013,144 @@ test('V1.4.0 E2E Z — Real Conflict: user edit preserved after revert', async (
   assert.equal(currentContent, 'user-edited-content-after-run',
     'user edit must be preserved after conflict revert');
 });
+
+// ═══════════════════════════════════════════════════════
+// V1.4.0 Regression — Run Selector / New Session identity
+// ═══════════════════════════════════════════════════════
+
+test('V1.4.0 E2E AA — Run Selector selects the viewed Run, not activeRunId', async ({ page }) => {
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_STANDARD_EDIT');
+  await waitForRunComplete(page);
+
+  // After Run completes: activeRunId should be null, selectedRunId should be set
+  const state = await page.evaluate(() => ({
+    activeRunId: state.activeRunId,
+    selectedRunId: state.selectedRunId,
+  }));
+
+  assert.ok(state.selectedRunId, 'selectedRunId must be set after Run completes');
+  assert.equal(state.activeRunId, null, 'activeRunId must be null after Run completes');
+
+  // Run Selector dropdown should have the selectedRunId marked as selected
+  const selValue = await page.evaluate(() => {
+    const sel = $('#runSelector');
+    if (!sel) return null;
+    return sel.options[sel.selectedIndex]?.value || null;
+  });
+
+  // If there's only one Run, the selector may not be visible
+  const selVisible = await page.evaluate(() => {
+    const container = $('#runSelectorContainer');
+    return container ? container.style.display !== 'none' : false;
+  });
+
+  if (selVisible && selValue) {
+    assert.equal(selValue, state.selectedRunId,
+      `Run Selector should select ${state.selectedRunId}, got ${selValue}`);
+  }
+});
+
+test('V1.4.0 E2E AB — New Session clears Run identity / selector', async ({ page }) => {
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_STANDARD_EDIT');
+  await waitForRunComplete(page);
+
+  // Verify we have a Run before creating a new Session
+  const beforeState = await page.evaluate(() => ({
+    activeRunId: state.activeRunId,
+    selectedRunId: state.selectedRunId,
+    hasObservation: !!state._activeObservation,
+    runListLen: state._runList ? state._runList.length : -1,
+  }));
+  assert.ok(beforeState.selectedRunId, 'precondition: selectedRunId should be set');
+
+  // Create a new Session
+  await page.click('#newSessionBtn');
+  await page.waitForTimeout(500);
+
+  // All Run identity state must be cleared
+  const afterState = await page.evaluate(() => ({
+    activeRunId: state.activeRunId,
+    selectedRunId: state.selectedRunId,
+    hasObservation: !!state._activeObservation,
+    runListLen: state._runList ? state._runList.length : -1,
+    selOptions: Array.from(document.querySelectorAll('#runSelector option')).map(o => o.value),
+  }));
+
+  assert.equal(afterState.activeRunId, null, 'activeRunId must be null after new session');
+  assert.equal(afterState.selectedRunId, null, 'selectedRunId must be null after new session');
+  assert.equal(afterState.hasObservation, false, '_activeObservation must be null after new session');
+  assert.equal(afterState.runListLen, 0, '_runList must be empty after new session');
+  // Run Selector should show "暂无 Run"
+  const hasNoRunOption = afterState.selOptions.includes('');
+  assert.ok(hasNoRunOption, 'Run Selector should show 暂无 Run option');
+});
+
+// ═══════════════════════════════════════════════════════
+// V1.4.0 Regression — File Explorer rollback sync
+// ═══════════════════════════════════════════════════════
+
+test('V1.4.0 E2E AC — File Explorer syncs after create-file rollback', async ({ page }) => {
+  // Auto-accept confirm dialogs
+  page.on('dialog', dialog => dialog.accept());
+
+  await setMode(page, 'full_access');
+  // TEST_MULTI_STEP writes a new file README.md via write_file
+  await sendTask(page, 'TEST_MULTI_STEP');
+  await waitForRunComplete(page);
+
+  // Find the created file (README.md) from the observation
+  const obsData = await page.evaluate(async () => {
+    const runId = state.selectedRunId;
+    if (!runId) return { runId: null, observation: null };
+    const resp = await fetch('/api/run/observation?runId=' + encodeURIComponent(runId));
+    const data = await resp.json();
+    return { runId, observation: data.observation };
+  });
+
+  if (!obsData.runId || !obsData.observation) return;
+
+  // Find a 'create' type change (write_file creates a new file)
+  const createFile = (obsData.observation.changes?.files || []).find(f => f.type === 'create');
+  if (!createFile) {
+    console.log('[E2E AC] No create-type change found, skipping');
+    return;
+  }
+
+  const filePath = createFile.path;
+
+  // Refresh the File Explorer so it reflects the newly created file
+  await page.evaluate(() => loadFileTree());
+  await page.waitForTimeout(500);
+
+  // Verify the file appears in the File Explorer
+  const explorerHasFile = await page.evaluate((p) => {
+    const rows = Array.from(document.querySelectorAll('.tree-row'));
+    return rows.some(row => row.dataset.path === p);
+  }, filePath);
+  assert.ok(explorerHasFile, `File Explorer should show ${filePath} after creation`);
+
+  // Verify the file is shown in the Changes panel
+  await expect(page.locator(`.diff-file-name:has-text("${filePath}")`)).toBeVisible({ timeout: 5000 });
+
+  // Click the Revert File button
+  const revertBtn = page.locator('.diff-file')
+    .filter({ has: page.locator('.diff-file-name', { hasText: filePath }) })
+    .locator('.revert-file-btn');
+  await expect(revertBtn).toBeVisible({ timeout: 3000 });
+  await revertBtn.click();
+
+  // After revert: the file should be gone from the Changes panel
+  await expect(page.locator(`.diff-file-name:has-text("${filePath}")`)).not.toBeVisible({ timeout: 8000 });
+
+  // After revert: the file should also be gone from the File Explorer
+  // (loadFileTree() is called by refreshChangesFromServer after rollback)
+  await page.waitForTimeout(1000);
+  const explorerStillHasFile = await page.evaluate((p) => {
+    const rows = Array.from(document.querySelectorAll('.tree-row'));
+    return rows.some(row => row.dataset.path === p);
+  }, filePath);
+  assert.ok(!explorerStillHasFile,
+    `File Explorer should NOT show ${filePath} after revert (file was deleted)`);
+});

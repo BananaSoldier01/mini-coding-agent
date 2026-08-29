@@ -566,7 +566,7 @@ function updateRunSelector() {
     return;
   }
   sel.innerHTML = state._runList.map(r =>
-    `<option value="${r.runId}" ${r.runId === state.activeRunId ? 'selected' : ''}>` +
+    `<option value="${r.runId}" ${r.runId === (state.selectedRunId || state.activeRunId) ? 'selected' : ''}>` +
     `Run ${r.runId.slice(0, 8)} · ${r.status} · ${r.commandCount || 0} cmds</option>`
   ).join('');
 }
@@ -624,6 +624,13 @@ async function newSession() {
     state.fvDiff = null;
     state.fvView = 'current';
 
+    // V1.4.0-fix P1-1: New Session must also clear Run identity state
+    // so old Run identity / selector doesn't leak into the new Session.
+    state.activeRunId = null;
+    state.selectedRunId = null;
+    state._activeObservation = null;
+    state._runList = [];
+
     // P0-5.0.3: New Session 重置 Session Context（Project Context 保留）
     state.context = {
       projectInstructions: state.context?.projectInstructions || null,
@@ -641,6 +648,8 @@ async function newSession() {
     $('#diffPanel').innerHTML = '<div class="diff-empty">文件修改将在此显示</div>';
     $('#fvBody').innerHTML = '<div class="fv-empty">选择一个文件或修改来查看</div>';
     $('#terminalBody').innerHTML = '';
+    // V1.4.0-fix P1-1: reset Run Selector UI for the new empty Session
+    updateRunSelector();
     loadFileTree();
 
     // 清空 chat
@@ -2421,6 +2430,9 @@ async function refreshChangesFromServer(runId) {
       // V1.4.0-fix P1-2: store observation for rollback Activity projection
       state._activeObservation = data.observation;
       renderTimeline();
+      // V1.4.0-fix P1-2: rollback may have deleted/restored files, so the
+      // File Explorer must be re-synced with the real Workspace.
+      loadFileTree();
     }
   } catch (err) {
     // Non-fatal
