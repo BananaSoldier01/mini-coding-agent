@@ -32,6 +32,11 @@ const state = {
   fileTreeData: null,
   // Run identity
   activeRunId: null,
+  // V1.4.0-fix: selectedRunId = the Run currently being viewed/operated on.
+  // Separate from activeRunId (which is the Run actively executing).
+  // After a Run completes, activeRunId is cleared but selectedRunId
+  // retains the last Run so Revert File / Revert Run still work.
+  selectedRunId: null,
 };
 
 /* ── Inspector ─────────────────────────────────────── */
@@ -433,6 +438,9 @@ async function switchSession(sessionId) {
       state.commands = obs.commands || [];
       state.approvals = obs.approvals || { approved: 0, rejected: 0 };
       state.activeRunId = obs.runId;
+      // V1.4.0-fix: set selectedRunId so rollback works on
+      // historical Runs viewed via session switch.
+      state.selectedRunId = obs.runId;
       const diffSource = obs.currentChanges || obs.changes;
       if (diffSource && diffSource.files && diffSource.files.length > 0) {
         renderNetDiff(diffSource);
@@ -504,6 +512,8 @@ async function switchRun(runId) {
     state.commands = obs.commands || [];
     state.approvals = obs.approvals || { approved: 0, rejected: 0 };
     state.activeRunId = obs.runId;
+    // V1.4.0-fix: set selectedRunId for Run-switch viewing
+    state.selectedRunId = obs.runId;
 
     // Clear and rebuild UI
     $('#timeline').innerHTML = '';
@@ -1460,11 +1470,9 @@ async function sendMessage() {
     setRunningUi(false);
     state.currentAssistant = null;
     state.currentThinking = null;
-    // V1.4.0-fix: save the last runId before clearing activeRunId.
-    // The SSE stream ends after agent_done, at which point the Run is
-    // finished but the observation is still queryable. We need the
-    // runId for rollback API calls.
-    state._lastRunId = state.activeRunId;
+    // V1.4.0-fix P1-1: clear activeRunId but KEEP selectedRunId.
+    // The Run is finished but the user is still viewing it —
+    // Revert File / Revert Run must still work.
     state.activeRunId = null;
   }
 }
@@ -1496,6 +1504,9 @@ function handleEvent(event) {
   switch (event.type) {
     case 'run_started':
       state.activeRunId = event.runId;
+      // V1.4.0-fix: also set selectedRunId so the newly started Run
+      // is the one being viewed/operated on.
+      state.selectedRunId = event.runId;
       break;
     case 'assistant_start':
       startAssistantMessage();
@@ -2298,7 +2309,9 @@ function renderCompletionSummary(result, observation) {
  * Uses the active Run's observation for evidence.
  */
 async function revertFile(filePath) {
-  const runId = state.activeRunId;
+  // V1.4.0-fix: use selectedRunId (the Run being viewed), not activeRunId
+  // (which is null after the Run completes).
+  const runId = state.selectedRunId || state.activeRunId;
   if (!runId) {
     appendSystemMessage('⚠ 当前没有可回滚的 Run');
     return;
@@ -2320,6 +2333,8 @@ async function revertFile(filePath) {
       refreshChangesFromServer(runId);
     } else if (data.conflict) {
       appendSystemMessage(`⚠ 无法撤销 ${filePath}：${conflictReasonText(data.conflict.reason)}`);
+      // V1.4.0-fix P1-1: even on conflict, refresh to show current state
+      refreshChangesFromServer(runId);
     } else {
       appendSystemMessage(`✗ 撤销 ${filePath} 失败`);
     }
@@ -2357,9 +2372,12 @@ async function revertRun(runId) {
       appendSystemMessage(`  ✗ ${data.failedFiles.length} 个文件回滚失败`);
     }
 
-    // Refresh UI
-    if (runId === state.activeRunId) {
-      refreshChangesFromServer();
+    // V1.4.0-fix P1-2: refresh UI regardless of whether the Run is
+    // still active. Use selectedRunId (the Run being viewed) so
+    // historical Run rollbacks also trigger UI refresh.
+    const targetRunId = state.selectedRunId || state.activeRunId;
+    if (runId === targetRunId || runId === state.selectedRunId) {
+      refreshChangesFromServer(runId);
     }
     refreshRunList();
   } catch (err) {
