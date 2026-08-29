@@ -284,6 +284,23 @@ class WorkspaceFileService {
     return { path: relPath, action: 'written', size: Buffer.byteLength(content, 'utf-8') };
   }
 
+  // ── 删除文件（V1.4.0: 供 Rollback 使用）─────────────────
+  deleteFile(relPath) {
+    if (isSensitiveFilePath(relPath)) {
+      throw new Error(`拒绝删除敏感文件: ${relPath}。Agent 不应删除 .env、密钥等敏感文件。`);
+    }
+    const absolute = this.sandbox.resolve(relPath);
+    if (!fs.existsSync(absolute)) {
+      throw new Error(`文件不存在: ${relPath}`);
+    }
+    const stat = fs.statSync(absolute);
+    if (!stat.isFile()) {
+      throw new Error(`不是文件: ${relPath}`);
+    }
+    fs.unlinkSync(absolute);
+    return { path: relPath, action: 'deleted', size: stat.size };
+  }
+
   // ── 检查是否敏感 ────────────────────────────────────
   isSensitive(relPath) {
     return isSensitiveFilePath(relPath);

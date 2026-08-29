@@ -1216,3 +1216,45 @@ html, body {
   color: var(--text-dim);
   margin-left: 16px;
 }
+
+/* ── V1.4.0: Rollback Buttons ────────────────────────── */
+
+.revert-file-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border-l);
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.revert-file-btn:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.revert-run-btn {
+  background: transparent;
+  border: 1px solid var(--border-l);
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.revert-run-btn:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.cs-actions {
+  margin-top: 8px;
+  text-align: right;
+}

@@ -1142,6 +1142,7 @@ function renderNetDiff(netDiff) {
       <span class="badge ${badgeClass}">${badge}</span>
       <span class="diff-file-name">${escapeHtml(file.path)}</span>
       <span class="stats">${stats}</span>
+      <button class="revert-file-btn" data-path="${escapeHtml(file.path)}" title="撤销此文件的修改">↶ Revert</button>
     `;
 
     const body = document.createElement('div');
@@ -1179,6 +1180,16 @@ function renderNetDiff(netDiff) {
     });
     fileEl.classList.add('open');
     panel.appendChild(fileEl);
+
+    // V1.4.0: Revert File button
+    const revertBtn = fileEl.querySelector('.revert-file-btn');
+    if (revertBtn) {
+      revertBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const filePath = revertBtn.dataset.path;
+        revertFile(filePath);
+      });
+    }
   }
 }
 
@@ -1549,6 +1560,16 @@ function handleEvent(event) {
       // consecutive Runs in the same Session are immediately selectable.
       // Fire-and-forget — must not block the SSE event loop.
       refreshRunList();
+      break;
+    case 'workspace_file_reverted':
+      // V1.4.0: a file was reverted — refresh the Changes panel
+      if (event.runId === state.activeRunId) {
+        refreshChangesFromServer();
+      }
+      break;
+    case 'rollback_conflict':
+      // V1.4.0: a conflict was detected during rollback
+      appendSystemMessage(`⚠ 回滚冲突: ${event.path} — ${conflictReasonText(event.reason)}`);
       break;
     case 'error':
       if (event.message && event.message.includes('取消')) {
@@ -2129,6 +2150,12 @@ function renderCompletionSummary(result, observation) {
   html += `<span class="cs-value">${state.approvals.approved} approved · ${state.approvals.rejected} rejected</span>`;
   html += '</div>';
 
+  // V1.4.0: Revert Run button — only show for the active Run
+  const csRunId = state.activeRunId;
+  if (csRunId && changes.totalChanges > 0) {
+    html += `<div class="cs-actions"><button class="revert-run-btn" data-run-id="${csRunId}"> Conditionally Revert</button></div>`;
+  }
+
   // V1.3.0-fix: show error message for failed Runs
   if (obsStatus === 'failed' && obsError) {
     html += '<div class="cs-section"><span class="cs-label cs-warn">错误</span>';
@@ -2190,6 +2217,120 @@ function renderCompletionSummary(result, observation) {
       }
     });
   });
+
+  // V1.4.0: Revert Run button
+  const revertRunBtn = container.querySelector('.revert-run-btn');
+  if (revertRunBtn) {
+    revertRunBtn.addEventListener('click', () => {
+      revertRun(revertRunBtn.dataset.runId);
+    });
+  }
+}
+
+/* ── V1.4.0: Rollback ───────────────────────────────── */
+
+/**
+ * Revert a single file to its Run baseline.
+ * Uses the active Run's observation for evidence.
+ */
+async function revertFile(filePath) {
+  const runId = state.activeRunId;
+  if (!runId) {
+    appendSystemMessage('⚠ 当前没有可回滚的 Run');
+    return;
+  }
+  if (!confirm(`确定要撤销 ${filePath} 吗？此操作将恢复该文件到 Run 开始前的状态。`)) {
+    return;
+  }
+
+  try {
+    const resp = await api('/api/run/revert-file', {
+      method: 'POST',
+      body: { runId, path: filePath },
+    });
+    const data = await resp.json();
+
+    if (data.ok && data.reverted) {
+      appendSystemMessage(`✓ 已撤销 ${filePath}`);
+      // Refresh the Changes panel to reflect the new Workspace state
+      refreshChangesFromServer(filePath);
+    } else if (data.conflict) {
+      appendSystemMessage(`⚠ 无法撤销 ${filePath}：${conflictReasonText(data.conflict.reason)}`);
+    } else {
+      appendSystemMessage(`✗ 撤销 ${filePath} 失败`);
+    }
+  } catch (err) {
+    appendSystemMessage(`✗ 撤销 ${filePath} 出错: ${err.message}`);
+  }
+}
+
+/**
+ * Revert an entire Run to its baseline.
+ */
+async function revertRun(runId) {
+  if (!runId) return;
+  if (!confirm('确定要撤销整个 Run 吗？所有该 Run 产生的文件修改将被恢复。')) {
+    return;
+  }
+
+  try {
+    const resp = await api('/api/run/revert', {
+      method: 'POST',
+      body: { runId },
+    });
+    const data = await resp.json();
+
+    if (data.revertedFiles && data.revertedFiles.length > 0) {
+      appendSystemMessage(`✓ 已撤销 Run ${runId.slice(0, 8)}：${data.revertedFiles.length} 个文件`);
+    }
+    if (data.conflicts && data.conflicts.length > 0) {
+      appendSystemMessage(`  ⚠ ${data.conflicts.length} 个文件冲突（已跳过）`);
+      for (const c of data.conflicts) {
+        appendSystemMessage(`    ${c.path}：${conflictReasonText(c.reason)}`);
+      }
+    }
+    if (data.failedFiles && data.failedFiles.length > 0) {
+      appendSystemMessage(`  ✗ ${data.failedFiles.length} 个文件回滚失败`);
+    }
+
+    // Refresh UI
+    if (runId === state.activeRunId) {
+      refreshChangesFromServer();
+    }
+    refreshRunList();
+  } catch (err) {
+    appendSystemMessage(`✗ 撤销 Run 出错: ${err.message}`);
+  }
+}
+
+/**
+ * Re-render the Changes panel from the server observation.
+ * This ensures UI reflects the real Workspace state, not a local fake.
+ */
+async function refreshChangesFromServer(runId) {
+  const targetRunId = runId || state.activeRunId;
+  if (!targetRunId) return;
+  try {
+    const resp = await fetch('/api/run/observation?runId=' + encodeURIComponent(targetRunId));
+    const data = await resp.json();
+    if (data.observation && data.observation.changes) {
+      renderNetDiff(data.observation.changes);
+    }
+  } catch (err) {
+    // Non-fatal
+  }
+}
+
+function conflictReasonText(reason) {
+  const map = {
+    workspace_changed_after_run: '文件在 Run 后被修改',
+    file_missing: '文件已被删除',
+    file_already_deleted: '文件已被删除',
+    file_restored_after_run: '文件已恢复',
+    unknown_change_type: '未知变更类型',
+    invalid_change: '无效变更',
+  };
+  return map[reason] || reason;
 }
 
 /* ── V0.4.0: Human-Readable Approval ────────────────── */

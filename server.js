@@ -672,6 +672,84 @@ const server = http.createServer(async (req, resp) => {
       return sendError(resp, 404, `Run ${runId} 的 observation 数据不存在`);
     }
 
+    // ── Helper: find observation by runId across all sessions ──
+    function findObservationByRunId(runId) {
+      for (const s of sessionManager.sessions.values()) {
+        const obs = (s.runObservations || []).find(o => o.runId === runId);
+        if (obs) return obs;
+      }
+      return null;
+    }
+
+    // ── API: V1.4.0 — Rollback ────────────────────────
+    if (pathname === '/api/run/revert-file' && method === 'POST') {
+      const mv = validateMutation(req);
+      if (!mv.ok) return sendError(resp, mv.status, mv.reason);
+      const body = JSON.parse(await readBody(req));
+      const { runId, path: filePath } = body;
+      if (!runId || !filePath) return sendError(resp, 400, '缺少 runId 或 path');
+
+      const observation = findObservationByRunId(runId);
+      if (!observation) return sendError(resp, 404, `Run ${runId} 不存在`);
+      const changes = observation?.changes?.files || [];
+      const change = changes.find(c => c.path === filePath);
+      if (!change) return sendError(resp, 404, `文件 ${filePath} 不在 Run ${runId} 的变更列表中`);
+
+      const fileService = new WorkspaceFileService(config.workspace);
+      let currentContent = null;
+      try {
+        const result = fileService.readFile(filePath);
+        currentContent = result.content;
+      } catch { /* file doesn't exist — stays null */ }
+
+      const { checkRevertible, applyRevert } = await import('./rollback.js');
+      const check = checkRevertible(change, currentContent);
+      if (!check.ok) {
+        return sendJson(resp, { ok: false, reverted: false, conflict: { path: filePath, reason: check.reason } });
+      }
+
+      try {
+        applyRevert(change, fileService);
+        // Emit rollback event for Activity evidence
+        sendRunEvent({ type: 'workspace_file_reverted', runId, path: filePath });
+        return sendJson(resp, { ok: true, reverted: true, path: filePath });
+      } catch (err) {
+        return sendError(resp, 500, `回滚失败: ${err.message}`);
+      }
+    }
+
+    if (pathname === '/api/run/revert' && method === 'POST') {
+      const mv = validateMutation(req);
+      if (!mv.ok) return sendError(resp, mv.status, mv.reason);
+      const body = JSON.parse(await readBody(req));
+      const { runId, paths } = body;
+      if (!runId) return sendError(resp, 400, '缺少 runId');
+
+      const observation = findObservationByRunId(runId);
+      if (!observation) return sendError(resp, 404, `Run ${runId} 不存在`);
+
+      const fileService = new WorkspaceFileService(config.workspace);
+      const { revertRun } = await import('./rollback.js');
+      const result = revertRun(observation, fileService, paths || null);
+
+      // Emit rollback events for Activity evidence
+      for (const p of result.revertedFiles) {
+        sendRunEvent({ type: 'workspace_file_reverted', runId, path: p });
+      }
+      for (const c of result.conflicts) {
+        sendRunEvent({ type: 'rollback_conflict', runId, path: c.path, reason: c.reason });
+      }
+
+      return sendJson(resp, {
+        ok: true,
+        runId,
+        revertedFiles: result.revertedFiles,
+        conflicts: result.conflicts,
+        failedFiles: result.failedFiles,
+        totalRequested: result.totalRequested,
+      });
+    }
+
     // ── API: 审批响应 ────────────────────────────────
     if (pathname === '/api/approve' && method === 'POST') {
       const mv = validateMutation(req);
