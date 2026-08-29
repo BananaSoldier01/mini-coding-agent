@@ -13,7 +13,7 @@
  */
 
 import { TransitionManager, createTransitionManager } from './transition-manager.js';
-import { createPlan } from './plan.js';
+import { createPlan, PLAN_STATUS } from './plan.js';
 
 const RUN_STATUS = {
   CREATED: 'created',
@@ -88,7 +88,25 @@ class RunManager {
       metadata: config.metadata || {},
     };
 
-    // V1.2.3: Emit run_created — distinct from run_started (emitted by startRun)
+    // V1.2.3-fix: RunManager is the SINGLE ownership point for run creation.
+    // Persist to RunStore FIRST and inspect the result. A duplicate runId must
+    // surface as a failure — not a silent no-op that the caller reports as
+    // success (which would leave the old Run in the Store alongside a new
+    // Workspace and a stray run_created event).
+    if (this.runStore) {
+      const persist = this.runStore.create({
+        runId: run.id,
+        goal: run.goal,
+        workspaceId: run.workspaceId,
+        metadata: run.metadata,
+      });
+      if (!persist.success) {
+        return { success: false, run: null, workspace, reason: persist.reason };
+      }
+    }
+
+    // Emit run_created — only AFTER the run is durably stored.
+    // Distinct from run_started (emitted by startRun).
     if (this.emitter) {
       this.emitter.emit({
         runId,
@@ -98,17 +116,7 @@ class RunManager {
       });
     }
 
-    // Persist to RunStore
-    if (this.runStore) {
-      this.runStore.create({
-        runId: run.id,
-        goal: run.goal,
-        workspaceId: run.workspaceId,
-        metadata: run.metadata,
-      });
-    }
-
-    return { run, workspace };
+    return { success: true, run, workspace };
   }
 
   /**
@@ -166,6 +174,23 @@ class RunManager {
         type: 'plan_created',
         data: { planId: plan.id, goal: run.goal },
       });
+    }
+
+    // V1.2.3-fix: drive the Plan lifecycle through TransitionManager so the
+    // Plan state machine stays consistent with the Run. createPlan() leaves
+    // the plan in DRAFT; a STARTED run with a DRAFT plan is a contradiction,
+    // and completeRun() used to check plan.status === EXECUTING while
+    // completePlan() required VERIFYING — a guaranteed mismatch. Transition
+    // DRAFT → APPROVED → EXECUTING here, single ownership.
+    if (this.transitionMgr && this.planStore) {
+      this.transitionMgr.transitionPlan(
+        plan.id, PLAN_STATUS.DRAFT, PLAN_STATUS.APPROVED,
+        { runId: run.id, workspaceId: run.workspaceId }
+      );
+      this.transitionMgr.transitionPlan(
+        plan.id, PLAN_STATUS.APPROVED, PLAN_STATUS.EXECUTING,
+        { runId: run.id, workspaceId: run.workspaceId }
+      );
     }
 
     return { success: true, run, plan, event: result.event };

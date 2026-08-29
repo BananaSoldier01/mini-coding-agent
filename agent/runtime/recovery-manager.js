@@ -109,17 +109,23 @@ class RecoveryManager {
     // Persist reconstructed tasks back to TaskStore
     if (this.taskStore) {
       for (const task of unfinishedTasks) {
+        const assignedSkills = Array.isArray(task.assignedSkills) ? task.assignedSkills : [];
+        const dependencies = Array.isArray(task.dependencies) ? task.dependencies : [];
         if (!this.taskStore.has(task.id)) {
           this.taskStore.create({
             id: task.id,
             runId: run.id,
             goal: task.goal || 'Restored Task',
             status: task.status,
+            assignedSkills,
+            dependencies,
           });
         }
         this.taskStore.update(task.id, {
           status: task.status,
           goal: task.goal || 'Restored Task',
+          assignedSkills,
+          dependencies,
           error: task.error || null,
           failedAt: task.failedAt || null,
           completedAt: task.completedAt || null,
@@ -228,6 +234,16 @@ class RecoveryManager {
         case 'task_created':
           taskMap.get(taskId).status = 'pending';
           taskMap.get(taskId).goal = event.data?.goal;
+          // V1.2.3-fix: task_created now carries the immutable execution
+          // definition. Without it a recovered task has no Skill binding and
+          // TaskExecutor skips real execution, marking the task COMPLETED
+          // without ever running the coding Skill — a dangerous false positive.
+          taskMap.get(taskId).assignedSkills = Array.isArray(event.data?.assignedSkills)
+            ? event.data.assignedSkills
+            : [];
+          taskMap.get(taskId).dependencies = Array.isArray(event.data?.dependencies)
+            ? event.data.dependencies
+            : [];
           break;
         case 'task_started':
           taskMap.get(taskId).status = 'running';

@@ -16,12 +16,6 @@
 
 import { RUNTIME_EVENT_TYPES, RuntimeEventEmitter } from './events.js';
 import {
-  createPlan,
-  approvePlan,
-  startPlan,
-  completePlan,
-  failPlan,
-  cancelPlan,
   PLAN_STATUS,
   getExecutionOrder,
 } from './plan.js';
@@ -214,18 +208,12 @@ class ExecutionEngine {
    * V1.2.2: Create a new Run.
    */
   createRun(config = {}) {
-    const result = this.runMgr.create(config);
-    if (!result.run) return result;
-
-    // Persist to RunStore
-    this.runStore.create({
-      runId: result.run.id,
-      goal: result.run.goal,
-      workspaceId: result.run.workspaceId,
-      metadata: result.run.metadata,
-    });
-
-    return { success: true, run: result.run, workspace: result.workspace };
+    // V1.2.3-fix: RunManager is the single ownership point for run creation.
+    // It persists to RunStore, inspects the result, and emits run_created
+    // only after successful persistence. The Engine must NOT create the run
+    // a second time — that duplicate create was silently ignored while the
+    // caller was still told success: true.
+    return this.runMgr.create(config);
   }
 
   /**
@@ -273,17 +261,31 @@ class ExecutionEngine {
     const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
 
-    const result = this.runMgr.complete(run);
-    if (!result.success) return result;
-
-    // Complete plan in PlanStore
+    // V1.2.3-fix: drive the Plan lifecycle through TransitionManager.
+    // The old code checked plan.status === EXECUTING then called completePlan(),
+    // but completePlan() requires VERIFYING — so the plan could never complete.
+    // Transition owns the plan transitions now: EXECUTING → VERIFYING → COMPLETED.
     if (run.planId) {
       const plan = this.planStore.get(run.planId);
-      if (plan && plan.status === PLAN_STATUS.EXECUTING) {
-        completePlan(plan, this.emitter, { runId });
-        this.planStore.update(run.planId, plan);
+      if (plan) {
+        if (plan.status === PLAN_STATUS.EXECUTING) {
+          this.transitionMgr.transitionPlan(
+            run.planId, PLAN_STATUS.EXECUTING, PLAN_STATUS.VERIFYING,
+            { runId, workspaceId: run.workspaceId }
+          );
+        }
+        const afterVerify = this.planStore.get(run.planId);
+        if (afterVerify && afterVerify.status === PLAN_STATUS.VERIFYING) {
+          this.transitionMgr.transitionPlan(
+            run.planId, PLAN_STATUS.VERIFYING, PLAN_STATUS.COMPLETED,
+            { runId, workspaceId: run.workspaceId }
+          );
+        }
       }
     }
+
+    const result = this.runMgr.complete(run);
+    if (!result.success) return result;
 
     return result;
   }
@@ -295,16 +297,20 @@ class ExecutionEngine {
     const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
 
-    const result = this.runMgr.fail(run, error);
-    if (!result.success) return result;
-
+    // V1.2.3-fix: fail the Plan through TransitionManager (single ownership),
+    // carrying the error in the transition context so it lands on the entity.
     if (run.planId) {
       const plan = this.planStore.get(run.planId);
-      if (plan) {
-        failPlan(plan, this.emitter, { runId, error });
-        this.planStore.update(run.planId, plan);
+      if (plan && plan.status !== PLAN_STATUS.FAILED && plan.status !== PLAN_STATUS.COMPLETED && plan.status !== PLAN_STATUS.CANCELLED) {
+        this.transitionMgr.transitionPlan(
+          run.planId, plan.status, PLAN_STATUS.FAILED,
+          { runId, workspaceId: run.workspaceId, data: { error: error?.message || String(error) } }
+        );
       }
     }
+
+    const result = this.runMgr.fail(run, error);
+    if (!result.success) return result;
 
     return result;
   }
@@ -316,16 +322,19 @@ class ExecutionEngine {
     const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
 
-    const result = this.runMgr.cancel(run);
-    if (!result.success) return result;
-
+    // V1.2.3-fix: cancel the Plan through TransitionManager (single ownership).
     if (run.planId) {
       const plan = this.planStore.get(run.planId);
-      if (plan) {
-        cancelPlan(plan, this.emitter, { runId });
-        this.planStore.update(run.planId, plan);
+      if (plan && plan.status !== PLAN_STATUS.COMPLETED && plan.status !== PLAN_STATUS.FAILED && plan.status !== PLAN_STATUS.CANCELLED) {
+        this.transitionMgr.transitionPlan(
+          run.planId, plan.status, PLAN_STATUS.CANCELLED,
+          { runId, workspaceId: run.workspaceId }
+        );
       }
     }
+
+    const result = this.runMgr.cancel(run);
+    if (!result.success) return result;
 
     return result;
   }
@@ -354,13 +363,32 @@ class ExecutionEngine {
     run.taskIds.push(task.id);
     this.runStore.update(runId, run);
 
+    // V1.2.3-fix: keep the Plan in sync. startRun() bakes run.taskIds into
+    // plan.tasks, so a task added AFTER the run started would be silently
+    // ignored by getExecutionOrder() — the Run owns the task but the Plan
+    // never schedules it. Mirror the new task into the Plan when one exists.
+    if (run.planId) {
+      const plan = this.planStore.get(run.planId);
+      if (plan && !plan.tasks.some(t => t.id === task.id)) {
+        plan.tasks.push({ id: task.id });
+        this.planStore.update(run.planId, { tasks: plan.tasks });
+      }
+    }
+
     if (this.emitter) {
       this.emitter.emit({
         runId,
         workspaceId: run.workspaceId,
         taskId: task.id,
         type: 'task_created',
-        data: { taskId: task.id, goal: task.goal },
+        // V1.2.3-fix: carry the immutable execution definition so crash
+        // recovery can rebuild a task that still has its Skill binding.
+        data: {
+          taskId: task.id,
+          goal: task.goal,
+          assignedSkills: task.assignedSkills,
+          dependencies: task.dependencies,
+        },
       });
     }
 

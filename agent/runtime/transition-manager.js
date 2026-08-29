@@ -66,9 +66,11 @@ class TransitionManager {
         superseded: [],
       },
       plan: {
+        // V1.2.3-fix: matches plan.js PLAN_TRANSITIONS. The old table had a
+        // phantom 'started' state that does not exist in PLAN_STATUS, which let
+        // callers fabricate a lifecycle step nothing else understands.
         draft: ['approved', 'cancelled'],
-        approved: ['started', 'cancelled'],
-        started: ['executing', 'failed', 'cancelled'],
+        approved: ['executing', 'cancelled'],
         executing: ['verifying', 'failed', 'cancelled'],
         verifying: ['completed', 'failed', 'cancelled'],
         completed: [],
@@ -237,16 +239,12 @@ class TransitionManager {
       },
       plan: {
         'draft→approved': 'plan_approved',
-        'approved→started': 'plan_started',
-        'started→executing': 'plan_started',
+        'approved→executing': 'plan_started',
         'executing→verifying': 'plan_verifying',
         'verifying→completed': 'plan_completed',
         'verifying→failed': 'plan_failed',
-        'started→failed': 'plan_failed',
-        'executing→completed': 'plan_completed',
         'executing→failed': 'plan_failed',
         'executing→cancelled': 'plan_cancelled',
-        'started→cancelled': 'plan_cancelled',
         'approved→cancelled': 'plan_cancelled',
         'verifying→cancelled': 'plan_cancelled',
         'draft→cancelled': 'plan_cancelled',

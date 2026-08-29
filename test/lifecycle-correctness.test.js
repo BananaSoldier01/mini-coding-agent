@@ -496,3 +496,138 @@ test('E2E: recovery on a fresh ExecutionEngine instance restores Run + Tasks by 
     assert.strictEqual(after.status, 'completed', 'RUNNING task should re-execute to completed');
   });
 });
+
+// ═══════════════════════════════════════════════════════════
+// Test 10: Run creation ownership — duplicate runId must fail
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: duplicate runId is reported as failure, not silent success', () => {
+  const engine = createExecutionEngine();
+  const first = engine.createRun({ goal: 'first', runId: 'run-dup' });
+  assert.ok(first.success, 'first create should succeed');
+  assert.strictEqual(engine.runStore.get('run-dup').goal, 'first');
+
+  const second = engine.createRun({ goal: 'second', runId: 'run-dup' });
+  assert.ok(!second.success, 'duplicate runId must be reported as failure');
+  assert.ok(second.reason?.includes('already exists'), `unexpected reason: ${second.reason}`);
+
+  // Store must still hold the ORIGINAL run — not a swapped-in duplicate
+  assert.strictEqual(engine.runStore.get('run-dup').goal, 'first');
+  assert.strictEqual(engine.runStore.count(), 1, 'only one run should exist');
+
+  // Exactly one run_created event — the failed duplicate must not emit
+  const events = engine.eventStore.getEventsByRun('run-dup');
+  assert.strictEqual(
+    events.filter(e => e.type === 'run_created').length, 1,
+    'failed duplicate create must not emit run_created'
+  );
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 11: Plan lifecycle is driven by the Run execution
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: Plan follows DRAFT→APPROVED→EXECUTING→VERIFYING→COMPLETED with the Run', async () => {
+  const emitter = new RuntimeEventEmitter();
+  const store = createEventStore();
+  emitter.setStore(store);
+  const engine = createExecutionEngine({ emitter, eventStore: store });
+
+  engine.createRun({ goal: 'plan lifecycle', runId: 'run-pl' });
+  engine.addTask('run-pl', { goal: 'task 1' });
+  engine.startRun('run-pl');
+
+  const run = engine.runStore.get('run-pl');
+  const planAfterStart = engine.planStore.get(run.planId);
+  assert.strictEqual(planAfterStart.status, 'executing', 'plan should advance to EXECUTING when the run starts');
+
+  const startEvents = store.getEventsByRun('run-pl').map(e => e.type);
+  assert.ok(startEvents.includes('plan_approved'), 'plan_approved should fire on start');
+  assert.ok(startEvents.includes('plan_started'), 'plan_started should fire on start');
+
+  await engine.executeRun('run-pl');
+
+  const planAfterExec = engine.planStore.get(run.planId);
+  assert.strictEqual(planAfterExec.status, 'completed', 'plan should reach COMPLETED after tasks finish');
+
+  const execEvents = store.getEventsByRun('run-pl').map(e => e.type);
+  assert.ok(execEvents.includes('plan_verifying'), 'plan_verifying should fire during completion');
+  assert.ok(execEvents.includes('plan_completed'), 'plan_completed should fire during completion');
+  assert.strictEqual(engine.runStore.get('run-pl').status, RUN_STATUS.COMPLETED);
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 12: addTask after startRun syncs the Plan
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: addTask after startRun keeps the Plan in sync so the task is scheduled', async () => {
+  const engine = createExecutionEngine();
+  engine.createRun({ goal: 'late add', runId: 'run-late' });
+  engine.addTask('run-late', { goal: 'task 1' });
+  engine.startRun('run-late');
+
+  const run = engine.runStore.get('run-late');
+  const planBefore = engine.planStore.get(run.planId);
+  assert.strictEqual(planBefore.tasks.length, 1, 'plan should have 1 task before the late add');
+
+  // Adding a task AFTER the run has started must still be scheduled
+  engine.addTask('run-late', { goal: 'task 2' });
+  const planAfter = engine.planStore.get(run.planId);
+  assert.strictEqual(planAfter.tasks.length, 2, 'plan must sync to 2 tasks after the late add');
+  assert.strictEqual(engine.taskStore.listByRun('run-late').length, 2, 'run should own 2 tasks');
+
+  const result = await engine.executeRun('run-late');
+  assert.ok(result.success, `late-added task must be scheduled and completed: ${JSON.stringify(result)}`);
+  const tasks = engine.taskStore.listByRun('run-late');
+  assert.ok(tasks.every(t => t.status === 'completed'), 'both tasks should complete');
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 13: Real crash recovery preserves the Skill binding and re-executes
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: crash recovery preserves the task Skill binding and actually executes it', async () => {
+  // Phase 1: engine A creates a run with a Skill-bound task and leaves it RUNNING
+  const emitterA = new RuntimeEventEmitter();
+  const storeA = createEventStore();
+  emitterA.setStore(storeA);
+  const engineA = createExecutionEngine({ emitter: emitterA, eventStore: storeA });
+  engineA.createRun({ goal: 'skill recovery', runId: 'run-skill' });
+  engineA.addTask('run-skill', { goal: 'read file', skillId: 'code-review' });
+  engineA.startRun('run-skill');
+  const taskA = engineA.taskStore.listByRun('run-skill')[0];
+  engineA.transitionMgr.transitionTask(
+    taskA.id, 'pending', 'running',
+    { runId: 'run-skill', workspaceId: taskA.runId, taskId: taskA.id }
+  );
+
+  // Phase 2: FRESH engine B. Its skill runtime is mocked to record the real call.
+  const engineB = createExecutionEngine({ emitter: emitterA, eventStore: storeA });
+  const executed = [];
+  engineB.skillRuntime.executeSkill = async (skillId, ctx) => {
+    executed.push({ skillId, taskId: ctx.taskId });
+    return { success: true, result: { toolResults: [{ tool: 'read_file', success: true }] } };
+  };
+
+  const recovery = engineB.recover('run-skill');
+  assert.ok(recovery.success, `recovery should succeed: ${JSON.stringify(recovery)}`);
+
+  // The recovered task must carry its Skill binding — this is the whole point:
+  // without it TaskExecutor skips real execution and marks the task COMPLETED
+  // without ever running the coding Skill (a dangerous false positive).
+  const recovered = engineB.taskStore.listByRun('run-skill')[0];
+  assert.strictEqual(recovered.id, taskA.id, 'task id must be preserved');
+  assert.deepStrictEqual(recovered.assignedSkills, ['code-review'], 'Skill binding must survive recovery');
+
+  await engineB.resumeAfterCrash('run-skill');
+
+  assert.strictEqual(
+    executed.length, 1,
+    'the recovered task must actually invoke its Skill, not skip to COMPLETED'
+  );
+  assert.strictEqual(executed[0].skillId, 'code-review');
+  assert.strictEqual(executed[0].taskId, taskA.id);
+
+  const after = engineB.taskStore.listByRun('run-skill')[0];
+  assert.strictEqual(after.status, 'completed', 'recovered task should complete after real skill execution');
+});
