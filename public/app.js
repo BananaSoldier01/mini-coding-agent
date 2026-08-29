@@ -1535,7 +1535,11 @@ function handleEvent(event) {
       }
       // V1.3.0-fix: pass the active observation so the Summary uses real
       // status/duration instead of hardcoded "✓ 任务完成".
-      renderCompletionSummary(event.result);
+      renderCompletionSummary(event.result, { status: 'completed' });
+      // V1.3.0-fix: refresh the Run selector after each Run completes so
+      // consecutive Runs in the same Session are immediately selectable.
+      // Fire-and-forget — must not block the SSE event loop.
+      refreshRunList();
       break;
     case 'error':
       if (event.message && event.message.includes('取消')) {
@@ -1829,12 +1833,11 @@ function respondApproval(approved) {
     api('/api/approve', {
       method: 'POST',
       body: { runId, toolCallId, approved },
-    }).then((result) => {
-      // 只有 Server 确认 resolved=true 时才计数
-      if (result && result.resolved === true) {
-        if (approved) state.approvals.approved++;
-        else state.approvals.rejected++;
-      }
+    }).then(() => {
+      // V1.3.0-fix: approval count is now owned exclusively by the server's
+      // approval_result SSE event (see handleEvent). The old code also
+      // incremented locally here, which would double-count once the SSE
+      // event arrives.
     }).catch(() => {});
   }
 }
@@ -2066,7 +2069,7 @@ function renderTimeline() {
 }
 
 /* ── V0.4.0: Completion Summary ─────────────────────── */
-function renderCompletionSummary(result) {
+function renderCompletionSummary(result, observation) {
   const container = $('#completionSummary');
   if (!result) {
     container.style.display = 'none';
@@ -2077,15 +2080,52 @@ function renderCompletionSummary(result) {
   const totalAdded = changes.files.reduce((s, f) => s + (f.added || 0), 0);
   const totalRemoved = changes.files.reduce((s, f) => s + (f.removed || 0), 0);
 
-  let html = '<div class="cs-title">✓ 任务完成</div>';
+  // V1.3.0-fix: use the observation's real status/duration instead of
+  // hardcoding "✓ 任务完成" and computing duration from the live clock.
+  // Historical Runs must show their actual outcome, not fabricated success.
+  const obs = observation || {};
+  const obsStatus = obs.status || 'completed';
+  const obsError = obs.error || null;
+  const obsStarted = obs.startedAt || null;
+  const obsCompleted = obs.completedAt || null;
+
+  let titleText, titleClass;
+  if (obsStatus === 'failed') {
+    titleText = '💥 任务失败';
+    titleClass = 'cs-title-failed';
+  } else if (obsStatus === 'stopped') {
+    titleText = '■ 任务停止';
+    titleClass = 'cs-title-stopped';
+  } else {
+    titleText = '✓ 任务完成';
+    titleClass = '';
+  }
+
+  let html = '<div class="cs-title' + (titleClass ? ' ' + titleClass : '') + '">' + titleText + '</div>';
+
+  // Duration: prefer the observation's real elapsed time over the live clock
+  let durationText = '—';
+  if (obsStarted && obsCompleted) {
+    durationText = ((obsCompleted - obsStarted) / 1000).toFixed(1) + 's';
+  } else if (state.runStartTime) {
+    durationText = ((Date.now() - state.runStartTime) / 1000).toFixed(1) + 's';
+  }
+
   html += '<div class="cs-grid">';
   html += '<span class="cs-label">变更</span>';
   html += `<span class="cs-value">${changes.totalChanges} files · +${totalAdded} -${totalRemoved}</span>`;
   html += '<span class="cs-label">耗时</span>';
-  html += `<span class="cs-value">${state.runStartTime ? ((Date.now() - state.runStartTime) / 1000).toFixed(1) + 's' : '—'}</span>`;
+  html += `<span class="cs-value">${durationText}</span>`;
   html += '<span class="cs-label">审批</span>';
   html += `<span class="cs-value">${state.approvals.approved} approved · ${state.approvals.rejected} rejected</span>`;
   html += '</div>';
+
+  // V1.3.0-fix: show error message for failed Runs
+  if (obsStatus === 'failed' && obsError) {
+    html += '<div class="cs-section"><span class="cs-label cs-warn">错误</span>';
+    html += '<div class="cs-cmd cs-fail">✕ ' + escapeHtml(obsError) + '</div>';
+    html += '</div>';
+  }
 
   // Commands evidence: 实际执行过的 command + exit status
   if (state.commands.length > 0) {

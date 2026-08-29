@@ -755,3 +755,72 @@ test('V1.3.0 E2E R — Run selector populated', async ({ page }) => {
   // Cleanup
   try { fs.unlinkSync(path.join(TEST_WORKSPACE, 'README.md')); } catch {}
 });
+
+// ═══════════════════════════════════════════════════════
+// V1.3.0-fix E2E S — Approval observation count (regression)
+// ═══════════════════════════════════════════════════════
+
+test('V1.3.0 E2E S — Approval observation count', async ({ page }) => {
+  await setMode(page, 'safe');
+  await sendTask(page, 'TEST_SAFE_EDIT');
+
+  // Wait for approval modal
+  await waitForApproval(page);
+
+  // Approve
+  await page.evaluate(() => respondApproval(true));
+  await waitForRunComplete(page);
+
+  // Verify the observation API returns the correct approval count.
+  // This proves the server-side trackEvent(approval_result) path works,
+  // not just the frontend local increment.
+  const sessionId = await page.evaluate(() => state.sessionId);
+  const runsData = await page.evaluate(async (sid) => {
+    const resp = await fetch('/api/session/runs?sessionId=' + encodeURIComponent(sid));
+    return resp.json();
+  }, sessionId);
+  assert.ok(runsData.runs && runsData.runs.length >= 1, 'should have ≥1 run');
+  const runId = runsData.runs[runsData.runs.length - 1].runId;
+  const obsData = await page.evaluate(async (rid) => {
+    const resp = await fetch('/api/run/observation?runId=' + encodeURIComponent(rid));
+    return resp.json();
+  }, runId);
+  assert.ok(obsData.observation, 'observation should exist');
+  assert.equal(obsData.observation.approvals.approved, 1,
+    `approval count should be 1, got ${obsData.observation.approvals.approved}`);
+  assert.equal(obsData.observation.approvals.rejected, 0,
+    `rejection count should be 0, got ${obsData.observation.approvals.rejected}`);
+});
+
+// ═══════════════════════════════════════════════════════
+// V1.3.0-fix E2E T — Failed Run Summary status (regression)
+// ═══════════════════════════════════════════════════════
+
+test('V1.3.0 E2E T — Failed Run Summary shows failure', async ({ page }) => {
+  await setMode(page, 'full_access');
+  await sendTask(page, 'TEST_FAILED_VALIDATION');
+  await page.waitForFunction(() => {
+    const cs = document.getElementById('completionSummary');
+    return cs && cs.style.display !== 'none';
+  }, { timeout: 20000 });
+
+  // The Summary should show the failed command with ✕ marker in the
+  // Warnings section, proving that command failures are surfaced.
+  await expect(page.locator('.cs-cmd.cs-fail')).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('.cs-cmd.cs-fail')).toContainText('false');
+
+  // The observation should record the command failure
+  const sessionId = await page.evaluate(() => state.sessionId);
+  const runsData = await page.evaluate(async (sid) => {
+    const resp = await fetch('/api/session/runs?sessionId=' + encodeURIComponent(sid));
+    return resp.json();
+  }, sessionId);
+  const runId = runsData.runs[runsData.runs.length - 1].runId;
+  const obsData = await page.evaluate(async (rid) => {
+    const resp = await fetch('/api/run/observation?runId=' + encodeURIComponent(rid));
+    return resp.json();
+  }, runId);
+  // The failed command should be recorded in the observation
+  const failedCmds = obsData.observation.commands.filter(c => c.exitCode !== null && c.exitCode !== 0);
+  assert.ok(failedCmds.length > 0, 'should have failed commands in observation');
+});

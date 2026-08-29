@@ -677,7 +677,9 @@ const server = http.createServer(async (req, resp) => {
       // approval_granted / approval_denied to the RuntimeEventEmitter, but
       // the frontend only listens for approval_result on the SSE stream.
       if (ok) {
-        const activeRun = runManager.get(runId);
+        // V1.3.0-fix: use getByRunId (not get) — the runs map is keyed by
+        // sessionId, not runId. get(runId) always returns undefined.
+        const activeRun = runManager.getByRunId(runId);
         if (activeRun && activeRun.sendRunEvent) {
           // V1.3.0-fix: use sendRunEvent (not sendEvent) so the event also
           // goes through trackEvent() and updates runObservation.approvals.

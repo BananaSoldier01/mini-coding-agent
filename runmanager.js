@@ -145,6 +145,19 @@ class RunManager {
   }
 
   /**
+   * V1.3.0-fix: Look up an ActiveRun by runId (not sessionId).
+   * The /api/approve handler receives runId from the client, but
+   * this.runs is keyed by sessionId. Without this, runManager.get(runId)
+   * returns undefined and approval_result never reaches trackEvent().
+   */
+  getByRunId(runId) {
+    for (const [, run] of this.runs) {
+      if (run.runId === runId) return run;
+    }
+    return null;
+  }
+
+  /**
    * Stop — 仅当当前 run 匹配 expectedRun 时才执行
    * 防止 stale-finalizer race
    */
