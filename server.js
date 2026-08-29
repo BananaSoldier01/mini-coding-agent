@@ -673,10 +673,12 @@ const server = http.createServer(async (req, resp) => {
     }
 
     // ── Helper: find observation by runId across all sessions ──
+    // V1.4.0-fix: returns { observation, session } so the caller can use
+    // the correct workspace (session.workspace) instead of config.workspace.
     function findObservationByRunId(runId) {
       for (const s of sessionManager.sessions.values()) {
         const obs = (s.runObservations || []).find(o => o.runId === runId);
-        if (obs) return obs;
+        if (obs) return { observation: obs, session: s };
       }
       return null;
     }
@@ -689,31 +691,53 @@ const server = http.createServer(async (req, resp) => {
       const { runId, path: filePath } = body;
       if (!runId || !filePath) return sendError(resp, 400, '缺少 runId 或 path');
 
-      const observation = findObservationByRunId(runId);
-      if (!observation) return sendError(resp, 404, `Run ${runId} 不存在`);
+      const found = findObservationByRunId(runId);
+      if (!found) return sendError(resp, 404, `Run ${runId} 不存在`);
+      const { observation, session } = found;
+
+      // V1.4.0-fix P0-1: use the Run's actual workspace, not config.workspace.
+      // A Run belongs to a session, and sessions can switch workspaces.
+      if (!workspaceRegistry.isTrusted(session.workspace)) {
+        return sendError(resp, 403, `Workspace ${session.workspace} 不再受信任`);
+      }
+      const fileService = new WorkspaceFileService(session.workspace);
+
       const changes = observation?.changes?.files || [];
       const change = changes.find(c => c.path === filePath);
       if (!change) return sendError(resp, 404, `文件 ${filePath} 不在 Run ${runId} 的变更列表中`);
 
-      const fileService = new WorkspaceFileService(config.workspace);
       let currentContent = null;
       try {
         const result = fileService.readFile(filePath);
         currentContent = result.content;
       } catch { /* file doesn't exist — stays null */ }
 
-      const { checkRevertible, applyRevert } = await import('./rollback.js');
+      const { checkRevertible, applyRevert, recomputeNetDiff } = await import('./rollback.js');
       const check = checkRevertible(change, currentContent);
       if (!check.ok) {
+        // Record conflict evidence in observation
+        if (!observation.rollback) observation.rollback = { reverted: [], conflicts: [], failed: [] };
+        observation.rollback.conflicts.push({ path: filePath, reason: check.reason, timestamp: Date.now() });
         return sendJson(resp, { ok: false, reverted: false, conflict: { path: filePath, reason: check.reason } });
       }
 
       try {
         applyRevert(change, fileService);
-        // Emit rollback event for Activity evidence
-        sendRunEvent({ type: 'workspace_file_reverted', runId, path: filePath });
+
+        // V1.4.0-fix: write rollback evidence to the persistent observation
+        // (not via SSE — the Run is long finished and sendRunEvent is scoped
+        // to the /api/run handler).
+        if (!observation.rollback) observation.rollback = { reverted: [], conflicts: [], failed: [] };
+        observation.rollback.reverted.push({ path: filePath, timestamp: Date.now() });
+
+        // V1.4.0-fix P1-1: re-compute the Net Diff from the real Workspace
+        // so Changes panel shows what's still different from baseline.
+        observation.changes = recomputeNetDiff(observation, fileService);
+
         return sendJson(resp, { ok: true, reverted: true, path: filePath });
       } catch (err) {
+        if (!observation.rollback) observation.rollback = { reverted: [], conflicts: [], failed: [] };
+        observation.rollback.failed.push({ path: filePath, error: err.message, timestamp: Date.now() });
         return sendError(resp, 500, `回滚失败: ${err.message}`);
       }
     }
@@ -725,20 +749,34 @@ const server = http.createServer(async (req, resp) => {
       const { runId, paths } = body;
       if (!runId) return sendError(resp, 400, '缺少 runId');
 
-      const observation = findObservationByRunId(runId);
-      if (!observation) return sendError(resp, 404, `Run ${runId} 不存在`);
+      const found = findObservationByRunId(runId);
+      if (!found) return sendError(resp, 404, `Run ${runId} 不存在`);
+      const { observation, session } = found;
 
-      const fileService = new WorkspaceFileService(config.workspace);
-      const { revertRun } = await import('./rollback.js');
+      // V1.4.0-fix P0-1: use the Run's actual workspace
+      if (!workspaceRegistry.isTrusted(session.workspace)) {
+        return sendError(resp, 403, `Workspace ${session.workspace} 不再受信任`);
+      }
+      const fileService = new WorkspaceFileService(session.workspace);
+
+      const { revertRun, recomputeNetDiff } = await import('./rollback.js');
       const result = revertRun(observation, fileService, paths || null);
 
-      // Emit rollback events for Activity evidence
+      // V1.4.0-fix P0-2: write evidence to the persistent observation
+      // instead of calling the out-of-scope sendRunEvent.
+      if (!observation.rollback) observation.rollback = { reverted: [], conflicts: [], failed: [] };
       for (const p of result.revertedFiles) {
-        sendRunEvent({ type: 'workspace_file_reverted', runId, path: p });
+        observation.rollback.reverted.push({ path: p, timestamp: Date.now() });
       }
       for (const c of result.conflicts) {
-        sendRunEvent({ type: 'rollback_conflict', runId, path: c.path, reason: c.reason });
+        observation.rollback.conflicts.push({ ...c, timestamp: Date.now() });
       }
+      for (const f of result.failedFiles) {
+        observation.rollback.failed.push({ ...f, timestamp: Date.now() });
+      }
+
+      // V1.4.0-fix P1-1: re-compute Net Diff after rollback
+      observation.changes = recomputeNetDiff(observation, fileService);
 
       return sendJson(resp, {
         ok: true,

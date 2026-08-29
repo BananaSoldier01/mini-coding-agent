@@ -1561,16 +1561,6 @@ function handleEvent(event) {
       // Fire-and-forget — must not block the SSE event loop.
       refreshRunList();
       break;
-    case 'workspace_file_reverted':
-      // V1.4.0: a file was reverted — refresh the Changes panel
-      if (event.runId === state.activeRunId) {
-        refreshChangesFromServer();
-      }
-      break;
-    case 'rollback_conflict':
-      // V1.4.0: a conflict was detected during rollback
-      appendSystemMessage(`⚠ 回滚冲突: ${event.path} — ${conflictReasonText(event.reason)}`);
-      break;
     case 'error':
       if (event.message && event.message.includes('取消')) {
         appendSystemMessage('🛑 ' + event.message);
@@ -2252,8 +2242,8 @@ async function revertFile(filePath) {
 
     if (data.ok && data.reverted) {
       appendSystemMessage(`✓ 已撤销 ${filePath}`);
-      // Refresh the Changes panel to reflect the new Workspace state
-      refreshChangesFromServer(filePath);
+      // V1.4.0-fix P1-1: refresh with the correct runId (not filePath)
+      refreshChangesFromServer(runId);
     } else if (data.conflict) {
       appendSystemMessage(`⚠ 无法撤销 ${filePath}：${conflictReasonText(data.conflict.reason)}`);
     } else {
@@ -2305,7 +2295,8 @@ async function revertRun(runId) {
 
 /**
  * Re-render the Changes panel from the server observation.
- * This ensures UI reflects the real Workspace state, not a local fake.
+ * The server has already re-computed the Net Diff after rollback,
+ * so we just fetch and render.
  */
 async function refreshChangesFromServer(runId) {
   const targetRunId = runId || state.activeRunId;
@@ -2313,8 +2304,18 @@ async function refreshChangesFromServer(runId) {
   try {
     const resp = await fetch('/api/run/observation?runId=' + encodeURIComponent(targetRunId));
     const data = await resp.json();
-    if (data.observation && data.observation.changes) {
-      renderNetDiff(data.observation.changes);
+    if (data.observation) {
+      // V1.4.0-fix: the server now returns updated changes after rollback
+      if (data.observation.changes) {
+        renderNetDiff(data.observation.changes);
+      } else {
+        // No changes left — clear the panel
+        renderNetDiff({ files: [], totalChanges: 0 });
+      }
+      // Also update the Completion Summary if it's showing this Run
+      if (targetRunId === state.activeRunId && data.observation.agentDone) {
+        renderCompletionSummary(data.observation.agentDone, data.observation);
+      }
     }
   } catch (err) {
     // Non-fatal

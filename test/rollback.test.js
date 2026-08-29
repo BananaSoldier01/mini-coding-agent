@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { checkRevertible, applyRevert, revertRun, hashContent } from '../rollback.js';
+import { checkRevertible, applyRevert, revertRun, recomputeNetDiff, hashContent } from '../rollback.js';
 
 // ── Mock FileService ────────────────────────────────────
 
@@ -92,6 +92,21 @@ test('checkRevertible create: file already deleted → conflict', () => {
   const result = checkRevertible(change, null);
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'file_already_deleted');
+});
+
+// V1.4.0-fix P0-3: create type must also verify content matches after
+
+test('checkRevertible create: content matches after → ok', () => {
+  const change = { path: 'new.txt', type: 'create', before: '', after: 'agent-content' };
+  const result = checkRevertible(change, 'agent-content');
+  assert.equal(result.ok, true);
+});
+
+test('checkRevertible create: content differs from after (user edited) → conflict', () => {
+  const change = { path: 'new.txt', type: 'create', before: '', after: 'agent-content' };
+  const result = checkRevertible(change, 'user-edited-content');
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'workspace_changed_after_run');
 });
 
 // ── checkRevertible: Delete ─────────────────────────────
@@ -251,4 +266,52 @@ test('revertRun: missing observation → no-op', () => {
   const fs = new MockFileService();
   const result = revertRun(null, fs);
   assert.equal(result.revertedFiles.length, 0);
+});
+
+// ── recomputeNetDiff ─────────────────────────────────────
+
+test('recomputeNetDiff: reverted file no longer appears', () => {
+  const fs = new MockFileService({ 'a.txt': 'original' });
+  const observation = {
+    changes: {
+      files: [
+        { path: 'a.txt', type: 'modify', before: 'original', after: 'agent-changed' },
+      ],
+    },
+  };
+  const result = recomputeNetDiff(observation, fs);
+  assert.equal(result.totalChanges, 0, 'reverted file should not appear in Net Diff');
+});
+
+test('recomputeNetDiff: unreverted file still appears', () => {
+  const fs = new MockFileService({ 'a.txt': 'user-changed' });
+  const observation = {
+    changes: {
+      files: [
+        { path: 'a.txt', type: 'modify', before: 'original', after: 'agent-changed' },
+      ],
+    },
+  };
+  const result = recomputeNetDiff(observation, fs);
+  assert.equal(result.totalChanges, 1);
+  assert.equal(result.files[0].path, 'a.txt');
+  assert.equal(result.files[0].type, 'modify');
+});
+
+test('recomputeNetDiff: mixed — some reverted, some not', () => {
+  const fs = new MockFileService({
+    'a.txt': 'original',     // reverted (matches baseline)
+    'b.txt': 'user-changed', // not reverted (differs from baseline)
+  });
+  const observation = {
+    changes: {
+      files: [
+        { path: 'a.txt', type: 'modify', before: 'original', after: 'agent-a' },
+        { path: 'b.txt', type: 'modify', before: 'orig-b', after: 'agent-b' },
+      ],
+    },
+  };
+  const result = recomputeNetDiff(observation, fs);
+  assert.equal(result.totalChanges, 1);
+  assert.equal(result.files[0].path, 'b.txt');
 });

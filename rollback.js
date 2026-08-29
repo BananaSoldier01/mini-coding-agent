@@ -9,6 +9,8 @@
  */
 
 import crypto from 'node:crypto';
+import fs from 'fs';
+import path from 'path';
 
 // ── Hash ─────────────────────────────────────────────────
 
@@ -21,6 +23,10 @@ export function hashContent(content) {
 
 /**
  * Check whether a single file can be safely reverted.
+ *
+ * V1.4.0-fix P0-3: for `create` type, we now also verify that the current
+ * content matches change.after. Without this, a user who edits a file
+ * that the Agent created would have their changes silently deleted.
  *
  * @param {object} change  — { path, type, before, after } from runObservation.changes
  * @param {string|null} currentContent — current file content (null = does not exist)
@@ -44,9 +50,15 @@ export function checkRevertible(change, currentContent) {
       return { ok: true };
 
     case 'create':
-      // The Run created this file. It must still exist to be removable.
+      // The Run created this file. It must still exist AND its content
+      // must match what the Run wrote (change.after). If the user edited
+      // it after the Run, we must NOT delete it.
+      // V1.4.0-fix P0-3: previously only checked existence, not content.
       if (currentContent === null) {
         return { ok: false, reason: 'file_already_deleted' };
+      }
+      if (currentContent !== change.after) {
+        return { ok: false, reason: 'workspace_changed_after_run' };
       }
       return { ok: true };
 
@@ -147,5 +159,71 @@ export function revertRun(observation, fileService, paths = null) {
     conflicts,
     failedFiles,
     totalRequested: targets.length,
+  };
+}
+
+// ── Re-compute Net Diff (V1.4.0-fix P1-1) ─────────────────
+
+/**
+ * After a rollback, re-compute the Net Diff between the Run's baseline
+ * and the current Workspace state.
+ *
+ * This ensures the Changes panel reflects reality: files that were
+ * reverted no longer appear as changed.
+ *
+ * @param {object} observation — runObservation with .changes (baseline evidence)
+ * @param {object} fileService  — WorkspaceFileService instance
+ * @returns {{ files: array, totalChanges: number }} — updated Net Diff
+ */
+export function recomputeNetDiff(observation, fileService) {
+  const baselineFiles = observation?.changes?.files || [];
+  const changedFiles = [];
+
+  for (const change of baselineFiles) {
+    // Read current file content
+    let currentContent = null;
+    try {
+      const result = fileService.readFile(change.path);
+      currentContent = result.content;
+    } catch {
+      currentContent = null;
+    }
+
+    // Determine the current state relative to baseline
+    const beforeExists = change.before && change.before !== '';
+    const currentExists = currentContent !== null;
+
+    // If current matches baseline, the file is no longer changed
+    const beforeKey = beforeExists ? change.before : null;
+    const currentKey = currentExists ? currentContent : null;
+
+    if (beforeKey === currentKey) {
+      // File is back to baseline — no longer a change
+      continue;
+    }
+
+    // Determine the change type
+    let type;
+    if (!beforeExists && currentExists) {
+      type = 'create';
+    } else if (beforeExists && !currentExists) {
+      type = 'delete';
+    } else {
+      type = 'modify';
+    }
+
+    changedFiles.push({
+      path: change.path,
+      type,
+      before: change.before || '',
+      after: currentContent || '',
+      added: type === 'create' ? (currentContent ? currentContent.split('\n').length : 0) : 0,
+      removed: type === 'delete' ? (change.before ? change.before.split('\n').length : 0) : 0,
+    });
+  }
+
+  return {
+    files: changedFiles,
+    totalChanges: changedFiles.length,
   };
 }
