@@ -32,6 +32,7 @@ class RecoveryManager {
     this.workspaceStore = options.workspaceStore || null;
     this.contextMgr = options.contextMgr || null;
     this.artifactStore = options.artifactStore || null;
+    this.executionGate = options.executionGate || null;
     this.taskExecutor = options.taskExecutor || null;
   }
 
@@ -100,6 +101,14 @@ class RecoveryManager {
     // artifact would see an empty store.
     if (this.artifactStore && snapshot.artifacts) {
       this.artifactStore.deserialize(snapshot.artifacts);
+    }
+    // V1.2.3-fix: restore ApprovalRequests. A WAITING_APPROVAL task whose
+    // request is lost becomes an orphan — the task is "waiting" for an
+    // approval nobody can look up. ExecutionGate.restoreRequests() preserves
+    // the original status (PENDING / APPROVED / REJECTED), so a request that
+    // was already resolved before the crash stays resolved.
+    if (this.executionGate && snapshot.approvals) {
+      this.executionGate.restoreRequests(snapshot.approvals.requests);
     }
 
     const run = this.runStore.get(runId);

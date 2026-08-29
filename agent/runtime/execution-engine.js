@@ -122,6 +122,7 @@ class ExecutionEngine {
       emitter: options.emitter,
       workspaceRegistry: this.workspaceStore,
     });
+    this.executionGate = options.executionGate || null;
     this.capabilityRegistry = options.capabilityRegistry || createCapabilityRegistry(options);
     this.toolRegistry = options.toolRegistry || createToolRegistry({
       capabilityRegistry: this.capabilityRegistry,
@@ -196,6 +197,7 @@ class ExecutionEngine {
       workspaceStore: this.workspaceStore,
       contextMgr: this.contextMgr,
       artifactStore: this.artifactStore,
+      executionGate: this.executionGate,
       taskExecutor: this.taskExecutor,
     });
 
@@ -557,6 +559,13 @@ class ExecutionEngine {
     // depends on the artifact would see an empty store. ArtifactStore already
     // has serialize()/deserialize().
     if (this.artifactStore) snapshot.artifacts = this.artifactStore.serialize();
+    // V1.2.3-fix: ExecutionGate holds the real ApprovalRequest objects
+    // (id / target / reason / riskLevel / args / status / timeout). A
+    // WAITING_APPROVAL task means nothing without its request — restoring only
+    // the task status produces an orphan task that is "waiting" for an
+    // approval nobody can find. ExecutionGate already has serialize() /
+    // restoreRequests(), so include it.
+    if (this.executionGate) snapshot.approvals = this.executionGate.serialize();
     return snapshot;
   }
 

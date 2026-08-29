@@ -13,6 +13,7 @@
  */
 
 import { RUNTIME_EVENT_TYPES } from './events.js';
+import { cloneEntity } from './clone.js';
 
 // ── Artifact Types ────────────────────────────────────────
 
@@ -143,9 +144,15 @@ class ArtifactStore {
   // ── Serialization ─────────────────────────────────────
 
   serialize() {
-    return {
-      artifacts: Object.fromEntries(this.artifacts),
-    };
+    // V1.2.3-fix: deep-clone every artifact so the snapshot is detached. The
+    // old Object.fromEntries(this.artifacts) shared references with the live
+    // Runtime — artifact content / metadata could be mutated after the
+    // snapshot was taken, violating the "frozen crash snapshot" contract.
+    const artifacts = {};
+    for (const [id, art] of this.artifacts) {
+      artifacts[id] = cloneEntity(art);
+    }
+    return { artifacts };
   }
 
   deserialize(data) {

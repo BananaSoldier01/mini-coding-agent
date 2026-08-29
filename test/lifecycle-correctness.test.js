@@ -22,6 +22,10 @@ import {
   createEventStore,
   RUN_STATUS,
 } from '../agent/skill.js';
+import {
+  ExecutionGate,
+  createApprovalRequest,
+} from '../agent/runtime/approval.js';
 
 // ═══════════════════════════════════════════════════════════
 // Test 1: Run Lifecycle Event Exactness
@@ -1012,4 +1016,84 @@ test('E2E: Workspace + Context snapshots are detached deep clones', () => {
   engine.workspaceStore.update(wsId, { name: 'renamed' });
   assert.strictEqual(engine.workspaceStore.get(wsId).name, 'renamed', 'live workspace must change');
   assert.notStrictEqual(snapWs.name, 'renamed', 'snapshot workspace must be frozen');
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 24: WAITING_APPROVAL recovery restores the ApprovalRequest
+//          itself, not just the task status (P1)
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: WAITING_APPROVAL crash snapshot restores ApprovalRequest', () => {
+  const engine = createExecutionEngine({ executionGate: new ExecutionGate() });
+  engine.createRun({ goal: 'ap', runId: 'run-ap' });
+  engine.addTask('run-ap', { goal: 't', skillId: 'code-review' });
+  engine.startRun('run-ap');
+  const task = engine.taskStore.listByRun('run-ap')[0];
+  engine.transitionMgr.transitionTask(task.id, 'pending', 'running', { runId: 'run-ap', workspaceId: task.runId, taskId: task.id });
+  engine.transitionMgr.transitionTask(task.id, 'running', 'waiting_approval', { runId: 'run-ap', workspaceId: task.runId, taskId: task.id });
+
+  // Create an ApprovalRequest for this task
+  const req = engine.executionGate.requestApproval(
+    'run-ap',
+    { type: 'task', id: task.id, name: 'file_edit' },
+    'Destructive file modification',
+    { riskLevel: 'high', args: { path: '/etc/config' } }
+  );
+
+  const snapshot = engine.serializeStores();
+  assert.ok(snapshot.approvals, 'snapshot must carry approvals');
+  assert.strictEqual(snapshot.approvals.requests.length, 1, 'snapshot must have one approval request');
+  assert.strictEqual(snapshot.approvals.requests[0].status, 'pending', 'request must be PENDING in snapshot');
+
+  // Fresh engine — restore from snapshot
+  const engineB = createExecutionEngine({ executionGate: new ExecutionGate() });
+  const recovery = engineB.recover('run-ap', { snapshot });
+  assert.ok(recovery.success, `recovery should succeed: ${JSON.stringify(recovery)}`);
+
+  // The ApprovalRequest must be restored into the new ExecutionGate
+  const restoredReqs = engineB.executionGate.getRequestsByRun('run-ap');
+  assert.strictEqual(restoredReqs.length, 1, 'ApprovalRequest must be restored');
+  assert.strictEqual(restoredReqs[0].id, req.id, 'restored request must have the same id');
+  assert.strictEqual(restoredReqs[0].status, 'pending', 'restored request must keep PENDING status');
+  assert.strictEqual(restoredReqs[0].target.name, 'file_edit', 'restored request must keep target');
+});
+
+test('E2E: Artifact snapshot is a detached deep clone', () => {
+  const engine = createExecutionEngine();
+  engine.createRun({ goal: 'art2', runId: 'run-art2' });
+  engine.addTask('run-art2', { goal: 't' });
+  engine.startRun('run-art2');
+  const wsId = engine.runStore.get('run-art2').workspaceId;
+  const created = engine.artifactStore.create({
+    workspaceId: wsId, type: 'patch',
+    content: 'diff --git a b',
+    metadata: { files: ['a', 'b'], lines: 42 },
+    taskId: 'task-1',
+  });
+
+  const snapshot = engine.serializeStores();
+  const snapArt = Object.values(snapshot.artifacts.artifacts)[0];
+
+  // Mutate the live artifact's nested metadata
+  const liveArt = engine.artifactStore.get(created.id);
+  liveArt.metadata.lines = 999;
+  assert.strictEqual(engine.artifactStore.get(created.id).metadata.lines, 999, 'live artifact must change');
+  assert.strictEqual(snapArt.metadata.lines, 42, 'snapshot artifact must be frozen');
+});
+
+test('E2E: WAITING_APPROVAL recovery plan includes preserve + approval restore actions', () => {
+  const engine = createExecutionEngine({ executionGate: new ExecutionGate() });
+  engine.createRun({ goal: 'ap2', runId: 'run-ap2' });
+  engine.addTask('run-ap2', { goal: 't', skillId: 'code-review' });
+  engine.startRun('run-ap2');
+  const task = engine.taskStore.listByRun('run-ap2')[0];
+  engine.transitionMgr.transitionTask(task.id, 'pending', 'running', { runId: 'run-ap2', workspaceId: task.runId, taskId: task.id });
+  engine.transitionMgr.transitionTask(task.id, 'running', 'waiting_approval', { runId: 'run-ap2', workspaceId: task.runId, taskId: task.id });
+
+  const snapshot = engine.serializeStores();
+  const plan = engine.getRecoveryPlan('run-ap2', { snapshot });
+  assert.ok(plan.success, 'getRecoveryPlan must succeed');
+  const preserveAction = plan.plan.find(a => a.action === 'preserve_task');
+  assert.ok(preserveAction, 'recovery plan must include preserve_task for WAITING_APPROVAL');
+  assert.strictEqual(preserveAction.taskId, task.id, 'preserve_task must target the right task');
 });

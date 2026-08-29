@@ -575,6 +575,75 @@
 
 ## Open — 当前已知问题
 
+### V1.2.3 Release Gate — Accepted Limitations
+
+#### VERIFYING crash recovery is at-least-once, not exactly-once
+
+**Severity:** P2 — accepted limitation, documented.
+
+A task in `VERIFYING` state is requeued to `PENDING` on crash recovery, which
+re-executes the Skill that already ran before verification began:
+
+```
+PENDING → RUNNING → [Skill executes, writes files / runs commands / creates artifacts]
+         → VERIFYING → CRASH → RECOVERY → PENDING → [Skill executes AGAIN]
+```
+
+We cannot resume mid-verification. The safe fallback is to re-run the full
+chain. Recovery actions record this explicitly (`from: 'verifying',
+to: 'pending'`) so it is visible in logs, not a silent misclassification.
+
+**Impact:** Skills with non-idempotent side effects may replay. Mitigate by
+making Skills idempotent or checking preconditions before applying. A Coding
+Skill that `git apply`s a patch twice will fail on the second attempt — the
+task moves to FAILED, which is the correct outcome, not silent corruption.
+
+**Full fix requires (V1.3.0 scope):** execution checkpointing between Skill
+phases, verification-resume semantics, tool/command deduplication across
+replays, idempotency contracts on Skill implementations.
+
+#### Approval state recovery is opt-in
+
+**Severity:** P2 — accepted limitation, documented.
+
+`WAITING_APPROVAL` tasks are preserved by recovery, but the associated
+`ApprovalRequest` objects are only restored if an `ExecutionGate` is wired
+into the `ExecutionEngine` via the `executionGate` option. A Runtime that does
+not pass one will produce an **orphan WAITING_APPROVAL task** — the task is
+"waiting" for an approval that nobody can look up.
+
+**Current state:** `serializeStores()` includes `approvals` when
+`executionGate` is present; `_recoverFromSnapshot()` calls
+`restoreRequests()` to restore them. This is correct when wired, but the
+wiring is optional.
+
+**Mitigation:** Always pass `executionGate` to `createExecutionEngine()` if you
+use `WAITING_APPROVAL` tasks. After recovery, call
+`executionGate.getPendingRequests(runId)` to verify no orphan approvals
+remain. If you cannot wire `executionGate`, treat any `WAITING_APPROVAL` task
+found after recovery as requiring manual re-submission.
+
+#### Snapshot serialization contract
+
+**Severity:** P2 — accepted limitation, documented.
+
+All snapshot fields are now detached deep clones (`cloneEntity()`):
+
+| Field      | Detached |
+|------------|---------- |
+| runs       | yes      |
+| plans      | yes      |
+| tasks      | yes      |
+| workspaces | yes      |
+| contexts   | yes      |
+| artifacts  | yes      |
+| approvals  | yes      |
+
+A caller holding a snapshot returned by `serializeStores()` can safely mutate
+the live Runtime without affecting the frozen copy.
+
+---
+
 ### Large File Reader
 - `totalLines` 可能只是局部近似
 - UTF-8 chunk boundary 处理不够严谨

@@ -13,6 +13,7 @@
  */
 
 import { RUNTIME_EVENT_TYPES } from './events.js';
+import { cloneEntity } from './clone.js';
 
 // ── Approval Status ───────────────────────────────────────
 
@@ -350,6 +351,18 @@ class ExecutionGate {
   }
 
   /**
+   * V1.2.3: Serialize all ApprovalRequests for snapshot/recovery.
+   * Uses cloneEntity so the snapshot is a detached deep copy — the old
+   * Object.fromEntries(this.requests) would share references with the live
+   * Runtime, so a caller holding the snapshot could see later mutations.
+   */
+  serialize() {
+    return {
+      requests: Array.from(this.requests.values()).map(r => cloneEntity(r)),
+    };
+  }
+
+  /**
    * V0.9.3: Process pending requests through the approver.
    */
   async processPending(runId) {
@@ -440,6 +453,16 @@ function createApprovalPolicy(rules = []) {
   return new ApprovalPolicy([...DEFAULT_APPROVAL_RULES, ...rules]);
 }
 
+/**
+ * V1.2.3: Serialize all ApprovalRequests for snapshot/recovery.
+ * Uses cloneEntity so the snapshot is a detached deep copy.
+ */
+function serializeExecutionGate(gate) {
+  return {
+    requests: Array.from(gate.requests.values()).map(r => cloneEntity(r)),
+  };
+}
+
 export {
   APPROVAL_STATUS,
   APPROVAL_TRANSITIONS,
@@ -454,4 +477,5 @@ export {
   ApprovalPolicy,
   DEFAULT_APPROVAL_RULES,
   createApprovalPolicy,
+  serializeExecutionGate,
 };
