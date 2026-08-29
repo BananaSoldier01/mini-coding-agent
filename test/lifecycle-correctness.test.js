@@ -886,3 +886,130 @@ test('E2E: getRecoveryPlan(runId, { snapshot }) restores the full Runtime', () =
   assert.ok(plan.recovery.plan, 'the recovery must have restored the Plan');
   assert.ok(plan.plan.length > 0, 'the recovery plan must have actions');
 });
+
+// ═══════════════════════════════════════════════════════════
+// Test 21: Recovery covers the FULL task state machine —
+//          VERIFYING / WAITING_APPROVAL / SUPERSEDED (P1-1)
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: a VERIFYING task is correctly identified and requeued, not misread as RUNNING', async () => {
+  const emitterA = new RuntimeEventEmitter();
+  const storeA = createEventStore();
+  emitterA.setStore(storeA);
+  const engineA = createExecutionEngine({ emitter: emitterA, eventStore: storeA });
+  engineA.createRun({ goal: 'v', runId: 'run-v' });
+  engineA.addTask('run-v', { goal: 't', skillId: 'code-review' });
+  engineA.startRun('run-v');
+  const task = engineA.taskStore.listByRun('run-v')[0];
+  engineA.transitionMgr.transitionTask(task.id, 'pending', 'running', { runId: 'run-v', workspaceId: task.runId, taskId: task.id });
+  engineA.transitionMgr.transitionTask(task.id, 'running', 'verifying', { runId: 'run-v', workspaceId: task.runId, taskId: task.id });
+
+  // Snapshot recovery — no shared EventStore
+  const snapshot = engineA.serializeStores();
+  const engineB = createExecutionEngine();
+  engineB.skillRuntime.executeSkill = async () => ({ success: true, result: {} });
+  const recovery = engineB.recover('run-v', { snapshot });
+  assert.ok(recovery.success, `recovery should succeed: ${JSON.stringify(recovery)}`);
+  assert.strictEqual(recovery.taskPlan.verifying.length, 1, 'VERIFYING task must be categorized as verifying');
+  assert.strictEqual(recovery.taskPlan.running.length, 0, 'VERIFYING task must NOT be misread as RUNNING');
+
+  await engineB.resumeAfterCrash('run-v', { snapshot });
+  assert.strictEqual(engineB.taskStore.get(task.id)?.status, 'completed', 'VERIFYING task should requeue and complete');
+});
+
+test('E2E: a WAITING_APPROVAL task is preserved and NOT auto-executed', async () => {
+  const emitterA = new RuntimeEventEmitter();
+  const storeA = createEventStore();
+  emitterA.setStore(storeA);
+  const engineA = createExecutionEngine({ emitter: emitterA, eventStore: storeA });
+  engineA.createRun({ goal: 'wa', runId: 'run-wa' });
+  engineA.addTask('run-wa', { goal: 't', skillId: 'code-review' });
+  engineA.startRun('run-wa');
+  const task = engineA.taskStore.listByRun('run-wa')[0];
+  engineA.transitionMgr.transitionTask(task.id, 'pending', 'running', { runId: 'run-wa', workspaceId: task.runId, taskId: task.id });
+  engineA.transitionMgr.transitionTask(task.id, 'running', 'waiting_approval', { runId: 'run-wa', workspaceId: task.runId, taskId: task.id });
+
+  const snapshot = engineA.serializeStores();
+  const engineB = createExecutionEngine();
+  const recovery = engineB.recover('run-wa', { snapshot });
+  assert.strictEqual(recovery.taskPlan.waiting_approval.length, 1, 'WAITING_APPROVAL task must be categorized');
+  assert.strictEqual(recovery.taskPlan.pending.length, 0, 'WAITING_APPROVAL task must NOT fall into pending');
+
+  await engineB.resumeAfterCrash('run-wa', { snapshot });
+  assert.strictEqual(engineB.taskStore.get(task.id)?.status, 'waiting_approval', 'WAITING_APPROVAL must be preserved, not executed');
+});
+
+test('E2E: a SUPERSEDED task is NEVER revived by recovery', async () => {
+  const emitterA = new RuntimeEventEmitter();
+  const storeA = createEventStore();
+  emitterA.setStore(storeA);
+  const engineA = createExecutionEngine({ emitter: emitterA, eventStore: storeA });
+  engineA.createRun({ goal: 'ss', runId: 'run-ss' });
+  engineA.addTask('run-ss', { goal: 't', skillId: 'code-review' });
+  engineA.startRun('run-ss');
+  const task = engineA.taskStore.listByRun('run-ss')[0];
+  engineA.transitionMgr.transitionTask(task.id, 'pending', 'running', { runId: 'run-ss', workspaceId: task.runId, taskId: task.id });
+  engineA.transitionMgr.transitionTask(task.id, 'running', 'superseded', { runId: 'run-ss', workspaceId: task.runId, taskId: task.id });
+  assert.strictEqual(engineA.taskStore.get(task.id)?.status, 'superseded', 'task must be superseded in engine A');
+
+  const snapshot = engineA.serializeStores();
+  const engineB = createExecutionEngine();
+  const recovery = engineB.recover('run-ss', { snapshot });
+  // SUPERSEDED is filtered out of unfinishedTasks — it is neither requeued nor executed
+  assert.strictEqual(recovery.taskPlan.pending.length, 0, 'SUPERSEDED must not be pending');
+  assert.strictEqual(recovery.taskPlan.running.length, 0, 'SUPERSEDED must not be running');
+  assert.strictEqual(engineB.taskStore.get(task.id)?.status, 'superseded', 'SUPERSEDED task must stay superseded in the store');
+
+  await engineB.resumeAfterCrash('run-ss', { snapshot });
+  assert.strictEqual(engineB.taskStore.get(task.id)?.status, 'superseded', 'SUPERSEDED must never be revived');
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 22: Snapshot carries ArtifactStore so completed-task
+//          output survives the crash (P1-2)
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: crash snapshot restores ArtifactStore so task output survives', () => {
+  const engine = createExecutionEngine();
+  engine.createRun({ goal: 'art', runId: 'run-art' });
+  engine.addTask('run-art', { goal: 't' });
+  engine.startRun('run-art');
+  const wsId = engine.runStore.get('run-art').workspaceId;
+  engine.artifactStore.create({ workspaceId: wsId, type: 'patch', content: 'diff --git a b', taskId: 'task-1' });
+
+  const snapshot = engine.serializeStores();
+  assert.ok(snapshot.artifacts, 'snapshot must carry artifacts');
+  assert.ok(Object.keys(snapshot.artifacts.artifacts).length > 0, 'snapshot must have at least one artifact');
+
+  const engineB = createExecutionEngine();
+  const recovery = engineB.recover('run-art', { snapshot });
+  assert.ok(recovery.success, `recovery should succeed: ${JSON.stringify(recovery)}`);
+  const arts = engineB.artifactStore.listByWorkspace(wsId);
+  assert.strictEqual(arts.length, 1, 'artifact must be restored');
+  assert.strictEqual(arts[0].content, 'diff --git a b', 'artifact content must be preserved');
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 23: Snapshot serialization is detached — mutations after
+//          the snapshot do not affect the frozen copy (P2)
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: Workspace + Context snapshots are detached deep clones', () => {
+  const engine = createExecutionEngine();
+  engine.createRun({ goal: 'detached', runId: 'run-det' });
+  engine.addTask('run-det', { goal: 't' });
+  engine.startRun('run-det');
+  const snapshot = engine.serializeStores();
+
+  const ctxId = engine.contextMgr.getByRun('run-det')?.id;
+  const snapCtx = snapshot.contexts.contexts[ctxId];
+  engine.contextMgr.setVariable(ctxId, 'key', 'live-value');
+  assert.strictEqual(engine.contextMgr.getVariable(ctxId, 'key'), 'live-value', 'live context must change');
+  assert.strictEqual(snapCtx.variables.key, undefined, 'snapshot context must be frozen');
+
+  const wsId = engine.runStore.get('run-det').workspaceId;
+  const snapWs = snapshot.workspaces[wsId];
+  engine.workspaceStore.update(wsId, { name: 'renamed' });
+  assert.strictEqual(engine.workspaceStore.get(wsId).name, 'renamed', 'live workspace must change');
+  assert.notStrictEqual(snapWs.name, 'renamed', 'snapshot workspace must be frozen');
+});

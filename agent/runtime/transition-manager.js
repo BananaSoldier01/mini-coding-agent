@@ -236,6 +236,7 @@ class TransitionManager {
         'running→cancelled': 'task_cancelled',
         'verifying→cancelled': 'task_cancelled',
         'verifying→superseded': 'task_superseded',
+        'running→superseded': 'task_superseded',
         'running→waiting_approval': 'task_waiting_approval',
         'waiting_approval→running': 'task_resumed',
         'waiting_approval→failed': 'task_failed',

@@ -195,6 +195,7 @@ class ExecutionEngine {
       taskStore: this.taskStore,
       workspaceStore: this.workspaceStore,
       contextMgr: this.contextMgr,
+      artifactStore: this.artifactStore,
       taskExecutor: this.taskExecutor,
     });
 
@@ -550,6 +551,12 @@ class ExecutionEngine {
     // have serialize()/restore(), so include them in the snapshot.
     if (this.workspaceStore) snapshot.workspaces = this.workspaceStore.serialize();
     if (this.contextMgr) snapshot.contexts = this.contextMgr.serialize();
+    // V1.2.3-fix: TaskExecutor writes Skill output (patch / report / code) into
+    // the ArtifactStore. Without restoring it, a task can report COMPLETED while
+    // its actual output is gone — a downstream task or verification step that
+    // depends on the artifact would see an empty store. ArtifactStore already
+    // has serialize()/deserialize().
+    if (this.artifactStore) snapshot.artifacts = this.artifactStore.serialize();
     return snapshot;
   }
 

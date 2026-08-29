@@ -31,6 +31,7 @@ class RecoveryManager {
     this.taskStore = options.taskStore || null;
     this.workspaceStore = options.workspaceStore || null;
     this.contextMgr = options.contextMgr || null;
+    this.artifactStore = options.artifactStore || null;
     this.taskExecutor = options.taskExecutor || null;
   }
 
@@ -93,6 +94,13 @@ class RecoveryManager {
       this.contextMgr.deserialize(snapshot.contexts);
       context = this.contextMgr.getByRun(runId);
     }
+    // V1.2.3-fix: restore artifacts too. A task can report COMPLETED while its
+    // actual output (patch / report / code) is lost if the ArtifactStore isn't
+    // restored — a downstream task or verification step depending on the
+    // artifact would see an empty store.
+    if (this.artifactStore && snapshot.artifacts) {
+      this.artifactStore.deserialize(snapshot.artifacts);
+    }
 
     const run = this.runStore.get(runId);
     if (!run) {
@@ -108,7 +116,12 @@ class RecoveryManager {
       unfinishedTasks = this._findUnfinishedTasks(runId, events);
     } else {
       unfinishedTasks = this.taskStore.listByRun(runId).filter(t =>
-        t.status === 'running' || t.status === 'failed' || t.status === 'pending'
+        // V1.2.3-fix: cover the full non-terminal set. The old filter missed
+        // VERIFYING / WAITING_APPROVAL, so a snapshot-only recovery (no shared
+        // EventStore) silently dropped those tasks — they were neither requeued
+        // nor preserved, leaving the Runtime in an inconsistent state.
+        t.status === 'running' || t.status === 'failed' || t.status === 'pending' ||
+        t.status === 'verifying' || t.status === 'waiting_approval'
       );
     }
     const taskPlan = this._categorizeTasks(unfinishedTasks);
@@ -288,8 +301,18 @@ class RecoveryManager {
    * V1.2.1: Find unfinished tasks from event sequence.
    */
   _findUnfinishedTasks(runId, events) {
+    // V1.2.3-fix: cover the FULL task state machine, not just the five states
+    // the original parser knew. VERIFYING / WAITING_APPROVAL / SUPERSEDED were
+    // silently misread as RUNNING, which caused:
+    //   - VERIFYING → re-executed the Skill a second time (duplicate work)
+    //   - WAITING_APPROVAL → auto-executed, breaking approval semantics
+    //   - SUPERSEDED → revived a task that plan revision had discarded
     const taskEvents = events.filter(e =>
-      ['task_created', 'task_started', 'task_completed', 'task_failed', 'task_cancelled'].includes(e.type)
+      [
+        'task_created', 'task_started', 'task_completed', 'task_failed',
+        'task_cancelled', 'task_verifying', 'task_waiting_approval',
+        'task_superseded', 'task_resumed',
+      ].includes(e.type)
     );
 
     const taskMap = new Map();
@@ -327,6 +350,20 @@ class RecoveryManager {
         case 'task_started':
           taskMap.get(taskId).status = 'running';
           break;
+        // V1.2.3-fix: the Skill already executed; verification was in progress.
+        // Requeue to PENDING so the normal RUNNING→VERIFYING→COMPLETED chain
+        // re-runs. Documented caveat: this re-executes the Skill. We cannot
+        // resume mid-verification, so re-execution is the safe fallback.
+        case 'task_verifying':
+          taskMap.get(taskId).status = 'verifying';
+          break;
+        case 'task_waiting_approval':
+          taskMap.get(taskId).status = 'waiting_approval';
+          break;
+        case 'task_resumed':
+          // waiting_approval → running: approval granted, resume execution
+          taskMap.get(taskId).status = 'running';
+          break;
         case 'task_completed':
           taskMap.get(taskId).status = 'completed';
           break;
@@ -336,6 +373,11 @@ class RecoveryManager {
           break;
         case 'task_cancelled':
           taskMap.get(taskId).status = 'cancelled';
+          break;
+        // V1.2.3-fix: SUPERSEDED is terminal — a plan revision discarded this
+        // task. Recovery must NEVER revive it.
+        case 'task_superseded':
+          taskMap.get(taskId).status = 'superseded';
           break;
       }
     }
@@ -347,22 +389,26 @@ class RecoveryManager {
    * V1.2.1: Categorize tasks for recovery.
    */
   _categorizeTasks(tasks) {
+    // V1.2.3-fix: every task status gets an explicit recovery category. The
+    // old code only knew completed/failed/running/pending/cancelled — anything
+    // else (verifying, waiting_approval, superseded) fell into the pending
+    // bucket and was silently executed, which is how VERIFYING tasks got their
+    // Skill re-run and SUPERSEDED tasks got revived.
     const categories = {
-      completed: [],    // Skip
-      failed: [],       // Retry
-      running: [],      // Resume
-      pending: [],      // Execute
-      cancelled: [],    // Skip
+      completed: [],      // Skip
+      failed: [],         // Retry (requeue to PENDING)
+      running: [],        // Requeue to PENDING
+      pending: [],        // Execute as-is
+      verifying: [],      // Requeue to PENDING (Skill already ran; re-executes)
+      waiting_approval: [], // Preserve — do NOT auto-execute
+      superseded: [],     // Skip — terminal, must never revive
+      cancelled: [],      // Skip
     };
 
     for (const task of tasks) {
       const status = task.status;
-      if (status === 'completed' || status === 'cancelled') {
+      if (categories[status]) {
         categories[status].push(task);
-      } else if (status === 'failed') {
-        categories.failed.push(task);
-      } else if (status === 'running') {
-        categories.running.push(task);
       } else {
         categories.pending.push(task);
       }
@@ -406,17 +452,42 @@ class RecoveryManager {
       actions.push({ action: 'retry_task', taskId: task.id, from: 'failed', to: 'pending' });
     }
 
-    // 3. PENDING tasks — already correct, just execute
+    // 3. VERIFYING tasks → requeue to PENDING. The Skill already executed and
+    // verification was in progress; we cannot resume mid-verification, so the
+    // safe fallback is to re-run the full chain. Documented caveat: this
+    // re-executes the Skill. (Silently treating VERIFYING as RUNNING used to
+    // do the same thing without any record — at least this is explicit.)
+    for (const task of recovery.taskPlan.verifying) {
+      this.taskStore.update(task.id, {
+        status: 'pending',
+        error: null,
+        failedAt: null,
+        updatedAt: Date.now(),
+      });
+      actions.push({ action: 'requeue_task', taskId: task.id, from: 'verifying', to: 'pending' });
+    }
+
+    // 4. WAITING_APPROVAL — preserve. Do NOT requeue, do NOT auto-execute.
+    // The approval state is part of the task's semantics; reviving it would
+    // bypass the human-in-the-loop gate.
+    for (const task of recovery.taskPlan.waiting_approval) {
+      actions.push({ action: 'preserve_task', taskId: task.id, status: 'waiting_approval' });
+    }
+
+    // 5. PENDING tasks — already correct, just execute
     for (const task of recovery.taskPlan.pending) {
       actions.push({ action: 'execute_task', taskId: task.id, status: 'pending' });
     }
 
-    // 4. COMPLETED / CANCELLED — skip
+    // 6. COMPLETED / CANCELLED / SUPERSEDED — skip
     for (const task of recovery.taskPlan.completed) {
       actions.push({ action: 'skip_task', taskId: task.id, reason: 'already completed' });
     }
     for (const task of recovery.taskPlan.cancelled) {
       actions.push({ action: 'skip_task', taskId: task.id, reason: 'was cancelled' });
+    }
+    for (const task of recovery.taskPlan.superseded) {
+      actions.push({ action: 'skip_task', taskId: task.id, reason: 'superseded — must never revive' });
     }
 
     // ── V1.2.3: Execute through TaskExecutor if available ──
@@ -424,6 +495,7 @@ class RecoveryManager {
       const allTasks = [
         ...recovery.taskPlan.running,
         ...recovery.taskPlan.failed,
+        ...recovery.taskPlan.verifying,
         ...recovery.taskPlan.pending,
       ];
 
@@ -518,17 +590,30 @@ class RecoveryManager {
       plan.push({ action: 'retry_task', taskId: task.id, status: task.status });
     }
 
-    // 5. Execute pending tasks
+    // 5. Requeue verifying tasks (Skill already ran; re-runs the full chain)
+    for (const task of recovery.taskPlan.verifying) {
+      plan.push({ action: 'requeue_task', taskId: task.id, from: 'verifying', to: 'pending' });
+    }
+
+    // 6. Preserve waiting_approval — do NOT auto-execute
+    for (const task of recovery.taskPlan.waiting_approval) {
+      plan.push({ action: 'preserve_task', taskId: task.id, status: 'waiting_approval' });
+    }
+
+    // 7. Execute pending tasks
     for (const task of recovery.taskPlan.pending) {
       plan.push({ action: 'execute_task', taskId: task.id, status: task.status });
     }
 
-    // 6. Skip completed/cancelled
+    // 8. Skip completed/cancelled/superseded
     for (const task of recovery.taskPlan.completed) {
       plan.push({ action: 'skip_task', taskId: task.id, reason: 'already completed' });
     }
     for (const task of recovery.taskPlan.cancelled) {
       plan.push({ action: 'skip_task', taskId: task.id, reason: 'was cancelled' });
+    }
+    for (const task of recovery.taskPlan.superseded) {
+      plan.push({ action: 'skip_task', taskId: task.id, reason: 'superseded — must never revive' });
     }
 
     return { success: true, plan, recovery };

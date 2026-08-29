@@ -12,6 +12,7 @@
  */
 
 import { RUNTIME_EVENT_TYPES } from './events.js';
+import { cloneEntity } from './clone.js';
 
 // ── Context Manager ───────────────────────────────────────
 
@@ -160,10 +161,19 @@ class ContextManager {
   // ── Serialization ─────────────────────────────────────
 
   serialize() {
-    return {
-      contexts: Object.fromEntries(this.contexts),
-      runContextMap: Object.fromEntries(this.runContextMap),
-    };
+    // V1.2.3-fix: deep-clone every context so the snapshot is a detached,
+    // frozen copy — not a live reference into the running Runtime. The old
+    // version returned the raw context objects, so a caller holding the
+    // snapshot could silently see later mutations (setVariable, addFile, …).
+    const contexts = {};
+    for (const [id, ctx] of this.contexts) {
+      contexts[id] = cloneEntity(ctx);
+    }
+    const runContextMap = {};
+    for (const [runId, ctxId] of this.runContextMap) {
+      runContextMap[runId] = ctxId;
+    }
+    return { contexts, runContextMap };
   }
 
   deserialize(data) {

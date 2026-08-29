@@ -13,6 +13,7 @@
  */
 
 import { RUNTIME_EVENT_TYPES } from './events.js';
+import { cloneEntity } from './clone.js';
 
 // ── Workspace Status ──────────────────────────────────────
 
@@ -150,7 +151,10 @@ function hasRun(workspace, runId) {
  */
 function serializeWorkspace(workspace) {
   if (!workspace) return null;
-  return { ...workspace };
+  // V1.2.3-fix: deep-clone so the snapshot is a detached, frozen copy. The old
+  // version spread the workspace (shallow clone), leaving nested fields like
+  // metadata / runIds / paths as live references into the running Runtime.
+  return cloneEntity(workspace);
 }
 
 /**
