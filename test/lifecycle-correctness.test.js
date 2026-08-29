@@ -787,3 +787,102 @@ test('E2E: task dependencies are synced into the Plan and drive scheduling', asy
   assert.ok(tasks.every(t => t.status === 'completed'), 'both tasks must complete');
   assert.strictEqual(engine.runStore.get('run-deps').status, RUN_STATUS.COMPLETED, 'the run must complete');
 });
+
+// ═══════════════════════════════════════════════════════════
+// Test 18: Snapshot carries Workspace + Context so a real Coding
+//          Skill can execute on the recovered Runtime (P1-1)
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: crash snapshot restores Workspace + Context on a fresh Engine', () => {
+  const engineA = createExecutionEngine();
+  engineA.createRun({ goal: 'snap', runId: 'run-ws' });
+  engineA.addTask('run-ws', { goal: 't' });
+  engineA.startRun('run-ws');
+  const snapshot = engineA.serializeStores();
+
+  assert.ok(snapshot.workspaces, 'snapshot must carry workspaces');
+  assert.ok(Object.keys(snapshot.workspaces).length > 0, 'snapshot must have at least one workspace');
+  assert.ok(snapshot.contexts, 'snapshot must carry contexts');
+
+  // Fresh Engine B — no shared EventStore, no shared Workspace/Context.
+  // The snapshot alone must be enough to restore a usable Runtime.
+  const engineB = createExecutionEngine();
+  const recovery = engineB.recover('run-ws', { snapshot });
+  assert.ok(recovery.success, `recovery should succeed: ${JSON.stringify(recovery)}`);
+  assert.ok(recovery.workspace, 'recovery must restore the Workspace');
+  assert.ok(recovery.context, 'recovery must restore the Context');
+  assert.strictEqual(
+    recovery.workspace.id, engineA.runStore.get('run-ws').workspaceId,
+    'restored workspace must match the run'
+  );
+  assert.strictEqual(
+    recovery.context.runId, 'run-ws',
+    'restored context must belong to the recovered run'
+  );
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 19: dependency is an execution constraint, not just an
+//          ordering hint (P1-2)
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: a failed dependency blocks dependent task execution', async () => {
+  const engine = createExecutionEngine();
+  // Make task A fail by mocking the Skill runtime
+  engine.skillRuntime.executeSkill = async () => ({ success: false, reason: 'A failed' });
+
+  engine.createRun({ goal: 'deps block', runId: 'run-db' });
+  engine.addTask('run-db', { id: 'A', goal: 'task A', skillId: 'code-review' });
+  engine.addTask('run-db', { id: 'B', goal: 'task B', dependencies: ['A'] });
+  engine.startRun('run-db');
+
+  const result = await engine.executeRun('run-db');
+  assert.ok(!result.success, 'the run must fail when a dependency fails');
+  assert.strictEqual(engine.taskStore.get('A').status, 'failed', 'A must be FAILED');
+  assert.strictEqual(
+    engine.taskStore.get('B').status, 'pending',
+    'B must NOT execute when its dependency A failed'
+  );
+  assert.ok(
+    result.reason?.includes('blocked') || result.reason?.includes('failed'),
+    `reason should mention the block: ${result.reason}`
+  );
+});
+
+test('E2E: a completed dependency allows the dependent task to execute', async () => {
+  const engine = createExecutionEngine();
+  engine.skillRuntime.executeSkill = async () => ({ success: true, result: {} });
+
+  engine.createRun({ goal: 'deps ok', runId: 'run-dk' });
+  engine.addTask('run-dk', { id: 'A', goal: 'task A', skillId: 'code-review' });
+  engine.addTask('run-dk', { id: 'B', goal: 'task B', dependencies: ['A'] });
+  engine.startRun('run-dk');
+
+  const result = await engine.executeRun('run-dk');
+  assert.ok(result.success, 'the run must succeed when dependencies are satisfied');
+  assert.strictEqual(engine.taskStore.get('A').status, 'completed', 'A must complete');
+  assert.strictEqual(engine.taskStore.get('B').status, 'completed', 'B must complete after A');
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 20: getRecoveryPlan accepts the same options as recover()
+//          so the snapshot path is reachable from here too (P2)
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: getRecoveryPlan(runId, { snapshot }) restores the full Runtime', () => {
+  const emitterA = new RuntimeEventEmitter();
+  const storeA = createEventStore();
+  emitterA.setStore(storeA);
+  const engineA = createExecutionEngine({ emitter: emitterA, eventStore: storeA });
+  engineA.createRun({ goal: 'plan', runId: 'run-gp' });
+  engineA.addTask('run-gp', { goal: 't' });
+  engineA.startRun('run-gp');
+  const snapshot = engineA.serializeStores();
+
+  const engineB = createExecutionEngine({ emitter: emitterA, eventStore: storeA });
+  const plan = engineB.getRecoveryPlan('run-gp', { snapshot });
+  assert.ok(plan.success, `getRecoveryPlan with snapshot should succeed: ${JSON.stringify(plan)}`);
+  assert.ok(plan.recovery, 'getRecoveryPlan must return the recovery result');
+  assert.ok(plan.recovery.plan, 'the recovery must have restored the Plan');
+  assert.ok(plan.plan.length > 0, 'the recovery plan must have actions');
+});

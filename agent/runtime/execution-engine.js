@@ -18,6 +18,7 @@ import { RUNTIME_EVENT_TYPES, RuntimeEventEmitter } from './events.js';
 import {
   PLAN_STATUS,
   getExecutionOrder,
+  canTaskExecute,
 } from './plan.js';
 import {
   createTask,
@@ -482,6 +483,22 @@ class ExecutionEngine {
       if (!task) continue;
       if (task.status !== TASK_STATUS.PENDING) continue;
 
+      // V1.2.3-fix: topological order only guarantees A runs before B — it does
+      // not guarantee A SUCCEEDED before B runs. Check dependency satisfaction
+      // explicitly so a missing or failed dependency blocks execution instead of
+      // letting B run against a half-baked predecessor.
+      const taskStatusMap = new Map(
+        this.taskStore.listByRun(runId).map(t => [t.id, t.status])
+      );
+      const { canExecute, blockedBy } = canTaskExecute(plan, taskId, taskStatusMap);
+      if (!canExecute) {
+        return {
+          success: false,
+          results,
+          reason: `Task ${taskId} blocked by dependencies: ${blockedBy.map(b => `${b.taskId}=${b.status}`).join(', ')}`,
+        };
+      }
+
       const result = await this.executeTask(taskId, {});
       results.push({ taskId, ...result });
 
@@ -521,18 +538,26 @@ class ExecutionEngine {
    * fields that event-based reconstruction silently drops.
    */
   serializeStores() {
-    return {
+    const snapshot = {
       runs: this.runStore.serialize(),
       plans: this.planStore.serialize(),
       tasks: this.taskStore.serialize(),
     };
+    // V1.2.3-fix: a real Coding Skill reads workspace.rootPath / active files
+    // and context.variables during execution. Without restoring Workspace +
+    // Context, a recovered Runtime can execute tasks in the dark — the
+    // TaskExecutor gets null for both. WorkspaceStore and ContextManager already
+    // have serialize()/restore(), so include them in the snapshot.
+    if (this.workspaceStore) snapshot.workspaces = this.workspaceStore.serialize();
+    if (this.contextMgr) snapshot.contexts = this.contextMgr.serialize();
+    return snapshot;
   }
 
   /**
    * V1.2.2: Get recovery plan.
    */
-  getRecoveryPlan(runId) {
-    return this.recoveryMgr.getRecoveryPlan(runId);
+  getRecoveryPlan(runId, options = {}) {
+    return this.recoveryMgr.getRecoveryPlan(runId, options);
   }
 
   /**

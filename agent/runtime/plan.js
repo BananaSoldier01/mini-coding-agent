@@ -307,12 +307,17 @@ function getExecutionOrder(plan) {
 
   const taskIds = plan.tasks.map(t => t.id);
   const visited = new Set();
+  const recStack = new Set();
   const order = [];
 
-  // Topological sort
+  // Topological sort with cycle detection
   function visit(taskId) {
+    if (recStack.has(taskId)) {
+      throw new Error(`Circular dependency detected involving task ${taskId}`);
+    }
     if (visited.has(taskId)) return;
     visited.add(taskId);
+    recStack.add(taskId);
 
     // Visit dependencies first
     const deps = plan.dependencies.filter(d => d.to === taskId);
@@ -322,6 +327,7 @@ function getExecutionOrder(plan) {
       }
     }
 
+    recStack.delete(taskId);
     order.push(taskId);
   }
 
