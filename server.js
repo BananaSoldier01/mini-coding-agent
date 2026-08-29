@@ -258,7 +258,15 @@ const server = http.createServer(async (req, resp) => {
       if (!session) return sendError(resp, 404, '会话不存在');
       return sendJson(resp, {
         sessionId: session.id,
-        runs: session.lastRunObservation ? [session.lastRunObservation] : [],
+        runs: (session.runObservations || []).map(o => ({
+          runId: o.runId,
+          status: o.status,
+          startedAt: o.startedAt,
+          completedAt: o.completedAt,
+          hasChanges: !!(o.changes && o.changes.files && o.changes.files.length > 0),
+          commandCount: (o.commands || []).length,
+          timelineCount: (o.timeline || []).length,
+        })),
       });
     }
 
@@ -328,10 +336,10 @@ const server = http.createServer(async (req, resp) => {
           sourceRange: { start: 0, end: 0 },
         },
         planState: session.planState || null,
-        // V1.3.0: Restore the last Run's Coding Workspace state so the user
-        // can pick up where they left off without losing Activity / Changes /
-        // Terminal / Summary context.
-        lastRunObservation: session.lastRunObservation || null,
+        // V1.3.0: Restore Run observations so the user can pick up where they
+        // left off without losing Activity / Changes / Terminal / Summary.
+        // V1.3.0-fix: return the full array, not just the last one.
+        runObservations: session.runObservations || [],
       });
     }
 
@@ -488,9 +496,12 @@ const server = http.createServer(async (req, resp) => {
             break;
           case 'command_result':
             runObservation.commands.push({
+              toolCallId: event.toolCallId,
               command: event.command,
               exitCode: event.exitCode,
               duration: event.duration,
+              stdout: event.stdout,
+              stderr: event.stderr,
               stopped: event.stopped,
               timedOut: event.timedOut,
               terminationReason: event.terminationReason,
@@ -580,6 +591,7 @@ const server = http.createServer(async (req, resp) => {
       } catch (err) {
         console.error('[server] runAgent error:', err.message);
         console.error('[server] runAgent stack:', err.stack);
+        runObservation.error = err.message;
         if (activeRun.isStopped()) {
           sendRunEvent({ type: 'error', message: '任务被用户取消' });
         } else {
@@ -589,9 +601,25 @@ const server = http.createServer(async (req, resp) => {
         // V1.3.0: Save Run observation to Session so it survives restart /
         // session switch. The frontend already renders this in real-time;
         // this makes it durable.
+        // V1.3.0-fix: push into the runObservations array so a Session can
+        // hold multiple Runs. The old code overwrote lastRunObservation, so
+        // Run A's data was silently replaced by Run B.
         runObservation.completedAt = Date.now();
-        runObservation.status = activeRun.stopped ? 'stopped' : 'completed';
-        session.lastRunObservation = runObservation;
+        // V1.3.0-fix: distinguish failed runs. The old code always set
+        // 'completed' even when runAgent threw — a failed run's observation
+        // would claim success.
+        if (activeRun.stopped) {
+          runObservation.status = 'stopped';
+        } else if (runObservation.error) {
+          runObservation.status = 'failed';
+        } else {
+          runObservation.status = 'completed';
+        }
+        session.runObservations.push(runObservation);
+        // Cap at 20 to bound memory
+        if (session.runObservations.length > 20) {
+          session.runObservations = session.runObservations.slice(-20);
+        }
         runManager.remove(session.id, activeRun);
         resp.end();
       }
@@ -604,8 +632,9 @@ const server = http.createServer(async (req, resp) => {
       if (!runId) return sendError(resp, 400, '缺少 runId 参数');
       // Search all sessions for this runId's observation
       for (const s of sessionManager.sessions.values()) {
-        if (s.lastRunObservation && s.lastRunObservation.runId === runId) {
-          return sendJson(resp, { ok: true, observation: s.lastRunObservation });
+        const obs = (s.runObservations || []).find(o => o.runId === runId);
+        if (obs) {
+          return sendJson(resp, { ok: true, observation: obs });
         }
       }
       return sendError(resp, 404, `Run ${runId} 的 observation 数据不存在`);

@@ -375,44 +375,6 @@ async function switchSession(sessionId) {
     state.fvContent = null;
     state.fvDiff = null;
 
-    // V1.3.0: Restore the last Run's Coding Workspace state if available.
-    // This closes the gap where switching sessions lost all observation data
-    // (Activity / Changes / Terminal / Summary) — only chat messages were kept.
-    if (data.lastRunObservation) {
-      const obs = data.lastRunObservation;
-      state.timeline = obs.timeline || [];
-      state.changes = (obs.changes && obs.changes.files) ? obs.changes.files.map(f => ({
-        path: f.path,
-        type: f.type,
-        added: f.added || 0,
-        removed: f.removed || 0,
-        diff: f.diff || [],
-        before: f.before || '',
-        after: f.after || '',
-      })) : [];
-      state.commands = obs.commands || [];
-      state.approvals = obs.approvals || { approved: 0, rejected: 0 };
-      state.artifacts = obs.artifacts || [];
-      state.activeRunId = obs.runId;
-      if (obs.changes && obs.changes.files && obs.changes.files.length > 0) {
-        renderNetDiff(obs.changes);
-      }
-      renderTimeline();
-      // Rebuild terminal command cards from saved commands
-      const terminalBody = $('#terminalBody');
-      terminalBody.innerHTML = '';
-      for (const cmd of state.commands) {
-        terminalWrite(cmd.command, {
-          exitCode: cmd.exitCode,
-          duration: cmd.duration,
-          stopped: cmd.stopped,
-          timedOut: cmd.timedOut,
-          stdout: cmd.stdout,
-          stderr: cmd.stderr,
-        });
-      }
-    }
-
     // P0-5.0.3: 恢复 Session-scoped Context State
     if (data.contextState) {
       state.context = {
@@ -436,11 +398,53 @@ async function switchSession(sessionId) {
     // P0-5.1.1: 恢复 Plan State
     state.plan = data.planState || null;
 
+    // V1.3.0-fix: Clear UI containers BEFORE restoring observation data.
+    // The old code restored timeline/changes/terminal, then unconditionally
+    // cleared them again below — the session round-trip restore was dead.
     $('#timeline').innerHTML = '';
     $('#completionSummary').style.display = 'none';
     $('#diffPanel').innerHTML = '<div class="diff-empty">文件修改将在此显示</div>';
     $('#fvBody').innerHTML = '<div class="fv-empty">选择一个文件或修改来查看</div>';
     $('#terminalBody').innerHTML = '';
+
+    // V1.3.0: Restore the most recent Run's Coding Workspace state if available.
+    // V1.3.0-fix: use the runObservations array (latest first), not a single
+    // lastRunObservation — this lets a Session hold multiple Runs.
+    const observations = data.runObservations || [];
+    if (observations.length > 0) {
+      const obs = observations[observations.length - 1]; // latest
+      state.timeline = obs.timeline || [];
+      state.changes = (obs.changes && obs.changes.files) ? obs.changes.files.map(f => ({
+        path: f.path,
+        type: f.type,
+        added: f.added || 0,
+        removed: f.removed || 0,
+        diff: f.diff || [],
+        before: f.before || '',
+        after: f.after || '',
+      })) : [];
+      state.commands = obs.commands || [];
+      state.approvals = obs.approvals || { approved: 0, rejected: 0 };
+      state.activeRunId = obs.runId;
+      if (obs.changes && obs.changes.files && obs.changes.files.length > 0) {
+        renderNetDiff(obs.changes);
+      }
+      renderTimeline();
+      // Rebuild terminal command cards from saved commands
+      const terminalBody = $('#terminalBody');
+      terminalBody.innerHTML = '';
+      for (const cmd of state.commands) {
+        terminalWrite(cmd.command, {
+          exitCode: cmd.exitCode,
+          duration: cmd.duration,
+          stopped: cmd.stopped,
+          timedOut: cmd.timedOut,
+          stdout: cmd.stdout,
+          stderr: cmd.stderr,
+          toolCallId: cmd.toolCallId,
+        });
+      }
+    }
   } catch (err) {
     appendSystemMessage('❌ 切换 Session 失败: ' + err.message);
   }
@@ -1375,9 +1379,12 @@ function handleEvent(event) {
       break;
     case 'command_result':
       state.commands.push({
+        toolCallId: event.toolCallId,
         command: event.command,
         exitCode: event.exitCode,
         duration: event.duration,
+        stdout: event.stdout,
+        stderr: event.stderr,
         stopped: event.stopped,
         timedOut: event.timedOut,
         terminationReason: event.terminationReason,
@@ -1963,15 +1970,10 @@ function renderCompletionSummary(result) {
     html += '</div>';
   }
 
-  // V1.3.0: Artifact section — patches, reports, test results from the Run
-  if (state.artifacts && state.artifacts.length > 0) {
-    html += '<div class="cs-section"><span class="cs-label">Artifacts</span>';
-    for (const art of state.artifacts) {
-      const typeLabel = art.type === 'patch' ? '🔧 Patch' : art.type === 'report' ? '📋 Report' : art.type === 'test_result' ? '🧪 Test' : '📄 ' + (art.type || 'Artifact');
-      html += `<div class="cs-artifact">${typeLabel}: ${escapeHtml(art.name || art.id || '')}</div>`;
-    }
-    html += '</div>';
-  }
+  // V1.3.0-fix: Artifact section removed — the Runtime ArtifactStore is not
+  // yet wired into the agent execution path, so there is no real artifact
+  // data to project. Showing an empty section would falsely imply
+  // productization. Will be re-added when artifact_created events fire.
 
   // V1.3.0: Warnings / Failed Steps — anything that didn't go smoothly
   const failedCommands = state.commands.filter(c => c.exitCode !== null && c.exitCode !== 0);
