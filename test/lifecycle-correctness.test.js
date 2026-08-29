@@ -631,3 +631,159 @@ test('E2E: crash recovery preserves the task Skill binding and actually executes
   const after = engineB.taskStore.listByRun('run-skill')[0];
   assert.strictEqual(after.status, 'completed', 'recovered task should complete after real skill execution');
 });
+
+// ═══════════════════════════════════════════════════════════
+// Test 14: duplicate runId must NOT pollute the existing Run's
+//          Workspace / Context (P0-1 second review)
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: duplicate runId returns failure without corrupting Workspace/Context', () => {
+  const engine = createExecutionEngine();
+  const first = engine.createRun({ goal: 'first', runId: 'run-dup' });
+  assert.ok(first.success, 'first create should succeed');
+  const wsId = first.workspace?.id;
+  const ctxId = engine.contextMgr.getByRun('run-dup')?.id;
+  assert.ok(wsId, 'first create should produce a workspace');
+  assert.ok(ctxId, 'first create should produce a context');
+
+  // A second create with the same runId must fail BEFORE creating any side
+  // effect — no orphan workspace, no overwritten context mapping.
+  const second = engine.createRun({ goal: 'second', runId: 'run-dup' });
+  assert.ok(!second.success, 'duplicate runId must be reported as failure');
+  assert.strictEqual(second.workspace, null, 'duplicate must not create an orphan workspace');
+  assert.strictEqual(
+    engine.contextMgr.getByRun('run-dup')?.id, ctxId,
+    'duplicate must not overwrite the existing context mapping'
+  );
+  assert.strictEqual(
+    engine.runStore.get('run-dup').workspaceId, wsId,
+    'the existing run must still point to its original workspace'
+  );
+  assert.strictEqual(
+    engine.eventStore.getEventsByRun('run-dup').filter(e => e.type === 'run_created').length, 1,
+    'the failed duplicate must not emit run_created'
+  );
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 15: crash recovery restores the Plan and the full Runtime
+//          can return to normal execution (P0-2 second review)
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: recovery restores the Plan and executeRun completes the run afterwards', async () => {
+  // Phase 1: engine A produces a crash-point state
+  const emitterA = new RuntimeEventEmitter();
+  const storeA = createEventStore();
+  emitterA.setStore(storeA);
+  const engineA = createExecutionEngine({ emitter: emitterA, eventStore: storeA });
+  engineA.createRun({ goal: 'plan recovery', runId: 'run-pr' });
+  engineA.addTask('run-pr', { goal: 't1' });
+  engineA.startRun('run-pr');
+  const taskA = engineA.taskStore.listByRun('run-pr')[0];
+  engineA.transitionMgr.transitionTask(
+    taskA.id, 'pending', 'running',
+    { runId: 'run-pr', workspaceId: taskA.runId, taskId: taskA.id }
+  );
+
+  // Persist the full Stores as a crash snapshot
+  const snapshot = engineA.serializeStores();
+  assert.ok(Object.keys(snapshot.plans).length === 1, 'snapshot must carry the Plan');
+
+  // Phase 2: FRESH engine B restores from the snapshot
+  const engineB = createExecutionEngine({ emitter: emitterA, eventStore: storeA });
+  const recovery = engineB.recover('run-pr', { snapshot });
+  assert.ok(recovery.success, `recovery should succeed: ${JSON.stringify(recovery)}`);
+  assert.ok(recovery.plan, 'recovery must restore the Plan');
+  assert.strictEqual(
+    recovery.plan.id, engineA.runStore.get('run-pr').planId,
+    'restored plan id must match the original'
+  );
+  assert.strictEqual(
+    engineB.runStore.get('run-pr').planId, engineA.runStore.get('run-pr').planId,
+    'the run must point at the restored plan'
+  );
+  assert.ok(
+    engineB.planStore.get(engineB.runStore.get('run-pr').planId),
+    'executeRun() must be able to resolve the plan'
+  );
+
+  // Resume execution, then drive the normal executeRun path
+  await engineB.resumeAfterCrash('run-pr', { snapshot });
+  assert.strictEqual(
+    engineB.taskStore.listByRun('run-pr')[0].status, 'completed',
+    'recovered task should complete after resume'
+  );
+  await engineB.executeRun('run-pr');
+  assert.strictEqual(
+    engineB.runStore.get('run-pr').status, RUN_STATUS.COMPLETED,
+    'the run must complete after executeRun'
+  );
+  assert.strictEqual(
+    engineB.planStore.get(engineB.runStore.get('run-pr').planId).status, 'completed',
+    'the plan must complete after executeRun'
+  );
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 16: Run/Plan compound lifecycle must be atomic — a failed
+//          Run transition must NOT leave the Plan mutated (P1-1)
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: completeRun on a PAUSED run fails without forking the Plan', () => {
+  const engine = createExecutionEngine();
+  engine.createRun({ goal: 'pa', runId: 'run-pa' });
+  engine.addTask('run-pa', { goal: 't' });
+  engine.startRun('run-pa');
+  engine.pauseRun('run-pa');
+  assert.strictEqual(engine.runStore.get('run-pa').status, RUN_STATUS.PAUSED);
+
+  const planId = engine.runStore.get('run-pa').planId;
+  const planStatusBefore = engine.planStore.get(planId).status;
+
+  const result = engine.completeRun('run-pa');
+  assert.ok(!result.success, 'completeRun on a PAUSED run must fail');
+  assert.strictEqual(
+    engine.planStore.get(planId).status, planStatusBefore,
+    'the Plan must NOT be mutated when the Run transition fails (no fork)'
+  );
+  assert.strictEqual(engine.runStore.get('run-pa').status, RUN_STATUS.PAUSED, 'the run must stay PAUSED');
+});
+
+test('E2E: failRun on a PAUSED run now succeeds (paused→failed added to the table)', () => {
+  const engine = createExecutionEngine();
+  engine.createRun({ goal: 'fp', runId: 'run-fp' });
+  engine.addTask('run-fp', { goal: 't' });
+  engine.startRun('run-fp');
+  engine.pauseRun('run-fp');
+  assert.strictEqual(engine.runStore.get('run-fp').status, RUN_STATUS.PAUSED);
+
+  const planId = engine.runStore.get('run-fp').planId;
+
+  const result = engine.failRun('run-fp', new Error('boom'));
+  assert.ok(result.success, 'failRun on a PAUSED run must succeed');
+  assert.strictEqual(engine.runStore.get('run-fp').status, RUN_STATUS.FAILED, 'the run must be FAILED');
+  assert.strictEqual(engine.planStore.get(planId).status, 'failed', 'the plan must also be FAILED');
+});
+
+// ═══════════════════════════════════════════════════════════
+// Test 17: task dependencies must drive scheduling order (P1-2)
+// ═══════════════════════════════════════════════════════════
+
+test('E2E: task dependencies are synced into the Plan and drive scheduling', async () => {
+  const engine = createExecutionEngine();
+  engine.createRun({ goal: 'deps', runId: 'run-deps' });
+  engine.addTask('run-deps', { id: 'A', goal: 'task A' });
+  engine.addTask('run-deps', { id: 'B', goal: 'task B', dependencies: ['A'] });
+  engine.startRun('run-deps');
+
+  const plan = engine.planStore.get(engine.runStore.get('run-deps').planId);
+  assert.ok(
+    plan.dependencies.some(d => d.from === 'A' && d.to === 'B'),
+    'the Plan must carry the task dependency A→B so getExecutionOrder() can respect it'
+  );
+
+  await engine.executeRun('run-deps');
+  const tasks = engine.taskStore.listByRun('run-deps');
+  assert.ok(tasks.every(t => t.status === 'completed'), 'both tasks must complete');
+  assert.strictEqual(engine.runStore.get('run-deps').status, RUN_STATUS.COMPLETED, 'the run must complete');
+});

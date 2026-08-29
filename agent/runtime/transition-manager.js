@@ -46,7 +46,11 @@ class TransitionManager {
       run: {
         created: ['started', 'cancelled'],
         started: ['paused', 'completed', 'failed', 'cancelled'],
-        paused: ['started', 'cancelled'],
+        // V1.2.3-fix: RunManager.fail() documents "STARTED/PAUSED → FAILED",
+        // but the table only allowed paused → started/cancelled. A PAUSED run
+        // could therefore never be failed — failRun() would fork the Plan to
+        // FAILED while the Run stayed PAUSED. Allow the documented transition.
+        paused: ['started', 'failed', 'cancelled'],
         completed: [],
         failed: [],
         cancelled: [],
@@ -220,6 +224,7 @@ class TransitionManager {
         'paused→started': 'run_resumed',
         'started→completed': 'run_completed',
         'started→failed': 'run_failed',
+        'paused→failed': 'run_failed',
         'started→cancelled': 'run_cancelled',
         'paused→cancelled': 'run_cancelled',
       },

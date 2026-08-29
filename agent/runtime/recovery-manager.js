@@ -14,9 +14,8 @@
  */
 
 import { TransitionManager, createTransitionManager } from './transition-manager.js';
-import {
-  TASK_STATUS,
-} from './task.js';
+import { TASK_STATUS } from './task.js';
+import { getExecutionOrder } from './plan.js';
 
 class RecoveryManager {
   constructor(options = {}) {
@@ -41,7 +40,7 @@ class RecoveryManager {
    * V1.2.1: Full recovery after runtime crash.
    * Restores Run, Workspace, Context, and validates Task states.
    */
-  recover(runId) {
+  recover(runId, options = {}) {
     if (!this.eventStore) {
       return { success: false, reason: 'No event store for recovery' };
     }
@@ -51,6 +50,61 @@ class RecoveryManager {
       return { success: false, reason: `No events found for run ${runId}` };
     }
 
+    // V1.2.3-fix: restore the actual Stores from a crash snapshot when one is
+    // supplied. The previous code reconstructed Run + Task entities from sparse
+    // events and never restored the Plan — so executeRun() could not find the
+    // plan and the Plan lifecycle could not complete. EventStore is now used
+    // ONLY for crash-point detection, not entity reconstruction.
+    if (options.snapshot) {
+      return this._recoverFromSnapshot(runId, events, options.snapshot);
+    }
+
+    // Fallback: event-based reconstruction (legacy path, no snapshot available)
+    return this._recoverFromEvents(runId, events);
+  }
+
+  /**
+   * V1.2.3: Restore the full Stores from a crash snapshot.
+   *
+   * The snapshot carries the serialized RunStore / PlanStore / TaskStore, so
+   * every field that event reconstruction would silently drop — the Plan, task
+   * Skill bindings, task dependencies, plan dependencies — survives the crash.
+   * EventStore is used ONLY to find the crash point (which tasks were RUNNING
+   * or FAILED), never to rebuild entities.
+   */
+  _recoverFromSnapshot(runId, events, snapshot) {
+    if (this.runStore && snapshot.runs) this.runStore.restore(snapshot.runs);
+    if (this.planStore && snapshot.plans) this.planStore.restore(snapshot.plans);
+    if (this.taskStore && snapshot.tasks) this.taskStore.restore(snapshot.tasks);
+
+    const run = this.runStore.get(runId);
+    if (!run) {
+      return { success: false, reason: `Run ${runId} not in snapshot` };
+    }
+
+    // EventStore is used ONLY for crash-point detection: which tasks were
+    // RUNNING or FAILED when the crash happened. The task entities themselves
+    // come from the restored Store, not from events.
+    const unfinishedTasks = this._findUnfinishedTasks(runId, events);
+    const taskPlan = this._categorizeTasks(unfinishedTasks);
+
+    return {
+      success: true,
+      restored: true,
+      run,
+      plan: run.planId ? this.planStore.get(run.planId) : null,
+      workspace: null,
+      context: null,
+      taskPlan,
+      recoveredAt: Date.now(),
+    };
+  }
+
+  /**
+   * V1.2.3: Event-based reconstruction (legacy fallback when no snapshot).
+   * Kept for backward compatibility; prefer _recoverFromSnapshot.
+   */
+  _recoverFromEvents(runId, events) {
     // Step 1: Reconstruct Run state from events
     const run = this._reconstructRun(runId, events);
     if (!run) {
@@ -297,8 +351,8 @@ class RecoveryManager {
    * Uses TaskExecutor directly — no dependency on entire ExecutionEngine.
    * Mutates Store state before resuming execution.
    */
-  async resumeAfterCrash(runId) {
-    const recovery = this.recover(runId);
+  async resumeAfterCrash(runId, options = {}) {
+    const recovery = this.recover(runId, options);
     if (!recovery.success) return recovery;
 
     const actions = [];
@@ -342,11 +396,20 @@ class RecoveryManager {
 
     // ── V1.2.3: Execute through TaskExecutor if available ──
     if (this.taskExecutor) {
+      // V1.2.3-fix: order execution by the restored Plan's dependency graph.
+      // The old code iterated the categorised arrays in fixed order (running,
+      // failed, pending) and ignored task dependencies entirely — a task whose
+      // dependency had not yet completed could be executed out of order.
+      const plan = recovery.plan || null;
+      const order = plan ? getExecutionOrder(plan) : [];
+      const orderIndex = new Map(order.map((id, i) => [id, i]));
+
       const allTasks = [
         ...recovery.taskPlan.running,
         ...recovery.taskPlan.failed,
         ...recovery.taskPlan.pending,
       ];
+      allTasks.sort((a, b) => (orderIndex.get(a.id) ?? Infinity) - (orderIndex.get(b.id) ?? Infinity));
 
       for (const task of allTasks) {
         // Re-read from Store to get updated state

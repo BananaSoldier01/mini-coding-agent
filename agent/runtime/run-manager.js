@@ -43,6 +43,10 @@ class RunManager {
     // V1.2.3 fix: planStore was referenced in start() but never assigned,
     // so the plan-persistence block was silently dead. Wire it explicitly.
     this.planStore = options.planStore || null;
+    // V1.2.3-fix: start() reads task dependencies from the TaskStore to seed
+    // the plan's dependency graph. Wire it explicitly — it was missing, so the
+    // block was silently skipped and plan.dependencies stayed empty.
+    this.taskStore = options.taskStore || null;
   }
 
   // ── Lifecycle ──────────────────────────────────────────
@@ -55,6 +59,20 @@ class RunManager {
   create(config = {}) {
     const runId = config.runId || `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const goal = config.goal || 'Untitled Run';
+
+    // V1.2.3-fix: reject a duplicate runId BEFORE creating any side effect.
+    // The previous order built a new Workspace and overwrote the
+    // ContextManager's runId mapping, then discovered the duplicate at the
+    // RunStore level — leaving an orphan Workspace and a corrupted Context
+    // mapping on a request the caller was told failed.
+    if (this.runStore && this.runStore.has(runId)) {
+      return {
+        success: false,
+        run: null,
+        workspace: null,
+        reason: `Run ${runId} already exists`,
+      };
+    }
 
     // Create workspace via workspaceStore
     let workspace = null;
@@ -147,9 +165,26 @@ class RunManager {
     }
 
     // Create plan
+    // V1.2.3-fix: pull each task's dependencies from the TaskStore into the
+    // plan's dependency graph. getExecutionOrder() reads plan.dependencies, so
+    // without this the scheduler would ignore task-level dependencies.
+    const planDependencies = [];
+    if (this.taskStore) {
+      for (const taskId of run.taskIds) {
+        const task = this.taskStore.get(taskId);
+        if (task && Array.isArray(task.dependencies)) {
+          for (const depId of task.dependencies) {
+            if (!planDependencies.some(d => d.from === depId && d.to === taskId)) {
+              planDependencies.push({ from: depId, to: taskId });
+            }
+          }
+        }
+      }
+    }
     const plan = createPlan(run.id, run.goal, {
       // V1.2.3 fix: getExecutionOrder() reads task.id, not task.taskId.
       tasks: run.taskIds.map(id => ({ id })),
+      dependencies: planDependencies,
     });
     run.planId = plan.id;
 

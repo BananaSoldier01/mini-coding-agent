@@ -173,6 +173,7 @@ class ExecutionEngine {
       planStore: this.planStore,
       workspaceStore: this.workspaceStore,
       contextMgr: this.contextMgr,
+      taskStore: this.taskStore,
     });
     this.taskExecutor = options.taskExecutor || createTaskExecutor({
       emitter: this.emitter,
@@ -261,26 +262,36 @@ class ExecutionEngine {
     const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
 
-    // V1.2.3-fix: drive the Plan lifecycle through TransitionManager.
-    // The old code checked plan.status === EXECUTING then called completePlan(),
-    // but completePlan() requires VERIFYING — so the plan could never complete.
-    // Transition owns the plan transitions now: EXECUTING → VERIFYING → COMPLETED.
+    // V1.2.3-fix: validate BOTH transitions before mutating EITHER. The old code
+    // transitioned the Plan first, then the Run — if the Run transition failed
+    // (e.g. Run was PAUSED), the Plan was already mutated into COMPLETED, leaving
+    // Run=PAUSED / Plan=COMPLETED (a fork). Check both preconditions, then mutate.
+    if (run.status !== RUN_STATUS.STARTED) {
+      return { success: false, reason: `Cannot complete run in status: ${run.status}` };
+    }
+
+    let plan = null;
     if (run.planId) {
-      const plan = this.planStore.get(run.planId);
-      if (plan) {
-        if (plan.status === PLAN_STATUS.EXECUTING) {
-          this.transitionMgr.transitionPlan(
-            run.planId, PLAN_STATUS.EXECUTING, PLAN_STATUS.VERIFYING,
-            { runId, workspaceId: run.workspaceId }
-          );
-        }
-        const afterVerify = this.planStore.get(run.planId);
-        if (afterVerify && afterVerify.status === PLAN_STATUS.VERIFYING) {
-          this.transitionMgr.transitionPlan(
-            run.planId, PLAN_STATUS.VERIFYING, PLAN_STATUS.COMPLETED,
-            { runId, workspaceId: run.workspaceId }
-          );
-        }
+      plan = this.planStore.get(run.planId);
+      if (plan && plan.status !== PLAN_STATUS.EXECUTING && plan.status !== PLAN_STATUS.VERIFYING) {
+        return { success: false, reason: `Cannot complete plan in status: ${plan.status}` };
+      }
+    }
+
+    // Both valid — mutate Plan first, then Run
+    if (plan) {
+      if (plan.status === PLAN_STATUS.EXECUTING) {
+        this.transitionMgr.transitionPlan(
+          run.planId, PLAN_STATUS.EXECUTING, PLAN_STATUS.VERIFYING,
+          { runId, workspaceId: run.workspaceId }
+        );
+      }
+      const afterVerify = this.planStore.get(run.planId);
+      if (afterVerify && afterVerify.status === PLAN_STATUS.VERIFYING) {
+        this.transitionMgr.transitionPlan(
+          run.planId, PLAN_STATUS.VERIFYING, PLAN_STATUS.COMPLETED,
+          { runId, workspaceId: run.workspaceId }
+        );
       }
     }
 
@@ -297,16 +308,28 @@ class ExecutionEngine {
     const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
 
-    // V1.2.3-fix: fail the Plan through TransitionManager (single ownership),
-    // carrying the error in the transition context so it lands on the entity.
+    // V1.2.3-fix: validate BOTH transitions before mutating EITHER. failRun() used
+    // to fail the Plan first, then the Run — but the run transition table did
+    // not allow paused → failed, so a PAUSED run could never be failed: the
+    // Plan went to FAILED while the Run stayed PAUSED (a fork).
+    if (run.status !== RUN_STATUS.STARTED && run.status !== RUN_STATUS.PAUSED) {
+      return { success: false, reason: `Cannot fail run in status: ${run.status}` };
+    }
+
+    let plan = null;
     if (run.planId) {
-      const plan = this.planStore.get(run.planId);
-      if (plan && plan.status !== PLAN_STATUS.FAILED && plan.status !== PLAN_STATUS.COMPLETED && plan.status !== PLAN_STATUS.CANCELLED) {
-        this.transitionMgr.transitionPlan(
-          run.planId, plan.status, PLAN_STATUS.FAILED,
-          { runId, workspaceId: run.workspaceId, data: { error: error?.message || String(error) } }
-        );
+      plan = this.planStore.get(run.planId);
+      if (plan && (plan.status === PLAN_STATUS.COMPLETED || plan.status === PLAN_STATUS.FAILED || plan.status === PLAN_STATUS.CANCELLED)) {
+        return { success: false, reason: `Cannot fail plan in terminal status: ${plan.status}` };
       }
+    }
+
+    // Both valid — mutate Plan first, then Run
+    if (plan) {
+      this.transitionMgr.transitionPlan(
+        run.planId, plan.status, PLAN_STATUS.FAILED,
+        { runId, workspaceId: run.workspaceId, data: { error: error?.message || String(error) } }
+      );
     }
 
     const result = this.runMgr.fail(run, error);
@@ -322,15 +345,27 @@ class ExecutionEngine {
     const run = this.runStore.get(runId);
     if (!run) return { success: false, reason: `Run ${runId} not found` };
 
-    // V1.2.3-fix: cancel the Plan through TransitionManager (single ownership).
+    // V1.2.3-fix: validate BOTH transitions before mutating EITHER. cancelRun() used
+    // to cancel the Plan first, then the Run — if the Run was already terminal
+    // the Plan was already mutated into CANCELLED (a fork).
+    if (run.status === RUN_STATUS.COMPLETED || run.status === RUN_STATUS.FAILED || run.status === RUN_STATUS.CANCELLED) {
+      return { success: false, reason: `Cannot cancel run in terminal status: ${run.status}` };
+    }
+
+    let plan = null;
     if (run.planId) {
-      const plan = this.planStore.get(run.planId);
-      if (plan && plan.status !== PLAN_STATUS.COMPLETED && plan.status !== PLAN_STATUS.FAILED && plan.status !== PLAN_STATUS.CANCELLED) {
-        this.transitionMgr.transitionPlan(
-          run.planId, plan.status, PLAN_STATUS.CANCELLED,
-          { runId, workspaceId: run.workspaceId }
-        );
+      plan = this.planStore.get(run.planId);
+      if (plan && (plan.status === PLAN_STATUS.COMPLETED || plan.status === PLAN_STATUS.FAILED || plan.status === PLAN_STATUS.CANCELLED)) {
+        return { success: false, reason: `Cannot cancel plan in terminal status: ${plan.status}` };
       }
+    }
+
+    // Both valid — mutate Plan first, then Run
+    if (plan) {
+      this.transitionMgr.transitionPlan(
+        run.planId, plan.status, PLAN_STATUS.CANCELLED,
+        { runId, workspaceId: run.workspaceId }
+      );
     }
 
     const result = this.runMgr.cancel(run);
@@ -371,7 +406,15 @@ class ExecutionEngine {
       const plan = this.planStore.get(run.planId);
       if (plan && !plan.tasks.some(t => t.id === task.id)) {
         plan.tasks.push({ id: task.id });
-        this.planStore.update(run.planId, { tasks: plan.tasks });
+        // V1.2.3-fix: getExecutionOrder() reads plan.dependencies, not
+        // task.dependencies. Sync the task's deps into the plan's dependency
+        // graph so scheduling actually respects them.
+        for (const depId of (task.dependencies || [])) {
+          if (!plan.dependencies.some(d => d.from === depId && d.to === task.id)) {
+            plan.dependencies.push({ from: depId, to: task.id });
+          }
+        }
+        this.planStore.update(run.planId, { tasks: plan.tasks, dependencies: plan.dependencies });
       }
     }
 
@@ -447,8 +490,13 @@ class ExecutionEngine {
       }
     }
 
-    const allComplete = results.every(r => r.success);
-    if (allComplete && results.length > 0) {
+    // V1.2.3-fix: complete the run when every task is done, even if this call
+    // executed nothing (e.g. resumeAfterCrash already completed them). The old
+    // check required results.length > 0, so a run whose tasks were all finished
+    // by recovery stayed STARTED forever.
+    const allTasks = this.taskStore.listByRun(runId);
+    const allComplete = allTasks.length > 0 && allTasks.every(t => t.status === TASK_STATUS.COMPLETED);
+    if (allComplete) {
       this.completeRun(runId);
     }
 
@@ -462,8 +510,22 @@ class ExecutionEngine {
   /**
    * V1.2.2: Full recovery after crash.
    */
-  recover(runId) {
-    return this.recoveryMgr.recover(runId);
+  recover(runId, options = {}) {
+    return this.recoveryMgr.recover(runId, options);
+  }
+
+  /**
+   * V1.2.3: Serialize the Stores for crash persistence.
+   * Returns a snapshot that recover() can restore on a fresh Engine instance,
+   * preserving the Plan, task Skill bindings, and task dependencies — the
+   * fields that event-based reconstruction silently drops.
+   */
+  serializeStores() {
+    return {
+      runs: this.runStore.serialize(),
+      plans: this.planStore.serialize(),
+      tasks: this.taskStore.serialize(),
+    };
   }
 
   /**
@@ -476,8 +538,8 @@ class ExecutionEngine {
   /**
    * V1.2.2: Get recovery plan with execution resumption.
    */
-  async resumeAfterCrash(runId) {
-    return this.recoveryMgr.resumeAfterCrash(runId);
+  async resumeAfterCrash(runId, options = {}) {
+    return this.recoveryMgr.resumeAfterCrash(runId, options);
   }
 
   // ═══════════════════════════════════════════════════════════
