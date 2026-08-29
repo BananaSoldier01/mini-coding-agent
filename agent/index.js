@@ -824,9 +824,12 @@ async function runAgent(opts) {
         if (toolName === 'run_command' && finalResult) {
           emit(onEvent, {
             type: 'command_result',
+            toolCallId: tc.id,
             command: finalResult.command,
             exitCode: finalResult.exitCode,
             duration: finalResult.duration,
+            stdout: finalResult.stdout,
+            stderr: finalResult.stderr,
             stopped: finalResult.stopped,
             timedOut: finalResult.timedOut,
             terminationReason: finalResult.terminationReason,
