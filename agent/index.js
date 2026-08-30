@@ -677,6 +677,11 @@ async function runAgent(opts) {
               edit_file: fileTools.editFile.bind(fileTools),
               search_files: fileTools.searchFiles.bind(fileTools),
               delete_file: fileTools.deleteFile.bind(fileTools),
+              // V1.5.0: Codebase Intelligence tools
+              search_code: codeTools.searchCode.bind(codeTools),
+              find_symbol: codeTools.findSymbol.bind(codeTools),
+              find_refs: codeTools.findRefs.bind(codeTools),
+              codebase_map: codeTools.codebaseMap.bind(codeTools),
             }[toolName];
             if (!method) {
               result = { error: `工具未实现: ${toolName}` };

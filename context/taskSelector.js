@@ -151,45 +151,54 @@ async function preflightContext(opts) {
   const searchLog = [];
   const candidates = []; // { path, score, reason, excerpt? }
   const seen = new Set();
-  let scannedFiles = 0;
-  let scannedBytes = 0;
-  let truncated = false;
+
+  // ── Shared preflight scan budget (P1-1 fix) ──
+  // All search_code / find_symbol / find_refs / codebase_map calls
+  // share ONE budget, not per-call limits.
+  const budget = {
+    maxFiles: LIMITS.maxScannedFiles,
+    maxBytes: LIMITS.maxScannedBytes,
+    usedFiles: 0,
+    usedBytes: 0,
+    exhausted: false,
+  };
 
   // ── Step 1: Extract search terms ──
   const terms = extractSearchTerms(task);
   searchLog.push({ type: 'term_extraction', terms, timestamp: Date.now() });
 
-  // ── Step 2: Search for each term ──
+  // ── Step 2: Search for each term (shared budget) ──
   for (const term of terms) {
-    if (truncated) break;
+    if (budget.exhausted) break;
 
-    // search_code with matchType='all'
     try {
       const result = code.searchCode({ pattern: term, matchType: 'all', maxResults: 20 });
       searchLog.push({
         type: 'search_code',
         query: term,
         resultCount: result.count,
+        scannedFiles: result.scannedFiles,
+        scannedBytes: result.scannedBytes,
         timestamp: Date.now(),
       });
 
-      scannedFiles += 0; // walkWorkspace tracks internally; we approximate here
-      if (result.truncated) truncated = true;
+      // Update shared budget
+      budget.usedFiles += result.scannedFiles || 0;
+      budget.usedBytes += result.scannedBytes || 0;
+      if (budget.usedFiles >= budget.maxFiles || budget.usedBytes >= budget.maxBytes) {
+        budget.exhausted = true;
+      }
 
       for (const r of result.results) {
         if (candidates.length >= LIMITS.maxSearchResults) break;
         if (seen.has(r.path)) continue;
         seen.add(r.path);
 
-        // Compute relevance score
         let score = r.score || 5;
         let reason = `搜索 "${term}" 命中 (${r.matchType})`;
 
-        // Boost: filename match
         if (r.matchType === 'filename') score += 5;
-        // Boost: symbol match
         if (r.matchType === 'symbol') score += 3;
-        // Boost: reference match
         if (r.matchType === 'reference') score += 2;
 
         candidates.push({
@@ -206,30 +215,31 @@ async function preflightContext(opts) {
     }
   }
 
-  // ── Step 3: Also try codebase_map for structure awareness ──
+  // ── Step 3: codebase_map (shared budget) ──
   let projectMap = null;
-  try {
-    projectMap = code.codebaseMap({ depth: 2 });
-    searchLog.push({
-      type: 'codebase_map',
-      importantFiles: projectMap.importantFiles.map(f => f.path),
-      timestamp: Date.now(),
-    });
-
-    // Add importantFiles as candidates with lower score
-    for (const imp of projectMap.importantFiles) {
-      if (candidates.length >= LIMITS.maxSearchResults) break;
-      if (seen.has(imp.path)) continue;
-      seen.add(imp.path);
-      candidates.push({
-        path: imp.path,
-        score: 3,
-        reason: `项目地图标记: ${imp.reasons.join('; ')}`,
-        matchType: 'structure',
+  if (!budget.exhausted) {
+    try {
+      projectMap = code.codebaseMap({ depth: 2 });
+      searchLog.push({
+        type: 'codebase_map',
+        importantFiles: projectMap.importantFiles.map(f => f.path),
+        timestamp: Date.now(),
       });
+
+      for (const imp of projectMap.importantFiles) {
+        if (candidates.length >= LIMITS.maxSearchResults) break;
+        if (seen.has(imp.path)) continue;
+        seen.add(imp.path);
+        candidates.push({
+          path: imp.path,
+          score: 3,
+          reason: `项目地图标记: ${imp.reasons.join('; ')}`,
+          matchType: 'structure',
+        });
+      }
+    } catch (err) {
+      // non-fatal
     }
-  } catch (err) {
-    // non-fatal
   }
 
   // ── Step 4: Sort candidates by score desc, select top-K ──
@@ -245,9 +255,24 @@ async function preflightContext(opts) {
     if (injectedChars >= LIMITS.maxInjectedChars) break;
 
     try {
-      // Read first 40 lines as excerpt
-      const fileData = code.service.readFile(cand.path, { limit: 40 });
-      const excerpt = fileData?.content || cand.excerpt || '';
+      // P1-4 fix: read around the matched line, not always file head.
+      // Candidates from search have a `line`; structure candidates (no line)
+      // fall back to file head.
+      let excerpt;
+      if (cand.line && cand.line > 0) {
+        const startLine = Math.max(1, cand.line - 15);
+        const endLine = cand.line + 25;
+        const rangeData = code.service.readFile(cand.path, {
+          startLine,
+          endLine,
+          limit: 40,
+        });
+        excerpt = rangeData?.content || cand.excerpt || '';
+        excerpt = `…(line ${startLine}-${endLine})…\n${excerpt}`;
+      } else {
+        const fileData = code.service.readFile(cand.path, { limit: 40 });
+        excerpt = fileData?.content || cand.excerpt || '';
+      }
       const excerptChars = Math.min(excerpt.length, 600);
 
       selectedFiles.push({
@@ -256,6 +281,7 @@ async function preflightContext(opts) {
         relevance: cand.score,
         excerpt: excerpt.slice(0, excerptChars),
         matchType: cand.matchType,
+        line: cand.line || null,
       });
 
       const block = `\n── ${cand.path} ──\n${excerpt.slice(0, excerptChars)}\n`;
@@ -282,7 +308,13 @@ async function preflightContext(opts) {
       injectedChars: contextBlock.length,
       candidatesConsidered: candidates.length,
       searchTerms: terms.length,
-      truncated,
+      truncated: budget.exhausted,
+      scanBudget: {
+        usedFiles: budget.usedFiles,
+        usedBytes: budget.usedBytes,
+        maxFiles: budget.maxFiles,
+        maxBytes: budget.maxBytes,
+      },
     },
     timestamp: Date.now(),
   };

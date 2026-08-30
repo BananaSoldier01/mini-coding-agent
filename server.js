@@ -530,6 +530,26 @@ const server = http.createServer(async (req, resp) => {
               runObservation.agentDone = event.result;
             }
             break;
+          // ── V1.5.0: Context Selection persistence ──
+          // P1-3 fix: persist context_selection so Historical Run
+          // (session switch / page reload) still shows the
+          // search → select → rationale trail.
+          case 'context_selection':
+            runObservation.timeline.push({
+              id: 'ctxsel_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+              name: 'context_selection',
+              args: { task: event.task },
+              status: 'done',
+              startTime: event.timestamp || Date.now(),
+              result: {
+                type: 'context_selection',
+                searchLog: event.searchLog || [],
+                candidates: event.candidates || [],
+                selectedFiles: event.selectedFiles || [],
+                metrics: event.metrics || {},
+              },
+            });
+            break;
         }
       };
 

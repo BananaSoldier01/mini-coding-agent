@@ -29,40 +29,42 @@ const MAX_EXCERPT_CHARS = 200;
 const MAX_SIGNATURE_CHARS = 120;
 
 // ── Symbol Detection Patterns (JS/TS heuristic) ──────────
-// Each pattern returns { kind, name, signature, line, confidence }
+// P1-2 fix: ALL patterns capture the symbol name in group 1.
+// Previous code used m[3] || m[2] which was wrong for method (m[1])
+// and could capture 'async' for async const arrows.
 const SYMBOL_PATTERNS = [
   // function declaration: function foo(a, b) {
   {
     name: 'function_decl',
-    re: /^\s*(export\s+)?(async\s+)?function\s+(\w+)/,
+    re: /^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)/,
     kind: 'function',
     confidence: 0.95,
   },
   // class declaration: class Foo extends Bar {
   {
     name: 'class_decl',
-    re: /^\s*(export\s+)?(abstract\s+)?class\s+(\w+)/,
+    re: /^\s*(?:export\s+)?(?:abstract\s+)?class\s+(\w+)/,
     kind: 'class',
     confidence: 0.95,
   },
   // const arrow: const foo = (a, b) => {
   {
     name: 'const_arrow',
-    re: /^\s*(export\s+)?const\s+(\w+)\s*=\s*(async\s+)?\(/,
+    re: /^\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\s*\(/,
     kind: 'variable',
     confidence: 0.85,
   },
   // const function: const foo = function(a, b) {
   {
     name: 'const_function',
-    re: /^\s*(export\s+)?const\s+(\w+)\s*=\s*(async\s+)?function\s*\(/,
+    re: /^\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?function\s*\(/,
     kind: 'variable',
     confidence: 0.85,
   },
   // let/var declaration
   {
     name: 'var_decl',
-    re: /^\s*(export\s+)?(?:let|var)\s+(\w+)/,
+    re: /^\s*(?:export\s+)?(?:let|var)\s+(\w+)/,
     kind: 'variable',
     confidence: 0.7,
   },
@@ -168,7 +170,8 @@ function extractSymbols(content, filePath) {
     for (const pat of SYMBOL_PATTERNS) {
       const m = line.match(pat.re);
       if (m) {
-        const name = m[3] || m[2];
+        // P1-2 fix: all patterns capture name in group 1
+        const name = m[1];
         if (!name) continue;
 
         // Skip method patterns if not in class
@@ -225,8 +228,10 @@ class CodeTools {
     let regex = null;
     let filenamePattern = null;
 
-    // Build regex for text search
-    if (matchType === 'text' || matchType === 'all') {
+    // Build regex for text/symbol search
+    // P1-2 fix: 'symbol' matchType must also build the regex,
+    // otherwise no results are produced (both regex and filenamePattern stay null).
+    if (matchType === 'text' || matchType === 'all' || matchType === 'symbol') {
       try {
         regex = new RegExp(pattern, 'gi');
       } catch (err) {
@@ -240,8 +245,7 @@ class CodeTools {
     }
 
     const root = this.service.sandbox.resolve(searchPath || '.');
-
-    walkWorkspace(this.service, root, (fullPath, relPath, stat) => {
+    const walkStats = walkWorkspace(this.service, root, (fullPath, relPath, stat) => {
       if (results.length >= limit) return false;
 
       const fileName = path.basename(relPath).toLowerCase();
@@ -314,8 +318,9 @@ class CodeTools {
       matchType,
       results,
       count: results.length,
-      truncated: results.length >= limit,
-      scannedFiles: 0, // filled by caller if needed
+      truncated: walkStats.truncated || results.length >= limit,
+      scannedFiles: walkStats.scannedFiles,
+      scannedBytes: walkStats.scannedBytes,
     };
   }
 
@@ -338,7 +343,7 @@ class CodeTools {
     const nameLower = name.toLowerCase();
     const root = this.service.sandbox.resolve(searchPath || '.');
 
-    walkWorkspace(this.service, root, (fullPath, relPath, stat) => {
+    const walkStats = walkWorkspace(this.service, root, (fullPath, relPath, stat) => {
       if (results.length >= limit) return false;
       if (stat.size > 200 * 1024) return true;
 
@@ -367,7 +372,9 @@ class CodeTools {
       kind,
       results,
       count: results.length,
-      truncated: results.length >= limit,
+      truncated: walkStats.truncated || results.length >= limit,
+      scannedFiles: walkStats.scannedFiles,
+      scannedBytes: walkStats.scannedBytes,
       confidence: results.length > 0 ? results[0].confidence : 0,
     };
   }
@@ -394,7 +401,7 @@ class CodeTools {
     const nameRe = new RegExp(`\\b${escaped}\\b`, 'gi');
     const root = this.service.sandbox.resolve(searchPath || '.');
 
-    walkWorkspace(this.service, root, (fullPath, relPath, stat) => {
+    const walkStats = walkWorkspace(this.service, root, (fullPath, relPath, stat) => {
       if (results.length >= limit) return false;
       if (stat.size > 200 * 1024) return true;
       // Skip the definition file itself
@@ -439,7 +446,9 @@ class CodeTools {
       definitionPath,
       results,
       count: results.length,
-      truncated: results.length >= limit,
+      truncated: walkStats.truncated || results.length >= limit,
+      scannedFiles: walkStats.scannedFiles,
+      scannedBytes: walkStats.scannedBytes,
     };
   }
 
@@ -615,10 +624,47 @@ class CodeTools {
 
   /**
    * Count import/require references across workspace files.
+   * P1-5 fix: only count files that ACTUALLY EXIST on disk.
+   * Guessing extensions creates phantom paths (foo.js.ts, foo/index.js, etc.)
    */
   _countImports(excludePaths) {
     const counts = {};
     const root = this.service.sandbox.root;
+
+    const SOURCE_EXTS = ['.js', '.ts', '.mjs', '.cjs', '.jsx', '.tsx'];
+    const INDEX_FILES = ['index.js', 'index.ts', 'index.mjs', 'index.cjs'];
+
+    const resolveImport = (fromDir, ref) => {
+      const normalized = path.normalize(path.join(fromDir, ref));
+      // 1. Try as-is (e.g. './foo.js' already has extension)
+      try {
+        if (fs.existsSync(this.service.sandbox.resolve(normalized))) {
+          return this.service.sandbox.relative(this.service.sandbox.resolve(normalized));
+        }
+      } catch { /* skip */ }
+
+      // 2. Try adding source extensions
+      for (const ext of SOURCE_EXTS) {
+        const candidate = normalized + ext;
+        try {
+          if (fs.existsSync(this.service.sandbox.resolve(candidate))) {
+            return this.service.sandbox.relative(this.service.sandbox.resolve(candidate));
+          }
+        } catch { /* skip */ }
+      }
+
+      // 3. Try as directory with index file
+      for (const indexFile of INDEX_FILES) {
+        const candidate = path.join(normalized, indexFile);
+        try {
+          if (fs.existsSync(this.service.sandbox.resolve(candidate))) {
+            return this.service.sandbox.relative(this.service.sandbox.resolve(candidate));
+          }
+        } catch { /* skip */ }
+      }
+
+      return null;
+    };
 
     walkWorkspace(this.service, root, (fullPath, relPath, stat) => {
       if (stat.size > 200 * 1024) return true;
@@ -630,19 +676,15 @@ class CodeTools {
         return true;
       }
 
-      // Match import/require statements and extract referenced files
       const importRe = /(?:import|require)\s*\(?[^'"]*['"]([^'"]+)['"]/g;
       let m;
+      const fromDir = path.dirname(relPath);
       while ((m = importRe.exec(content)) !== null) {
         const ref = m[1];
-        // Resolve relative imports
         if (ref.startsWith('.')) {
-          const dir = path.dirname(relPath);
-          const resolved = path.normalize(path.join(dir, ref));
-          // Try with extensions
-          for (const ext of ['.js', '.ts', '.mjs', '.cjs', '/index.js', '/index.ts']) {
-            const candidate = resolved + ext;
-            counts[candidate] = (counts[candidate] || 0) + 1;
+          const resolved = resolveImport(fromDir, ref);
+          if (resolved) {
+            counts[resolved] = (counts[resolved] || 0) + 1;
           }
         }
       }

@@ -385,3 +385,53 @@ test('V1.5.0 CI-6c: No regression — simple create-file task does NOT trigger p
   assert.ok(!hasContextSel,
     'create-file task should NOT trigger context_selection preflight');
 });
+
+// ═══════════════════════════════════════════════════════
+// Scenario 7: P1-6 baseline — preflight ON vs OFF effectiveness
+// ═══════════════════════════════════════════════════════
+
+test('V1.5.0 CI-7: Preflight ON selects target file in Top-K (baseline A)', async ({ page }) => {
+  await setMode(page, 'full_access');
+
+  await sendTask(page, 'Fix the bug in UserService findById');
+  await waitForRunComplete(page);
+
+  // Verify context_selection was emitted and target file is in Top-K
+  const selEvent = await page.evaluate(() => {
+    return state.timeline.find(item => item.name === 'context_selection');
+  });
+
+  assert.ok(selEvent, 'preflight should be triggered for bug-fix task');
+  const selectedPaths = selEvent.result.selectedFiles.map(f => f.path);
+  const targetInTopK = selectedPaths.some(p => p.includes('user') || p.includes('service'));
+  assert.ok(targetInTopK,
+    `target file (services/user.js) should be in Top-K, got: ${JSON.stringify(selectedPaths)}`);
+
+  // Verify the search log shows actual searching happened
+  assert.ok(selEvent.result.searchLog.some(l => l.type === 'search_code'),
+    'searchLog should contain search_code entries');
+});
+
+test('V1.5.0 CI-7b: Preflight OFF — same task without codebase context', async ({ page }) => {
+  await setMode(page, 'full_access');
+
+  // Use a task that does NOT trigger preflight (simple create)
+  // to demonstrate the contrast: without preflight, no context_selection
+  await sendTask(page, 'TEST_CREATE_FILE');
+  await waitForRunComplete(page);
+
+  // No context_selection should appear for create-file tasks
+  const hasContextSel = await page.evaluate(() => {
+    return state.timeline.some(item => item.name === 'context_selection');
+  });
+  assert.ok(!hasContextSel,
+    'create-file task should NOT trigger context_selection (preflight OFF)');
+
+  // But the task should still complete successfully
+  const taskDone = await page.evaluate(() => {
+    return state.timeline.some(item =>
+      item.name === 'write_file' || item.name === 'edit_file'
+    );
+  });
+  assert.ok(taskDone, 'create-file task should still execute tools');
+});

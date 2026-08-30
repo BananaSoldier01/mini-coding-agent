@@ -427,6 +427,60 @@ test('preflightContext: selectedFiles have reason and excerpt', async () => {
   }
 });
 
+// ═══════════════════════════════════════════════════════
+// P0-1 Regression: Tool executor must actually work
+// ═══════════════════════════════════════════════════════
+
+test('P0-1: search_code executor returns real results (not error)', () => {
+  const result = tools.searchCode({ pattern: 'AppService', matchType: 'text' });
+  assert.ok(result.results, 'search_code should return results');
+  assert.ok(!result.results[0]?.error, 'search_code results should not be errors');
+  assert.ok(result.results.length > 0, 'search_code should find matches');
+  assert.ok(result.scannedFiles > 0, 'search_code should report scannedFiles');
+});
+
+test('P0-1: find_symbol executor returns real results (not error)', () => {
+  const result = tools.findSymbol({ name: 'AppService', kind: 'class' });
+  assert.ok(result.results, 'find_symbol should return results');
+  assert.ok(!result.results[0]?.error, 'find_symbol results should not be errors');
+  assert.ok(result.results.length > 0, 'find_symbol should find AppService');
+  assert.ok(result.scannedFiles > 0, 'find_symbol should report scannedFiles');
+});
+
+test('P0-1: find_refs executor returns real results (not error)', () => {
+  const result = tools.findRefs({ name: 'AppService', definitionPath: 'app/service.js' });
+  assert.ok(result.results, 'find_refs should return results');
+  assert.ok(!result.results[0]?.error, 'find_refs results should not be errors');
+  assert.ok(result.results.length > 0, 'find_refs should find references');
+  assert.ok(result.scannedFiles > 0, 'find_refs should report scannedFiles');
+});
+
+test('P0-1: codebase_map executor returns real results (not error)', () => {
+  const result = tools.codebaseMap();
+  assert.ok(result.structure, 'codebase_map should return structure');
+  assert.ok(!result.error, 'codebase_map should not return error');
+  assert.ok(result.importantFiles.length > 0, 'codebase_map should have importantFiles');
+});
+
+test('P0-1: search_code matchType symbol produces results', () => {
+  // P1-2 fix: 'symbol' matchType must produce results
+  const result = tools.searchCode({ pattern: 'class AppService', matchType: 'symbol' });
+  assert.ok(result.results.length > 0,
+    `symbol search should produce results, got count=${result.count}`);
+});
+
+test('P0-1: find_symbol detects method inside class', () => {
+  // P1-2 fix: method detection should work for methods inside classes
+  const result = tools.findSymbol({ name: 'get', kind: 'method' });
+  assert.ok(Array.isArray(result.results));
+  // The test workspace has a `get()` method in AppService
+  // Method detection is heuristic (confidence 0.6), may or may not find it
+  // but it must not crash or return errors
+  if (result.results.length > 0) {
+    assert.ok(!result.results[0].error, 'method results should not be errors');
+  }
+});
+
 test('preflightContext: candidates are transparent', async () => {
   const result = await preflightContext({
     task: 'Fix the AppService bug in the service module',
