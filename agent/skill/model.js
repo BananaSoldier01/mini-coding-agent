@@ -13,11 +13,16 @@ import { SKILL_STATUS, SKILL_TRANSITIONS } from './lifecycle.js';
 
 // ── Skill Instruction Priority ────────────────────────────
 // Higher number = higher priority
+// V1.6.0-baseline: USER_EXPLICIT promoted above SKILL_INSTRUCTION.
+// Previously SKILL_INSTRUCTION (60) > USER_REQUEST (40), meaning skill
+// instructions could override explicit user requests. This is now fixed.
+// Final order: System > Runtime Policy > User Explicit > Skill > Default
 const SKILL_INSTRUCTION_PRIORITY = {
   SYSTEM: 100,
   RUNTIME_POLICY: 80,
+  USER_EXPLICIT: 70,
   SKILL_INSTRUCTION: 60,
-  USER_REQUEST: 40,
+  DEFAULT_HEURISTIC: 40,
 };
 
 // ── Validation ────────────────────────────────────────────
