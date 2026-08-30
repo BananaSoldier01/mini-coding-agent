@@ -15,6 +15,9 @@ import { CodeTools, TOOL_DEFS as CODE_TOOL_DEFS } from '../tools/code.js';
 import { shellToolDef } from '../tools/shell.js';
 import { ChangeTracker, NON_EXISTENT } from '../tracker.js';
 import { preflightContext } from '../context/taskSelector.js';
+import { buildCatalogContext, buildActivatedSkillContext } from '../context/skill-catalog.js';
+import { SkillCatalog } from './skill/catalog.js';
+import { SkillTools, TOOL_DEFS as SKILL_TOOL_DEFS, parseExplicitInvocation } from '../tools/skill.js';
 import { Sandbox } from '../sandbox.js';
 import { registry as approvalRegistry } from '../approval.js';
 import { evaluate } from '../policy.js';
@@ -81,9 +84,30 @@ async function runAgent(opts) {
     { name: 'find_symbol', description: CODE_TOOL_DEFS.find_symbol.description, input_schema: CODE_TOOL_DEFS.find_symbol.input_schema },
     { name: 'find_refs', description: CODE_TOOL_DEFS.find_refs.description, input_schema: CODE_TOOL_DEFS.find_refs.input_schema },
     { name: 'codebase_map', description: CODE_TOOL_DEFS.codebase_map.description, input_schema: CODE_TOOL_DEFS.codebase_map.input_schema },
+    // V1.6.0: activate_skill tool for Progressive Disclosure Level 2
+    { name: 'activate_skill', description: SKILL_TOOL_DEFS.activate_skill.description, input_schema: SKILL_TOOL_DEFS.activate_skill.input_schema },
   ];
 
   const toolMap = new Map(toolDefs.map((t) => [t.name, t]));
+
+  // ── V1.6.0: External Skill Ecosystem ──
+  // SkillCatalog: discovers external SKILL.md packages (Claude/Codex/Gemini/Agent Skills)
+  // SkillTools: activate_skill tool + $skill-name explicit invocation parser
+  const skillCatalog = new SkillCatalog({ workspaceRoot: workspace });
+  skillCatalog.scan();
+  const skillTools = new SkillTools(skillCatalog);
+
+  // ── V1.6.0: Parse explicit invocation ($skill-name) from user input ──
+  // Runs at Agent Input Layer, NOT in the UI — ensures Web/CLI/API all share the same behavior.
+  let explicitSkillInvocation = null;
+  let processedTask = task;
+  const invocation = parseExplicitInvocation(task, skillCatalog);
+  if (invocation) {
+    explicitSkillInvocation = invocation;
+    processedTask = invocation.args || '';
+    // Activate the skill immediately for explicit invocation
+    skillTools.activateSkill({ name: invocation.skillName });
+  }
 
   // V0.7.1: Skill Registry — manages loaded skills
   const { SkillRegistry, createSkill, transitionSkillStatus, SKILL_STATUS, buildSkillContextForLLM } = await import('./skill.js');
@@ -127,6 +151,30 @@ async function runAgent(opts) {
   loadSkillsIntoRegistry();
 
   const systemPrompt = buildSystemPrompt(sandbox, projectContext, activeSkills);
+
+  // ── V1.6.0: Append external Skill Catalog metadata (Level 1 — no body) ──
+  let skillCatalogContext = '';
+  if (skillCatalog && skillCatalog.count() > 0) {
+    const catalogCtx = buildCatalogContext(skillCatalog);
+    if (catalogCtx.context) {
+      skillCatalogContext = catalogCtx.context;
+    }
+  }
+
+  // ── V1.6.0: Build activated skill context (Level 2 — body loaded) ──
+  let activatedSkillContext = '';
+  const activatedSkills = skillTools.listActivated();
+  if (activatedSkills.length > 0) {
+    const parts = [];
+    for (const act of activatedSkills) {
+      const skill = skillCatalog.getByName(act.name);
+      if (skill) {
+        const { context } = buildActivatedSkillContext(skill);
+        parts.push(context);
+      }
+    }
+    activatedSkillContext = parts.join('\n\n');
+  }
 
   // ── V0.5.0: 使用 ContextBuilder 构建 Model Context ──
   // Compactor: 调用 LLM 做结构化摘要（不调用 Coding Tools）
@@ -177,6 +225,8 @@ async function runAgent(opts) {
     compactor,
     contextBuilder,
     supplementalContext,
+    skillCatalogContext,
+    activatedSkillContext,
   });
 
   // Emit context_selection SSE event so the Activity panel can show
@@ -694,6 +744,8 @@ async function runAgent(opts) {
               find_symbol: codeTools.findSymbol.bind(codeTools),
               find_refs: codeTools.findRefs.bind(codeTools),
               codebase_map: codeTools.codebaseMap.bind(codeTools),
+              // V1.6.0: activate_skill for Progressive Disclosure
+              activate_skill: skillTools.activateSkill.bind(skillTools),
             }[toolName];
             if (!method) {
               result = { error: `工具未实现: ${toolName}` };
