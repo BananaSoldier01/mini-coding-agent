@@ -42,10 +42,10 @@ const LIMITS = {
 function shouldPreflight(task) {
   if (!task || typeof task !== 'string') return false;
 
-  // ── Test-only: [NO PREFLIGHT] prefix disables preflight ──
-  // P1-3 fix: allows same-task ON/OFF baseline comparison in E2E tests.
-  if (/^\[no preflight\]\s*/i.test(task)) return false;
-
+  // P1-1 fix: no test prefix leak — the [NO PREFLIGHT] prefix was
+  // removed from here. Test-only disabling now happens via
+  // preflightContext({ disablePreflight: true }) which is set by
+  // the agent loop when it detects a test prefix in the task text.
   const t = task.toLowerCase();
 
   // ── Skip signals (check first — these are unambiguous) ──
@@ -178,10 +178,16 @@ function extractSearchTerms(task) {
  * @param {string} opts.task       — the task description
  * @param {string} opts.workspace  — workspace root path
  * @param {object} [opts.existing] — existing CodeTools instance (for testing)
+ * @param {boolean} [opts.disablePreflight] — test-only: skip preflight entirely
  * @returns {object|null} supplementalContext or null if not triggered
  */
 async function preflightContext(opts) {
-  const { task, workspace, existing } = opts;
+  const { task, workspace, existing, disablePreflight } = opts;
+
+  // P1-1 fix: test-only disable via opts, NOT via task text prefix.
+  // This keeps production shouldPreflight() clean — no user-visible
+  // input protocol is created just for tests.
+  if (disablePreflight) return null;
 
   if (!shouldPreflight(task)) return null;
 

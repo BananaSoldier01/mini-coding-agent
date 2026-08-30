@@ -145,16 +145,30 @@ async function runAgent(opts) {
   } : null;
 
   // P0-5.0.2: 提前初始化 turnMessages，避免 overflow 分支 TDZ
+  //
+  // P1-1 fix: test-only [NO PREFLIGHT] prefix is handled HERE (agent level),
+  // NOT in shouldPreflight(). The prefix is stripped from the task before
+  // it reaches any production logic, and disablePreflight is passed to
+  // preflightContext via opts. This keeps the production code path clean.
+  let cleanTask = task;
+  let disablePreflight = false;
+  const NO_PREFLIGHT_RE = /^\[no preflight\]\s*/i;
+  if (NO_PREFLIGHT_RE.test(task)) {
+    cleanTask = task.replace(NO_PREFLIGHT_RE, '');
+    disablePreflight = true;
+  }
+
   const turnMessages = [];
-  turnMessages.push({ role: 'user', content: task });
+  turnMessages.push({ role: 'user', content: cleanTask });
 
   // ── V1.5.0: Task-aware Context Selection ──
   // Run lightweight preflight BEFORE buildAgentContext so the selected
   // code is injected by ContextBuilder (unified budget + injection).
   const supplementalContext = await preflightContext({
-    task,
+    task: cleanTask,
     workspace,
     existing: codeTools,
+    disablePreflight,
   });
 
   const { messages: modelMessages, contextMetadata } = await buildAgentContext({
