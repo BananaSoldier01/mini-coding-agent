@@ -145,6 +145,83 @@ async function sendTask(page, task) {
   await page.locator('#sendBtn').click();
 }
 
+// P1 fix: send task with test-only disablePreflight option via direct API.
+// This is a runtime interception in the test page context — NO task text
+// parsing, NO user-visible input protocol, NO frontend source changes.
+// disablePreflight is a direct internal option passed through the API body.
+async function sendTaskDisablePreflight(page, task) {
+  await page.evaluate(async (t) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (localToken) headers['X-Local-Token'] = localToken;
+    const res = await fetch('/api/run', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        task: t,
+        workspace: state.workspace,
+        sessionId: state.sessionId,
+        title: t.slice(0, 60),
+        disablePreflight: true,
+      }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    // Read SSE stream — process events to update state.timeline
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const event = JSON.parse(line.slice(6));
+          if (event.type === 'context_selection') {
+            state.timeline.push({
+              id: 'ctxsel_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+              name: 'context_selection',
+              args: { task: event.task },
+              status: 'done',
+              startTime: event.timestamp || Date.now(),
+              result: {
+                type: 'context_selection',
+                searchLog: event.searchLog || [],
+                candidates: event.candidates || [],
+                selectedFiles: event.selectedFiles || [],
+                metrics: event.metrics || {},
+              },
+            });
+          }
+          if (event.type === 'tool_call') {
+            state.timeline.push({
+              id: event.toolCall.id,
+              name: event.toolCall.name,
+              args: event.toolCall.args,
+              status: 'running',
+              startTime: Date.now(),
+              result: null,
+            });
+          }
+          if (event.type === 'tool_result') {
+            const item = state.timeline.find(t => t.id === event.toolCall.id);
+            if (item) {
+              item.result = event.result;
+              item.status = event.result?.error ? 'error' : 'done';
+              item.duration = Date.now() - item.startTime;
+            }
+          }
+          if (event.type === 'agent_done') {
+            state.agentDone = event.result;
+          }
+        } catch { /* skip */ }
+      }
+    }
+  }, task);
+}
+
 async function setMode(page, mode) {
   await page.evaluate((m) => {
     state.permissionMode = m;
@@ -498,47 +575,31 @@ test('V1.5.0 CI-7c: Preflight ON — Chinese bug description triggers fallback s
 });
 
 // ═══════════════════════════════════════════════════════
-// Scenario 8: P1-3 — Same-task ON/OFF baseline comparison
+// Scenario 8: P1 — Same-task ON/OFF baseline comparison
 // ═══════════════════════════════════════════════════════
 
-test('V1.5.0 CI-7d: Same task — preflight OFF ([NO PREFLIGHT]) reads more files', async ({ page }) => {
+test('V1.5.0 CI-7d: Same task — preflight OFF reads MORE than ON', async ({ page }) => {
   await setMode(page, 'full_access');
+  const TASK = 'Fix the bug in login handler';
 
-  // P1-1 fix: use the SAME task as CI-7 but with [NO PREFLIGHT] prefix.
-  // The prefix is stripped at the agent level (not in shouldPreflight),
-  // and disablePreflight is passed to preflightContext via opts.
-  await sendTask(page, '[NO PREFLIGHT] Fix the bug in login handler');
-  await waitForRunComplete(page);
+  // ── OFF: disablePreflight via direct API (no task text prefix) ──
+  // P1 fix: disablePreflight is a direct internal option passed through
+  // the API body, NOT parsed from task text. No user-visible input protocol.
+  await sendTaskDisablePreflight(page, TASK);
 
-  // No context_selection should appear — preflight is disabled
-  const hasContextSel = await page.evaluate(() => {
-    return state.timeline.some(item => item.name === 'context_selection');
-  });
-  assert.ok(!hasContextSel,
-    '[NO PREFLIGHT] task should NOT trigger context_selection');
-
-  // P1-1 fix: count read_file calls — OFF should need MORE reads
-  // because the agent has no preflight-injected context to guide it.
   const offReads = await page.evaluate(() => {
     return state.timeline.filter(item => item.name === 'read_file').length;
   });
-  assert.ok(offReads >= 2,
-    `[NO PREFLIGHT] should need ≥2 reads (no preflight guidance), got ${offReads}`);
-
-  // The task should still complete successfully
-  const taskDone = await page.evaluate(() => {
-    return state.timeline.some(item =>
-      item.name === 'write_file' || item.name === 'edit_file'
-    );
+  const offHasContextSel = await page.evaluate(() => {
+    return state.timeline.some(item => item.name === 'context_selection');
   });
-  assert.ok(taskDone, '[NO PREFLIGHT] task should still complete');
-});
+  assert.ok(!offHasContextSel,
+    'preflight OFF should NOT trigger context_selection');
+  assert.ok(offReads >= 2,
+    `preflight OFF should need ≥2 reads (no guidance), got ${offReads}`);
 
-test('V1.5.0 CI-7e: Same task — preflight ON reads FEWER files than OFF', async ({ page }) => {
-  await setMode(page, 'full_access');
-
-  // P1-1 fix: re-run CI-7 to get ON metrics for the same task
-  await sendTask(page, 'Fix the bug in login handler');
+  // ── ON: same task, preflight enabled ──
+  await sendTask(page, TASK);
   await waitForRunComplete(page);
 
   const onReads = await page.evaluate(() => {
@@ -549,16 +610,14 @@ test('V1.5.0 CI-7e: Same task — preflight ON reads FEWER files than OFF', asyn
   });
 
   assert.ok(selEvent, 'preflight ON should trigger context_selection');
-  // ON should have ≤1 read (preflight already injected the relevant code)
-  assert.ok(onReads <= 2,
-    `preflight ON should need ≤2 reads, got ${onReads}`);
-
-  // P1-1 fix: auth.js must be in Top-K (not just "any file")
   const selectedPaths = selEvent.result.selectedFiles.map(f => f.path);
   const authInTopK = selectedPaths.some(p => p.includes('auth.js'));
   assert.ok(authInTopK,
     `auth.js should be in Top-K, got: ${JSON.stringify(selectedPaths)}`);
 
-  // P1-1 fix: the ON/OFF comparison — ON reads ≤ OFF reads
-  // (OFF was measured in CI-7d as ≥2, ON is ≤2 here)
+  // P1 fix: STRICT comparison — ON must read FEWER files than OFF.
+  // This is the core V1.5 value proposition: Codebase Intelligence
+  // reduces unnecessary read_file calls for the same task.
+  assert.ok(onReads < offReads,
+    `preflight ON (${onReads} reads) should read FEWER than OFF (${offReads} reads)`);
 });

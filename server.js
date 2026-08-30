@@ -389,7 +389,7 @@ const server = http.createServer(async (req, resp) => {
       const mv = validateMutation(req);
       if (!mv.ok) return sendError(resp, mv.status, mv.reason);
       const body = JSON.parse(await readBody(req));
-      const { task, workspace, sessionId, config: clientConfig, title, planMode, executionMode } = body;
+      const { task, workspace, sessionId, config: clientConfig, title, planMode, executionMode, disablePreflight } = body;
       const ws = workspace || config.workspace;
 
       // 验证 workspace
@@ -562,7 +562,7 @@ const server = http.createServer(async (req, resp) => {
         try {
           const mod = await import('./test/fake-llm.js');
           const scenarios = mod.E2E_SCENARIOS || {};
-          fakeProvider = mod.createProvider(scenarios);
+          fakeProvider = mod.createProvider(scenarios, { disablePreflight: disablePreflight || false });
           console.error('[server] Fake LLM provider injected');
         } catch (err) {
           console.error('[server] Fake LLM import failed:', err.message);
@@ -604,6 +604,7 @@ const server = http.createServer(async (req, resp) => {
           contextBuilder: { buildAgentContext },
           planMode: planMode || false,
           executionMode: executionMode || 'plan-execute',
+          disablePreflight: disablePreflight || false,
         });
 
         // ── 由 Agent Runner 提交真实 Transcript ──────

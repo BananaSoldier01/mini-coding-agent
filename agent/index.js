@@ -60,7 +60,7 @@ const TOOL_SCHEMAS = {
 };
 
 async function runAgent(opts) {
-  const { task, workspace, config, session, run, onEvent, signals, provider, projectContext, contextBuilder } = opts;
+  const { task, workspace, config, session, run, onEvent, signals, provider, projectContext, contextBuilder, disablePreflight } = opts;
   const sandbox = new Sandbox(workspace);
   const tracker = new ChangeTracker();
   const providerInstance = provider || createProvider(config);
@@ -145,30 +145,21 @@ async function runAgent(opts) {
   } : null;
 
   // P0-5.0.2: 提前初始化 turnMessages，避免 overflow 分支 TDZ
-  //
-  // P1-1 fix: test-only [NO PREFLIGHT] prefix is handled HERE (agent level),
-  // NOT in shouldPreflight(). The prefix is stripped from the task before
-  // it reaches any production logic, and disablePreflight is passed to
-  // preflightContext via opts. This keeps the production code path clean.
-  let cleanTask = task;
-  let disablePreflight = false;
-  const NO_PREFLIGHT_RE = /^\[no preflight\]\s*/i;
-  if (NO_PREFLIGHT_RE.test(task)) {
-    cleanTask = task.replace(NO_PREFLIGHT_RE, '');
-    disablePreflight = true;
-  }
-
   const turnMessages = [];
-  turnMessages.push({ role: 'user', content: cleanTask });
+  turnMessages.push({ role: 'user', content: task });
 
   // ── V1.5.0: Task-aware Context Selection ──
   // Run lightweight preflight BEFORE buildAgentContext so the selected
   // code is injected by ContextBuilder (unified budget + injection).
+  //
+  // P1 fix: disablePreflight is a direct internal/test option passed
+  // from the server (runAgent opts). It is NEVER parsed from task text —
+  // no user-visible input protocol exists for test-only behavior.
   const supplementalContext = await preflightContext({
-    task: cleanTask,
+    task,
     workspace,
     existing: codeTools,
-    disablePreflight,
+    disablePreflight: disablePreflight || false,
   });
 
   const { messages: modelMessages, contextMetadata } = await buildAgentContext({

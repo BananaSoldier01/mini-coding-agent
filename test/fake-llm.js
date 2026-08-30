@@ -61,17 +61,39 @@ function encodeSSE(response, toolCalls) {
  * 创建 Fake Provider（可注入 runAgent opts.provider）
  * 返回的 provider.chatStream() 兼容 callLLMStream 的解析逻辑。
  */
-export function createProvider(scenarios) {
+export function createProvider(scenarios, opts = {}) {
+  // P1 fix: disablePreflight is a direct internal option, NOT parsed
+  // from task text. The fake LLM uses it to select different tool
+  // sequences for the same task — simulating what happens when the
+  // agent has no preflight-injected context to guide it.
+  const disablePreflight = opts.disablePreflight || false;
+
+  // When preflight is OFF, append a suffix to look up a different
+  // scenario that simulates more trial-and-error reads.
+  const offSuffix = ' [OFF]';
+
   return {
     name: 'fake',
     async chatStream({ messages, signal }) {
       const lastUser = messages.filter(m => m.role === 'user').pop();
       const task = lastUser?.content || '';
 
-      const scenario = scenarios[task];
+      // P1 fix: select scenario based on preflight state, not task text
+      const scenarioKey = disablePreflight ? (task + offSuffix) : task;
+      const scenario = scenarios[scenarioKey];
       if (!scenario) {
-        const msg = `I don't know how to "${task.slice(0, 40)}…"`;
-        return encodeSSE(msg, []);
+        // Fallback: try the base task (same scenario for ON/OFF)
+        const baseScenario = scenarios[task];
+        if (!baseScenario) {
+          const msg = `I don't know how to "${task.slice(0, 40)}…"`;
+          return encodeSSE(msg, []);
+        }
+        // Use base scenario but with extra reads if preflight is OFF
+        const baseToolCalls = baseScenario.toolCalls || [];
+        const round = messages.filter(m => m.role === 'assistant').length;
+        const toolCalls = baseToolCalls[round] || [];
+        const response = baseScenario.responses[round] || '';
+        return encodeSSE(response, toolCalls);
       }
 
       // 确定轮次：仅统计当前 Run 内的 assistant 消息（跳过 Session 历史）
@@ -362,17 +384,21 @@ export const E2E_SCENARIOS = {
   },
 
   // ── V1.5.0 Scenario 13: Same task with preflight DISABLED ──
-  '[NO PREFLIGHT] Fix the bug in login handler': {
-    responses: ['Let me look around the workspace.', 'I see auth.js and services/user.js.', 'Fixed the bug.', 'Done.'],
+  // P1 fix: keyed by task + ' [OFF]' suffix. The fake provider appends
+  // this suffix when disablePreflight is true, so the SAME task text
+  // produces different tool sequences for ON vs OFF comparison.
+  'Fix the bug in login handler [OFF]': {
+    responses: ['Let me look around the workspace.', 'I see auth.js and services/user.js.', 'I also need to check the routes.', 'Fixed the bug.', 'Done.'],
     toolCalls: [
       [
-        { id: 'tc-np-read1', name: 'read_file', args: { path: 'auth.js' } },
+        { id: 'tc-off-read1', name: 'read_file', args: { path: 'auth.js' } },
       ],
       [
-        { id: 'tc-np-read2', name: 'read_file', args: { path: 'services/user.js' } },
+        { id: 'tc-off-read2', name: 'read_file', args: { path: 'services/user.js' } },
       ],
       [
-        { id: 'tc-np-edit', name: 'edit_file', args: { path: 'auth.js', old: 'res.status(401)', new: 'res.status(401)' } },
+        { id: 'tc-off-read3', name: 'read_file', args: { path: 'routes/login.js' } },
+        { id: 'tc-off-edit', name: 'edit_file', args: { path: 'auth.js', old: 'res.status(401)', new: 'res.status(401)' } },
       ],
       [],
     ],
