@@ -1278,3 +1278,51 @@ html, body {
 .timeline-item.rollback-failed {
   color: var(--error, #f06060);
 }
+
+/* ── V1.5.0: Context Selection Activity Body ── */
+.ctxsel-body {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 8px 0;
+}
+.ctxsel-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ctxsel-stat {
+  background: var(--bg-subtle);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.ctxsel-truncated {
+  color: var(--warn);
+}
+.ctxsel-section {
+  margin: 6px 0;
+}
+.ctxsel-label {
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.ctxsel-section ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.ctxsel-section li {
+  margin: 2px 0;
+  word-break: break-all;
+}
+.ctxsel-score {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.ctxsel-error {
+  color: var(--err);
+}

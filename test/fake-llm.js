@@ -261,4 +261,75 @@ export const E2E_SCENARIOS = {
       [],
     ],
   },
+
+  // ── V1.5.0 Scenario 6: Code Search ──────────────────
+  'TEST_CODE_SEARCH': {
+    responses: ['Let me search for the UserService definition.', 'Found it in services/user.js. Now let me read it.', 'The UserService class is defined in services/user.js.'],
+    toolCalls: [
+      [
+        { id: 'tc-cs-search', name: 'search_code', args: { pattern: 'UserService', matchType: 'all' } },
+      ],
+      [
+        { id: 'tc-cs-read', name: 'read_file', args: { path: 'services/user.js' } },
+      ],
+      [],
+    ],
+  },
+
+  // ── V1.5.0 Scenario 7: Find Symbol ──────────────────
+  'TEST_FIND_SYMBOL': {
+    responses: ['I will find the UserService class definition.', 'Found it.', 'The UserService class is defined in services/user.js.'],
+    toolCalls: [
+      [
+        { id: 'tc-fs-find', name: 'find_symbol', args: { name: 'UserService', kind: 'class' } },
+      ],
+      [
+        { id: 'tc-fs-read', name: 'read_file', args: { path: 'services/user.js' } },
+      ],
+      [],
+    ],
+  },
+
+  // ── V1.5.0 Scenario 8: Find References ──────────────
+  'TEST_FIND_REFS': {
+    responses: ['Let me find all references to UserService.', 'Found references in multiple files.', 'UserService is referenced in app.js and utils/validate.js.'],
+    toolCalls: [
+      [
+        { id: 'tc-fr-find', name: 'find_refs', args: { name: 'UserService', definitionPath: 'services/user.js' } },
+      ],
+      [
+        { id: 'tc-fr-read1', name: 'read_file', args: { path: 'app.js' } },
+        { id: 'tc-fr-read2', name: 'read_file', args: { path: 'utils/validate.js' } },
+      ],
+      [],
+    ],
+  },
+
+  // ── V1.5.0 Scenario 9: Bug Fix with Preflight ───────
+  'Fix the bug in UserService findById': {
+    responses: ['Let me understand the codebase first.', 'The bug is in findById. Let me fix it.', 'Fixed.'],
+    toolCalls: [
+      [
+        { id: 'tc-bug-search', name: 'search_code', args: { pattern: 'UserService', matchType: 'all' } },
+      ],
+      [
+        { id: 'tc-bug-read', name: 'read_file', args: { path: 'services/user.js' } },
+      ],
+      [
+        { id: 'tc-bug-edit', name: 'edit_file', args: { path: 'services/user.js', oldString: 'return this.users.find(u => u.id === id) || null;', newString: 'const user = this.users.find(u => u.id === id); if (!user) return null; return user;' } },
+      ],
+      [],
+    ],
+  },
+
+  // ── V1.5.0 Scenario 10: Create File (no preflight) ───
+  'TEST_CREATE_FILE': {
+    responses: ['I will create a new config file.', 'Done.'],
+    toolCalls: [
+      [
+        { id: 'tc-cf-write', name: 'write_file', args: { path: 'config.json', content: '{}' } },
+      ],
+      [],
+    ],
+  },
 };

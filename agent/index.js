@@ -11,8 +11,10 @@
 
 import { createProvider } from './LLM.js';
 import { FileTools } from '../tools/file.js';
+import { CodeTools, TOOL_DEFS as CODE_TOOL_DEFS } from '../tools/code.js';
 import { shellToolDef } from '../tools/shell.js';
 import { ChangeTracker, NON_EXISTENT } from '../tracker.js';
+import { preflightContext } from '../context/taskSelector.js';
 import { Sandbox } from '../sandbox.js';
 import { registry as approvalRegistry } from '../approval.js';
 import { evaluate } from '../policy.js';
@@ -63,6 +65,8 @@ async function runAgent(opts) {
   const tracker = new ChangeTracker();
   const providerInstance = provider || createProvider(config);
   const fileTools = new FileTools(workspace);
+  // V1.5.0: Codebase Intelligence tools instance
+  const codeTools = new CodeTools(workspace);
 
   const toolDefs = [
     { name: 'list_directory', description: TOOL_DESCS.list_directory, input_schema: TOOL_SCHEMAS.list_directory },
@@ -72,6 +76,11 @@ async function runAgent(opts) {
     { name: 'search_files', description: TOOL_DESCS.search_files, input_schema: TOOL_SCHEMAS.search_files },
     { name: 'delete_file', description: TOOL_DESCS.delete_file, input_schema: TOOL_SCHEMAS.delete_file, dangerous: true },
     { name: 'run_command', description: TOOL_DESCS.run_command, input_schema: TOOL_SCHEMAS.run_command },
+    // V1.5.0: Codebase Intelligence tools
+    { name: 'search_code', description: CODE_TOOL_DEFS.search_code.description, input_schema: CODE_TOOL_DEFS.search_code.input_schema },
+    { name: 'find_symbol', description: CODE_TOOL_DEFS.find_symbol.description, input_schema: CODE_TOOL_DEFS.find_symbol.input_schema },
+    { name: 'find_refs', description: CODE_TOOL_DEFS.find_refs.description, input_schema: CODE_TOOL_DEFS.find_refs.input_schema },
+    { name: 'codebase_map', description: CODE_TOOL_DEFS.codebase_map.description, input_schema: CODE_TOOL_DEFS.codebase_map.input_schema },
   ];
 
   const toolMap = new Map(toolDefs.map((t) => [t.name, t]));
@@ -139,6 +148,15 @@ async function runAgent(opts) {
   const turnMessages = [];
   turnMessages.push({ role: 'user', content: task });
 
+  // ── V1.5.0: Task-aware Context Selection ──
+  // Run lightweight preflight BEFORE buildAgentContext so the selected
+  // code is injected by ContextBuilder (unified budget + injection).
+  const supplementalContext = await preflightContext({
+    task,
+    workspace,
+    existing: codeTools,
+  });
+
   const { messages: modelMessages, contextMetadata } = await buildAgentContext({
     systemPrompt,
     projectContext,
@@ -146,7 +164,22 @@ async function runAgent(opts) {
     currentTask: task,
     compactor,
     contextBuilder,
+    supplementalContext,
   });
+
+  // Emit context_selection SSE event so the Activity panel can show
+  // what was searched, what candidates were found, and why files were selected.
+  if (supplementalContext && supplementalContext.triggered) {
+    emit(onEvent, {
+      type: 'context_selection',
+      task: supplementalContext.task,
+      searchLog: supplementalContext.searchLog,
+      candidates: supplementalContext.candidates,
+      selectedFiles: supplementalContext.selectedFiles,
+      metrics: supplementalContext.metrics,
+      timestamp: supplementalContext.timestamp,
+    });
+  }
 
   // Emit context events
   if (contextMetadata.compactionTriggered) {

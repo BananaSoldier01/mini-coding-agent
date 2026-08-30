@@ -100,7 +100,12 @@ async function buildAgentContext(opts) {
     session,
     currentTask,
     compactor,
+    supplementalContext,
   } = opts;
+  // V1.5.0: supplementalContext is produced by taskSelector.preflightContext()
+  // and injected HERE — not in agent/index.js. Both budget and injection are
+  // controlled by ContextBuilder so Hard Budget is never bypassed.
+  const suppBlock = supplementalContext?.contextBlock || null;
 
   const contextState = session?.contextState || {
     summary: null,
@@ -143,17 +148,28 @@ async function buildAgentContext(opts) {
     });
   }
 
+  // V1.5.0: inject supplementalContext as a system-level message.
+  // Placed between system/project context and historical turns so the
+  // model sees relevant code BEFORE diving into session history.
+  if (suppBlock) {
+    modelMessages.push({
+      role: 'system',
+      content: `[CODEBASE CONTEXT — 以下代码与当前任务最相关]\n${suppBlock}`,
+    });
+  }
+
   // P0-3: Add recent raw turns (not yet compacted), preserving canonical order
   const compactedThrough = contextState.compactedThrough;
   const recentTurns = turns.slice(compactedThrough);
 
-  // Calculate fixed overhead: system + summary + current task
+  // Calculate fixed overhead: system + summary + supplementalContext + current task
   let systemAndSummaryChars = systemAndProject.reduce((s, m) => s + (m.content?.length || 0), 0);
   if (contextState.summary) {
     systemAndSummaryChars += JSON.stringify(contextState.summary).length + 50;
   }
+  const suppChars = suppBlock ? suppBlock.length : 0;
   const currentTaskChars = currentTask.length;
-  const fixedOverhead = systemAndSummaryChars + currentTaskChars;
+  const fixedOverhead = systemAndSummaryChars + suppChars + currentTaskChars;
 
   // P0-5.0.3: 三种场景分开处理
   const targetBudget = Math.floor(CONTEXT_BUDGET * RECENT_CONTEXT_TARGET);
@@ -260,7 +276,7 @@ async function buildAgentContext(opts) {
     recentTurnCount: finalRecentTurns.length,
   };
 
-  return { messages: modelMessages, contextMetadata };
+  return { messages: modelMessages, contextMetadata, supplementalContext };
 }
 
 /**

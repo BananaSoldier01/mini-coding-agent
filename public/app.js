@@ -1651,6 +1651,11 @@ function handleEvent(event) {
       updateContextIndicator();
       break;
 
+    // ── V1.5.0: Context Selection SSE Event ──
+    case 'context_selection':
+      addContextSelectionItem(event);
+      break;
+
     // ── V0.5.1.1: Plan Events ──────────────────────────
     case 'plan_generated':
       state.plan = event.plan;
@@ -2012,6 +2017,87 @@ function addTimelineApproval(event) {
   renderTimeline();
 }
 
+// ── V1.5.0: Context Selection Activity Item ──
+function addContextSelectionItem(event) {
+  const item = {
+    id: 'ctxsel_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+    name: 'context_selection',
+    args: { task: event.task },
+    status: 'done',
+    startTime: event.timestamp || Date.now(),
+    result: {
+      type: 'context_selection',
+      searchLog: event.searchLog || [],
+      candidates: event.candidates || [],
+      selectedFiles: event.selectedFiles || [],
+      metrics: event.metrics || {},
+    },
+  };
+  state.timeline.push(item);
+  renderTimeline();
+}
+
+function renderContextSelectionBody(item) {
+  const result = item.result;
+  if (!result) return '';
+
+  const metrics = result.metrics || {};
+  const searchLog = result.searchLog || [];
+  const candidates = result.candidates || [];
+  const selectedFiles = result.selectedFiles || [];
+
+  let html = '<div class="ctxsel-body">';
+
+  // Metrics summary
+  html += '<div class="ctxsel-metrics">';
+  html += `<span class="ctxsel-stat">📁 选中 ${metrics.selectedFiles || 0} 个文件</span>`;
+  html += `<span class="ctxsel-stat">📝 注入 ${Math.round((metrics.injectedChars || 0) / 1000)}k chars</span>`;
+  html += `<span class="ctxsel-stat">🔍 候选 ${metrics.candidatesConsidered || 0} 个</span>`;
+  if (metrics.truncated) html += '<span class="ctxsel-stat ctxsel-truncated">⚠️ 截断</span>';
+  html += '</div>';
+
+  // Search log
+  if (searchLog.length > 0) {
+    html += '<div class="ctxsel-section"><div class="ctxsel-label">🔍 搜索过程</div><ul>';
+    for (const log of searchLog) {
+      if (log.type === 'search_code') {
+        html += `<li>搜索 "<code>${escapeHtml(log.query)}</code>" → ${log.resultCount} 条结果</li>`;
+      } else if (log.type === 'codebase_map') {
+        html += `<li>生成项目地图 → ${log.importantFiles.length} 个重要文件</li>`;
+      } else if (log.type === 'term_extraction') {
+        html += `<li>提取搜索词: ${log.terms.map(t => '<code>' + escapeHtml(t) + '</code>').join(', ')}</li>`;
+      } else if (log.type === 'search_error') {
+        html += `<li class="ctxsel-error">搜索 "${escapeHtml(log.query)}" 出错: ${escapeHtml(log.error)}</li>`;
+      }
+    }
+    html += '</ul></div>';
+  }
+
+  // Selected files
+  if (selectedFiles.length > 0) {
+    html += '<div class="ctxsel-section"><div class="ctxsel-label">✅ 已选中注入 Context</div><ul>';
+    for (const f of selectedFiles) {
+      html += `<li><code>${escapeHtml(f.path)}</code> — ${escapeHtml(f.reason)} <span class="ctxsel-score"> relevance: ${f.relevance}</span></li>`;
+    }
+    html += '</ul></div>';
+  }
+
+  // Candidates (top ones not selected)
+  const notSelected = candidates.filter(c =>
+    !selectedFiles.some(s => s.path === c.path)
+  ).slice(0, 5);
+  if (notSelected.length > 0) {
+    html += '<div class="ctxsel-section"><div class="ctxsel-label">📋 其他候选（未选中）</div><ul>';
+    for (const c of notSelected) {
+      html += `<li><code>${escapeHtml(c.path)}</code> — ${escapeHtml(c.reason)} <span class="ctxsel-score"> score: ${c.score}</span></li>`;
+    }
+    html += '</ul></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
 function renderTimeline() {
   const container = $('#timeline');
   if (state.timeline.length === 0) {
@@ -2073,6 +2159,12 @@ function renderTimeline() {
       f.className = 'ti-file';
       f.textContent = '🔍 ' + (item.args.pattern || '');
       text.appendChild(f);
+    } else if (item.name === 'context_selection') {
+      const f = document.createElement('div');
+      f.className = 'ti-file';
+      const task = (item.args.task || '').slice(0, 80);
+      f.innerHTML = '🔍 Context Selection: <span class="ti-file-link">' + escapeHtml(task) + '</span>';
+      text.appendChild(f);
     } else if (item.name === 'delete_file') {
       const f = document.createElement('div');
       f.className = 'ti-file';
@@ -2110,16 +2202,23 @@ function renderTimeline() {
     // Details
     const details = document.createElement('div');
     details.className = 'timeline-details';
-    let detailText = '';
-    if (item.args && Object.keys(item.args).length > 0) {
-      const aStr = JSON.stringify(item.args);
-      detailText += 'args: ' + (aStr.length > 500 ? aStr.slice(0, 500) + '...' : aStr) + '\n';
+
+    // V1.5.0: context_selection items render a rich body instead of raw JSON
+    if (item.name === 'context_selection') {
+      const body = renderContextSelectionBody(item);
+      details.innerHTML = body;
+    } else {
+      let detailText = '';
+      if (item.args && Object.keys(item.args).length > 0) {
+        const aStr = JSON.stringify(item.args);
+        detailText += 'args: ' + (aStr.length > 500 ? aStr.slice(0, 500) + '...' : aStr) + '\n';
+      }
+      if (item.result) {
+        const rStr = JSON.stringify(item.result);
+        detailText += 'result: ' + (rStr.length > 500 ? rStr.slice(0, 500) + '...' : rStr);
+      }
+      details.textContent = detailText;
     }
-    if (item.result) {
-      const rStr = JSON.stringify(item.result);
-      detailText += 'result: ' + (rStr.length > 500 ? rStr.slice(0, 500) + '...' : rStr);
-    }
-    details.textContent = detailText;
     el.appendChild(details);
 
     container.appendChild(el);
