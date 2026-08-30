@@ -332,4 +332,32 @@ export const E2E_SCENARIOS = {
       [],
     ],
   },
+
+  // ── V1.5.0 Scenario 11: Natural Language Bug (no identifiers) ──
+  'Fix the bug in login handler': {
+    responses: ['Let me search for the login handler.', 'Found it in auth.js.', 'Fixed the login bug.'],
+    toolCalls: [
+      [
+        { id: 'tc-nl-search', name: 'search_code', args: { pattern: 'login', matchType: 'all' } },
+      ],
+      [
+        { id: 'tc-nl-read', name: 'read_file', args: { path: 'auth.js' } },
+      ],
+      [],
+    ],
+  },
+
+  // ── V1.5.0 Scenario 12: Chinese Bug Description ──
+  '修复登录模块偶发报错': {
+    responses: ['让我搜索登录模块。', '找到了 auth.js。', '修复完成。'],
+    toolCalls: [
+      [
+        { id: 'tc-cn-search', name: 'search_code', args: { pattern: '登录', matchType: 'all' } },
+      ],
+      [
+        { id: 'tc-cn-read', name: 'read_file', args: { path: 'auth.js' } },
+      ],
+      [],
+    ],
+  },
 };

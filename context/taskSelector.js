@@ -44,14 +44,17 @@ function shouldPreflight(task) {
   const t = task.toLowerCase();
 
   // ── Skip signals (check first — these are unambiguous) ──
+  // P1-5 fix: Chinese skip rules must be anchored to avoid false positives.
+  // "修复创建文件时崩溃" should NOT skip just because "创建" appears.
   const skipPatterns = [
-    // Create new
+    // Create new file (English, anchored to start)
     /^\s*(create|make|generate|write|new)\s+(a\s+)?(file|component|module)/,
-    /创建|新建|创建文件|生成文件/,
-    // Run / execute
-    /run\s+(the\s+)?(tests?|command|script)/,
-    /execute\s+(the\s+)?(command|script)/,
-    /跑|运行|执行/,
+    // Create new file (Chinese, anchored to start)
+    /^创建|新建|创建文件|生成文件|写一个|写个/,
+    // Run / execute (English, anchored)
+    /^(run|execute)\s+(the\s+)?(tests?|command|script)/,
+    // Run / execute (Chinese, anchored)
+    /^跑|^运行|^执行|^跑一下|^执行一下/,
     // Simple: "change X to Y" with no module context
     /^change\s+\S+\s+to\s+\S+$/,
   ];
@@ -130,6 +133,33 @@ function extractSearchTerms(task) {
     if (w.length >= 4) terms.add(w);
   }
 
+  // P1-5 fix: also extract ALL words as potential search terms.
+  // Natural language like "Fix the bug in login handler" has no
+  // camelCase/snake_case identifiers, but "login" and "handler"
+  // are still useful search terms. Filter out common English words.
+  const commonWords = new Set([
+    'this', 'that', 'with', 'from', 'have', 'were', 'they', 'their',
+    'what', 'when', 'which', 'will', 'would', 'could', 'should', 'about',
+    'every', 'first', 'after', 'where', 'there', 'them', 'then', 'than',
+    'also', 'only', 'other', 'some', 'time', 'file', 'code', 'test',
+    'user', 'data', 'system', 'task', 'plan', 'run', 'agent', 'the', 'and',
+    'for', 'are', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one',
+    'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'man', 'new',
+    'now', 'old', 'see', 'two', 'way', 'who', 'boy', 'did', 'its', 'let',
+    'put', 'say', 'she', 'too', 'use', 'dad', 'mom', 'try', 'ask', 'end',
+    'why', 'bug', 'fix', 'find', 'look', 'make', 'take', 'come', 'know',
+    'keep', 'give', 'live', 'mean', 'hold', 'show', 'need', 'work', 'good',
+  ]);
+  const allWords = task.toLowerCase().split(/[\s./\-_.,;:!?(){}\[\]"']+$/);
+  // Filter: length >= 4, not a common word, not purely numeric
+  for (const w of allWords) {
+    const cleaned = w.trim();
+    if (cleaned.length < 4) continue;
+    if (/^\d+$/.test(cleaned)) continue;
+    if (commonWords.has(cleaned)) continue;
+    terms.add(cleaned);
+  }
+
   return Array.from(terms).slice(0, 10);
 }
 
@@ -172,7 +202,7 @@ async function preflightContext(opts) {
     if (budget.exhausted) break;
 
     try {
-      const result = code.searchCode({ pattern: term, matchType: 'all', maxResults: 20 });
+      const result = code.searchCode({ pattern: term, matchType: 'all', maxResults: 20 }, budget);
       searchLog.push({
         type: 'search_code',
         query: term,
@@ -219,7 +249,7 @@ async function preflightContext(opts) {
   let projectMap = null;
   if (!budget.exhausted) {
     try {
-      projectMap = code.codebaseMap({ depth: 2 });
+      projectMap = code.codebaseMap({ depth: 2 }, budget);
       searchLog.push({
         type: 'codebase_map',
         importantFiles: projectMap.importantFiles.map(f => f.path),

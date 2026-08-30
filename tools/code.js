@@ -83,13 +83,26 @@ const SYMBOL_PATTERNS = [
  * Walk workspace files, applying a callback.
  * Reuses the same skip rules as FileTools._walk().
  */
-function walkWorkspace(service, root, cb) {
-  let scannedFiles = 0;
-  let scannedBytes = 0;
+function walkWorkspace(service, root, budget, cb) {
+  // P1-1 fix: when a shared budget is provided, consume from it DURING
+  // scanning (not after). This prevents each call from getting its own
+  // full 300-files/5MB allowance independently.
+  // Signature: (service, root, budget, cb) — budget is 3rd, cb is 4th.
+  const local = { files: 0, bytes: 0 };
   let truncated = false;
 
+  function checkBudget() {
+    if (!budget) {
+      // No shared budget: use internal limits
+      return local.files < MAX_SCAN_FILES && local.bytes < MAX_SCAN_BYTES;
+    }
+    // Shared budget: stop when cumulative exceeds budget
+    return (budget.usedFiles + local.files) < budget.maxFiles &&
+           (budget.usedBytes + local.bytes) < budget.maxBytes;
+  }
+
   function walk(dir) {
-    if (truncated) return;
+    if (!checkBudget()) { truncated = true; return; }
     let entries;
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -97,25 +110,20 @@ function walkWorkspace(service, root, cb) {
       return;
     }
     for (const entry of entries) {
-      if (truncated) return;
+      if (!checkBudget()) { truncated = true; return; }
       if (entry.name === 'node_modules' || entry.name === '.git') continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         walk(full);
       } else if (entry.isFile()) {
         const relPath = service.sandbox.relative(full);
-        // Skip sensitive + binary
         if (service.isSensitive(relPath)) continue;
         if (service.isBinary(relPath)) continue;
         try {
           const stat = fs.statSync(full);
-          if (stat.size > 1024 * 1024) continue; // skip >1MB files
-          scannedBytes += stat.size;
-          scannedFiles++;
-          if (scannedFiles > MAX_SCAN_FILES || scannedBytes > MAX_SCAN_BYTES) {
-            truncated = true;
-            return;
-          }
+          if (stat.size > 1024 * 1024) continue;
+          local.bytes += stat.size;
+          local.files++;
           const result = cb(full, relPath, stat);
           if (result === false) return;
         } catch {
@@ -125,7 +133,17 @@ function walkWorkspace(service, root, cb) {
     }
   }
   walk(root);
-  return { scannedFiles, scannedBytes, truncated };
+
+  // Consume from shared budget (if provided)
+  if (budget) {
+    budget.usedFiles += local.files;
+    budget.usedBytes += local.bytes;
+    if (budget.usedFiles >= budget.maxFiles || budget.usedBytes >= budget.maxBytes) {
+      budget.exhausted = true;
+    }
+  }
+
+  return { scannedFiles: local.files, scannedBytes: local.bytes, truncated };
 }
 
 /**
@@ -219,7 +237,7 @@ class CodeTools {
    * @param {number} [input.maxResults]
    * @returns {object}
    */
-  searchCode(input) {
+  searchCode(input, budget) {
     const { pattern, path: searchPath, matchType = 'all', maxResults = MAX_SEARCH_RESULTS } = input;
     if (!pattern) throw new Error('search_code 缺少 pattern 参数');
 
@@ -245,13 +263,15 @@ class CodeTools {
     }
 
     const root = this.service.sandbox.resolve(searchPath || '.');
-    const walkStats = walkWorkspace(this.service, root, (fullPath, relPath, stat) => {
+    const walkStats = walkWorkspace(this.service, root, budget, (fullPath, relPath, stat) => {
       if (results.length >= limit) return false;
 
       const fileName = path.basename(relPath).toLowerCase();
 
       // Filename match
       if (filenamePattern && fileName.includes(filenamePattern)) {
+        // P1-2 fix: when matchType is 'symbol', skip filename-only matches
+        if (matchType === 'symbol') return true;
         results.push({
           path: relPath,
           line: 0,
@@ -297,6 +317,10 @@ class CodeTools {
               score = 6;
             }
 
+            // P1-2 fix: when matchType is 'symbol', ONLY return symbol
+            // definition matches — skip text/reference matches.
+            if (matchType === 'symbol' && mt !== 'symbol') continue;
+
             results.push({
               path: relPath,
               line: i + 1,
@@ -334,7 +358,7 @@ class CodeTools {
    * @param {number} [input.maxResults]
    * @returns {object}
    */
-  findSymbol(input) {
+  findSymbol(input, budget) {
     const { name, kind = 'all', path: searchPath, maxResults = MAX_SEARCH_RESULTS } = input;
     if (!name) throw new Error('find_symbol 缺少 name 参数');
 
@@ -343,7 +367,7 @@ class CodeTools {
     const nameLower = name.toLowerCase();
     const root = this.service.sandbox.resolve(searchPath || '.');
 
-    const walkStats = walkWorkspace(this.service, root, (fullPath, relPath, stat) => {
+    const walkStats = walkWorkspace(this.service, root, budget, (fullPath, relPath, stat) => {
       if (results.length >= limit) return false;
       if (stat.size > 200 * 1024) return true;
 
@@ -389,7 +413,7 @@ class CodeTools {
    * @param {number} [input.maxResults]
    * @returns {object}
    */
-  findRefs(input) {
+  findRefs(input, budget) {
     const { name, definitionPath, path: searchPath, maxResults = MAX_SEARCH_RESULTS } = input;
     if (!name) throw new Error('find_refs 缺少 name 参数');
     if (!definitionPath) throw new Error('find_refs 缺少 definitionPath 参数');
@@ -401,7 +425,7 @@ class CodeTools {
     const nameRe = new RegExp(`\\b${escaped}\\b`, 'gi');
     const root = this.service.sandbox.resolve(searchPath || '.');
 
-    const walkStats = walkWorkspace(this.service, root, (fullPath, relPath, stat) => {
+    const walkStats = walkWorkspace(this.service, root, budget, (fullPath, relPath, stat) => {
       if (results.length >= limit) return false;
       if (stat.size > 200 * 1024) return true;
       // Skip the definition file itself
@@ -461,7 +485,7 @@ class CodeTools {
    * @param {boolean} [input.includeTests]
    * @returns {object}
    */
-  codebaseMap(input = {}) {
+  codebaseMap(input = {}, budget) {
     const depth = Math.min(input.depth || 2, 4);
     const includeConfigs = input.includeConfigs !== false;
     const includeTests = input.includeTests !== false;
@@ -526,7 +550,7 @@ class CodeTools {
     }
 
     // Priority 3: files referenced by ≥3 other files (import/require count)
-    const importCounts = this._countImports(seen);
+    const importCounts = this._countImports(seen, budget);
     for (const [filePath, count] of Object.entries(importCounts)) {
       if (count >= 3 && !seen.has(filePath) && importantFiles.length < 10) {
         importantFiles.push({
@@ -627,7 +651,7 @@ class CodeTools {
    * P1-5 fix: only count files that ACTUALLY EXIST on disk.
    * Guessing extensions creates phantom paths (foo.js.ts, foo/index.js, etc.)
    */
-  _countImports(excludePaths) {
+  _countImports(excludePaths, budget) {
     const counts = {};
     const root = this.service.sandbox.root;
 
@@ -637,9 +661,16 @@ class CodeTools {
     const resolveImport = (fromDir, ref) => {
       const normalized = path.normalize(path.join(fromDir, ref));
       // 1. Try as-is (e.g. './foo.js' already has extension)
+      // P1-3 fix: must check isFile — if it's a directory, fall through
+      // to step 3 so that import './foo' → foo/index.js resolves correctly.
       try {
-        if (fs.existsSync(this.service.sandbox.resolve(normalized))) {
-          return this.service.sandbox.relative(this.service.sandbox.resolve(normalized));
+        const abs = this.service.sandbox.resolve(normalized);
+        if (fs.existsSync(abs)) {
+          const st = fs.statSync(abs);
+          if (st.isFile()) {
+            return this.service.sandbox.relative(abs);
+          }
+          // Directory: fall through to step 3 (index.*)
         }
       } catch { /* skip */ }
 
@@ -666,7 +697,7 @@ class CodeTools {
       return null;
     };
 
-    walkWorkspace(this.service, root, (fullPath, relPath, stat) => {
+    walkWorkspace(this.service, root, budget, (fullPath, relPath, stat) => {
       if (stat.size > 200 * 1024) return true;
 
       let content;

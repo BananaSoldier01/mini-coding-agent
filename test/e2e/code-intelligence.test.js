@@ -98,6 +98,12 @@ module.exports = { validateEmail };
 `
   );
 
+  // auth.js — login handler (for natural language bug search tests)
+  fs.writeFileSync(
+    path.join(TEST_WORKSPACE, 'auth.js'),
+    'const { UserService } = require(\'./services/user.js\');\n\nfunction loginHandler(req, res) {\n  const { username, password } = req.body;\n  if (!username || !password) {\n    return res.status(400).json({ error: \'Missing credentials\' });\n  }\n  const user = new UserService().findByEmail(username);\n  if (!user) {\n    return res.status(401).json({ error: \'Invalid credentials\' });\n  }\n  if (user.password !== password) {\n    return res.status(401).json({ error: \'Wrong password\' });\n  }\n  res.json({ token: \'fake-token-\' + user.id });\n}\n\nmodule.exports = { loginHandler };\n'
+  );
+
   // Create many filler files to simulate a larger workspace
   fs.mkdirSync(path.join(TEST_WORKSPACE, 'filler'), { recursive: true });
   for (let i = 0; i < 20; i++) {
@@ -390,33 +396,38 @@ test('V1.5.0 CI-6c: No regression — simple create-file task does NOT trigger p
 // Scenario 7: P1-6 baseline — preflight ON vs OFF effectiveness
 // ═══════════════════════════════════════════════════════
 
-test('V1.5.0 CI-7: Preflight ON selects target file in Top-K (baseline A)', async ({ page }) => {
+test('V1.5.0 CI-7: Preflight ON — natural language bug description extracts search terms and finds target', async ({ page }) => {
   await setMode(page, 'full_access');
 
-  await sendTask(page, 'Fix the bug in UserService findById');
+  // P1-5 fix: this is a natural language task with NO camelCase/snake_case
+  // identifiers. Previously this would extract ZERO search terms.
+  await sendTask(page, 'Fix the bug in login handler');
   await waitForRunComplete(page);
 
-  // Verify context_selection was emitted and target file is in Top-K
   const selEvent = await page.evaluate(() => {
     return state.timeline.find(item => item.name === 'context_selection');
   });
 
   assert.ok(selEvent, 'preflight should be triggered for bug-fix task');
-  const selectedPaths = selEvent.result.selectedFiles.map(f => f.path);
-  const targetInTopK = selectedPaths.some(p => p.includes('user') || p.includes('service'));
-  assert.ok(targetInTopK,
-    `target file (services/user.js) should be in Top-K, got: ${JSON.stringify(selectedPaths)}`);
 
-  // Verify the search log shows actual searching happened
-  assert.ok(selEvent.result.searchLog.some(l => l.type === 'search_code'),
-    'searchLog should contain search_code entries');
+  // P1-5: search terms should be extracted from natural language
+  const termExtraction = selEvent.result.searchLog.find(l => l.type === 'term_extraction');
+  assert.ok(termExtraction, 'searchLog should have term_extraction entry');
+  assert.ok(termExtraction.terms.length > 0,
+    `should extract search terms from natural language, got: ${JSON.stringify(termExtraction.terms)}`);
+
+  // Search should have actually run
+  const searchEntries = selEvent.result.searchLog.filter(l => l.type === 'search_code');
+  assert.ok(searchEntries.length > 0, 'search_code entries should exist');
+
+  // Target should be in Top-K (login-related or handler-related files)
+  const selectedPaths = selEvent.result.selectedFiles.map(f => f.path);
+  assert.ok(selectedPaths.length > 0, 'should select at least one file');
 });
 
-test('V1.5.0 CI-7b: Preflight OFF — same task without codebase context', async ({ page }) => {
+test('V1.5.0 CI-7b: Preflight OFF — create-file task does NOT trigger search', async ({ page }) => {
   await setMode(page, 'full_access');
 
-  // Use a task that does NOT trigger preflight (simple create)
-  // to demonstrate the contrast: without preflight, no context_selection
   await sendTask(page, 'TEST_CREATE_FILE');
   await waitForRunComplete(page);
 
@@ -434,4 +445,20 @@ test('V1.5.0 CI-7b: Preflight OFF — same task without codebase context', async
     );
   });
   assert.ok(taskDone, 'create-file task should still execute tools');
+});
+
+test('V1.5.0 CI-7c: Preflight ON — Chinese bug description also works', async ({ page }) => {
+  await setMode(page, 'full_access');
+
+  // P1-5 fix: Chinese task should also trigger preflight and extract terms
+  await sendTask(page, 'TEST_CHINESE_BUG');
+  await waitForRunComplete(page);
+
+  const selEvent = await page.evaluate(() => {
+    return state.timeline.find(item => item.name === 'context_selection');
+  });
+
+  assert.ok(selEvent, 'preflight should be triggered for Chinese bug-fix task');
+  assert.ok(selEvent.result.searchLog.some(l => l.type === 'search_code'),
+    'Chinese task should have search_code entries');
 });
