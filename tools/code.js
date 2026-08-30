@@ -84,21 +84,26 @@ const SYMBOL_PATTERNS = [
  * Reuses the same skip rules as FileTools._walk().
  */
 function walkWorkspace(service, root, budget, cb) {
-  // P1-1 fix: when a shared budget is provided, consume from it DURING
-  // scanning (not after). This prevents each call from getting its own
-  // full 300-files/5MB allowance independently.
+  // P1-1 fix: walkWorkspace is the SOLE budget consumer.
+  // taskSelector reads budget state but never adds to it — this
+  // prevents double-counting (previously both walker AND caller added).
   // Signature: (service, root, budget, cb) — budget is 3rd, cb is 4th.
   const local = { files: 0, bytes: 0 };
   let truncated = false;
 
-  function checkBudget() {
+  function remaining() {
     if (!budget) {
-      // No shared budget: use internal limits
-      return local.files < MAX_SCAN_FILES && local.bytes < MAX_SCAN_BYTES;
+      return { files: MAX_SCAN_FILES - local.files, bytes: MAX_SCAN_BYTES - local.bytes };
     }
-    // Shared budget: stop when cumulative exceeds budget
-    return (budget.usedFiles + local.files) < budget.maxFiles &&
-           (budget.usedBytes + local.bytes) < budget.maxBytes;
+    return {
+      files: budget.maxFiles - budget.usedFiles - local.files,
+      bytes: budget.maxBytes - budget.usedBytes - local.bytes,
+    };
+  }
+
+  function checkBudget() {
+    const r = remaining();
+    return r.files > 0 && r.bytes > 0;
   }
 
   function walk(dir) {
@@ -122,6 +127,14 @@ function walkWorkspace(service, root, budget, cb) {
         try {
           const stat = fs.statSync(full);
           if (stat.size > 1024 * 1024) continue;
+          // P1-1 fix: check remainingBytes BEFORE consuming this file.
+          // Without this check, a 500KB file when only 10KB budget remains
+          // would still be fully scanned, making the limit soft.
+          const r = remaining();
+          if (stat.size > r.bytes) {
+            truncated = true;
+            return;
+          }
           local.bytes += stat.size;
           local.files++;
           const result = cb(full, relPath, stat);
@@ -134,7 +147,7 @@ function walkWorkspace(service, root, budget, cb) {
   }
   walk(root);
 
-  // Consume from shared budget (if provided)
+  // Consume from shared budget (if provided) — sole consumer
   if (budget) {
     budget.usedFiles += local.files;
     budget.usedBytes += local.bytes;

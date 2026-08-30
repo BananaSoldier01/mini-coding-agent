@@ -41,6 +41,11 @@ const LIMITS = {
  */
 function shouldPreflight(task) {
   if (!task || typeof task !== 'string') return false;
+
+  // ── Test-only: [NO PREFLIGHT] prefix disables preflight ──
+  // P1-3 fix: allows same-task ON/OFF baseline comparison in E2E tests.
+  if (/^\[no preflight\]\s*/i.test(task)) return false;
+
   const t = task.toLowerCase();
 
   // ── Skip signals (check first — these are unambiguous) ──
@@ -150,7 +155,10 @@ function extractSearchTerms(task) {
     'why', 'bug', 'fix', 'find', 'look', 'make', 'take', 'come', 'know',
     'keep', 'give', 'live', 'mean', 'hold', 'show', 'need', 'work', 'good',
   ]);
-  const allWords = task.toLowerCase().split(/[\s./\-_.,;:!?(){}\[\]"']+$/);
+  // P1-2 fix: remove trailing $ from split regex.
+  // With $, "Fix the bug in login handler" splits into ONE string
+  // instead of individual words, so no search terms are extracted.
+  const allWords = task.toLowerCase().split(/[\s./\-_.,;:!?(){}\[\]"']+/);
   // Filter: length >= 4, not a common word, not purely numeric
   for (const w of allWords) {
     const cleaned = w.trim();
@@ -212,12 +220,8 @@ async function preflightContext(opts) {
         timestamp: Date.now(),
       });
 
-      // Update shared budget
-      budget.usedFiles += result.scannedFiles || 0;
-      budget.usedBytes += result.scannedBytes || 0;
-      if (budget.usedFiles >= budget.maxFiles || budget.usedBytes >= budget.maxBytes) {
-        budget.exhausted = true;
-      }
+      // Budget is consumed by walkWorkspace (sole consumer).
+      // No double-counting here — taskSelector only reads budget state.
 
       for (const r of result.results) {
         if (candidates.length >= LIMITS.maxSearchResults) break;

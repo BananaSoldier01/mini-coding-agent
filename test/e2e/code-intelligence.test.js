@@ -410,19 +410,25 @@ test('V1.5.0 CI-7: Preflight ON — natural language bug description extracts se
 
   assert.ok(selEvent, 'preflight should be triggered for bug-fix task');
 
-  // P1-5: search terms should be extracted from natural language
+  // P1-2 fix: assert specific terms are extracted from natural language
   const termExtraction = selEvent.result.searchLog.find(l => l.type === 'term_extraction');
   assert.ok(termExtraction, 'searchLog should have term_extraction entry');
   assert.ok(termExtraction.terms.length > 0,
     `should extract search terms from natural language, got: ${JSON.stringify(termExtraction.terms)}`);
+  assert.ok(termExtraction.terms.includes('login'),
+    `should extract 'login' term, got: ${JSON.stringify(termExtraction.terms)}`);
+  assert.ok(termExtraction.terms.includes('handler'),
+    `should extract 'handler' term, got: ${JSON.stringify(termExtraction.terms)}`);
 
   // Search should have actually run
   const searchEntries = selEvent.result.searchLog.filter(l => l.type === 'search_code');
   assert.ok(searchEntries.length > 0, 'search_code entries should exist');
 
-  // Target should be in Top-K (login-related or handler-related files)
+  // P1-2 fix: assert auth.js is actually in Top-K, not just "any file"
   const selectedPaths = selEvent.result.selectedFiles.map(f => f.path);
-  assert.ok(selectedPaths.length > 0, 'should select at least one file');
+  const authInTopK = selectedPaths.some(p => p.includes('auth.js'));
+  assert.ok(authInTopK,
+    `auth.js (login handler) should be in Top-K, got: ${JSON.stringify(selectedPaths)}`);
 });
 
 test('V1.5.0 CI-7b: Preflight OFF — create-file task does NOT trigger search', async ({ page }) => {
@@ -450,8 +456,10 @@ test('V1.5.0 CI-7b: Preflight OFF — create-file task does NOT trigger search',
 test('V1.5.0 CI-7c: Preflight ON — Chinese bug description also works', async ({ page }) => {
   await setMode(page, 'full_access');
 
-  // P1-5 fix: Chinese task should also trigger preflight and extract terms
-  await sendTask(page, 'TEST_CHINESE_BUG');
+  // P1-3 fix: send the ACTUAL Chinese task text, not a snake_case alias.
+  // Previously 'TEST_CHINESE_BUG' triggered the identifier heuristic
+  // instead of testing real Chinese natural-language extraction.
+  await sendTask(page, '修复登录模块偶发报错');
   await waitForRunComplete(page);
 
   const selEvent = await page.evaluate(() => {
@@ -461,4 +469,35 @@ test('V1.5.0 CI-7c: Preflight ON — Chinese bug description also works', async 
   assert.ok(selEvent, 'preflight should be triggered for Chinese bug-fix task');
   assert.ok(selEvent.result.searchLog.some(l => l.type === 'search_code'),
     'Chinese task should have search_code entries');
+  assert.ok(selEvent.result.selectedFiles.length > 0,
+    'Chinese task should select at least one file');
+});
+
+// ═══════════════════════════════════════════════════════
+// Scenario 8: P1-3 — Same-task ON/OFF baseline comparison
+// ═══════════════════════════════════════════════════════
+
+test('V1.5.0 CI-7d: Same task — preflight OFF ([NO PREFLIGHT]) does NOT inject context', async ({ page }) => {
+  await setMode(page, 'full_access');
+
+  // P1-3 fix: use the SAME task as CI-7 but with [NO PREFLIGHT] prefix
+  // to disable preflight. This is a true ON/OFF comparison.
+  await sendTask(page, '[NO PREFLIGHT] Fix the bug in login handler');
+  await waitForRunComplete(page);
+
+  // No context_selection should appear — preflight is disabled
+  const hasContextSel = await page.evaluate(() => {
+    return state.timeline.some(item => item.name === 'context_selection');
+  });
+  assert.ok(!hasContextSel,
+    '[NO PREFLIGHT] task should NOT trigger context_selection');
+
+  // The task should still complete successfully
+  const taskDone = await page.evaluate(() => {
+    return state.timeline.some(item =>
+      item.name === 'write_file' || item.name === 'edit_file' ||
+      item.name === 'read_file'
+    );
+  });
+  assert.ok(taskDone, '[NO PREFLIGHT] task should still execute tools');
 });

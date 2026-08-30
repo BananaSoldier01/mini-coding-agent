@@ -360,4 +360,18 @@ export const E2E_SCENARIOS = {
       [],
     ],
   },
+
+  // ── V1.5.0 Scenario 13: Same task with preflight DISABLED ──
+  '[NO PREFLIGHT] Fix the bug in login handler': {
+    responses: ['Let me look around the workspace.', 'I see auth.js and services/user.js.', 'Fixed it.'],
+    toolCalls: [
+      [
+        { id: 'tc-np-read1', name: 'read_file', args: { path: 'auth.js' } },
+      ],
+      [
+        { id: 'tc-np-read2', name: 'read_file', args: { path: 'services/user.js' } },
+      ],
+      [],
+    ],
+  },
 };
