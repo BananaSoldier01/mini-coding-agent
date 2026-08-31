@@ -87,7 +87,11 @@ function parseFrontmatter(content) {
       if (value === 'true') value = true;
       if (value === 'false') value = false;
 
-      if (value === '' || value === '[]' || value === '{}') {
+      // If value is a boolean, store directly (no array/empty checks needed)
+      if (typeof value === 'boolean') {
+        frontmatter[key] = value;
+        currentArray = null;
+      } else if (value === '' || value === '[]' || value === '{}') {
         // Might be start of array or empty
         currentArray = [];
         frontmatter[key] = currentArray;

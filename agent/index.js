@@ -109,7 +109,16 @@ async function runAgent(opts) {
     explicitSkillInvocation = invocation;
     processedTask = invocation.args || '';
     // Activate the skill immediately for explicit invocation
-    skillTools.activateSkill({ name: invocation.skillName });
+    const result = skillTools.activateSkill({ name: invocation.skillName });
+    // P1-6 fix: emit skill_activated SSE event for Activity/Historical trace
+    emit(onEvent, {
+      type: 'skill_activated',
+      skill: invocation.skillName,
+      source: 'explicit',
+      invocationContext: 'explicit_user',
+      compatibility: result.compatibility,
+      warnings: result.warnings,
+    });
   }
 
   // V0.7.1: Skill Registry — manages loaded skills
@@ -995,11 +1004,52 @@ ${skill.instructions ? `Instructions:\n${skill.instructions}` : ''}`);
         messages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
         turnMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
 
+        // P1-6 fix: emit skill_reference_loaded / skill_asset_loaded SSE events
+        if (toolName === 'read_skill_reference' && !result.error) {
+          emit(onEvent, {
+            type: 'skill_reference_loaded',
+            skill: args.skill,
+            path: result.path,
+            size: result.size,
+          });
+        }
+        if (toolName === 'read_skill_asset' && !result.error) {
+          emit(onEvent, {
+            type: 'skill_asset_loaded',
+            skill: args.skill,
+            path: result.path,
+            size: result.size,
+          });
+        }
+        if (toolName === 'request_skill_script') {
+          emit(onEvent, {
+            type: 'skill_script_requested',
+            skill: args.skill,
+            script: args.script,
+            args: args.args || '',
+            requiresApproval: result.requiresApproval,
+          });
+        }
+
         // ── P1-3 fix: Implicit activation re-enters ContextBuilder ──
         // When activate_skill is called by the model (implicit activation),
         // the activated skill context must be rebuilt and re-injected
         // through ContextBuilder — NOT just returned as tool output.
         if (toolName === 'activate_skill' && !result.error) {
+          // P1-6 fix: emit skill_activated SSE event for Activity/Historical trace
+          emit(onEvent, {
+            type: 'skill_activated',
+            skill: result.name,
+            source: 'tool',
+            invocationContext: 'explicit_model',
+            compatibility: result.compatibility,
+            warnings: result.warnings,
+            resources: {
+              scripts: result.resources?.scripts?.length || 0,
+              references: result.resources?.references?.length || 0,
+              assets: result.resources?.assets?.length || 0,
+            },
+          });
           const { buildActivatedSkillContext } = await import('../context/skill-catalog.js');
           const activatedSkills = skillTools.listActivated();
           if (activatedSkills.length > 0) {

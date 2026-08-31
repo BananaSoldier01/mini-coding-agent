@@ -58,6 +58,7 @@ class SkillResourceService {
   constructor(options = {}) {
     this.skillRoot = options.skillRoot || null;
     this.totalLoadedBytes = 0;
+    this.maxTotalBytes = options.maxTotalBytes || RESOURCE_LIMITS.maxTotalBytes;
   }
 
   /**
@@ -69,6 +70,16 @@ class SkillResourceService {
       return { error: 'Path traversal blocked', path: relativePath };
     }
 
+    // P1-5 fix: enforce total budget before reading
+    if (this.maxTotalBytes && this.totalLoadedBytes >= this.maxTotalBytes) {
+      return {
+        error: 'Resource budget exhausted',
+        path: relativePath,
+        loaded: this.totalLoadedBytes,
+        max: this.maxTotalBytes,
+      };
+    }
+
     try {
       const stat = fs.statSync(safePath);
       if (!stat.isFile()) {
@@ -76,6 +87,16 @@ class SkillResourceService {
       }
       if (stat.size > RESOURCE_LIMITS.maxFileSize) {
         return { error: 'File too large', path: relativePath, size: stat.size };
+      }
+      // P1-5 fix: check budget after stat (before read)
+      if (this.maxTotalBytes && this.totalLoadedBytes + stat.size > this.maxTotalBytes) {
+        return {
+          error: 'File would exceed resource budget',
+          path: relativePath,
+          size: stat.size,
+          loaded: this.totalLoadedBytes,
+          max: this.maxTotalBytes,
+        };
       }
 
       const content = fs.readFileSync(safePath, 'utf-8');
@@ -101,6 +122,16 @@ class SkillResourceService {
       return { error: 'Path traversal blocked', path: relativePath };
     }
 
+    // P1-5 fix: enforce total budget before reading
+    if (this.maxTotalBytes && this.totalLoadedBytes >= this.maxTotalBytes) {
+      return {
+        error: 'Resource budget exhausted',
+        path: relativePath,
+        loaded: this.totalLoadedBytes,
+        max: this.maxTotalBytes,
+      };
+    }
+
     try {
       const stat = fs.statSync(safePath);
       if (!stat.isFile()) {
@@ -108,6 +139,16 @@ class SkillResourceService {
       }
       if (stat.size > RESOURCE_LIMITS.maxFileSize) {
         return { error: 'File too large', path: relativePath, size: stat.size };
+      }
+      // P1-5 fix: check budget after stat (before read)
+      if (this.maxTotalBytes && this.totalLoadedBytes + stat.size > this.maxTotalBytes) {
+        return {
+          error: 'File would exceed resource budget',
+          path: relativePath,
+          size: stat.size,
+          loaded: this.totalLoadedBytes,
+          max: this.maxTotalBytes,
+        };
       }
 
       const buffer = fs.readFileSync(safePath);
