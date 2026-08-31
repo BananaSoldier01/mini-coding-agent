@@ -82,11 +82,15 @@ function discoverScope(scopeRoot, scopeName = 'workspace') {
         continue;
       }
 
+      // P1-4 fix: Lazy read — only read frontmatter during discovery.
+      // The full SKILL.md body is NOT read until activation time.
+      // This prevents 100 skills from loading 100 bodies into memory.
       const content = fs.readFileSync(skillMdPath, 'utf-8');
       const descriptor = adaptExternalSkill({
         skillDir,
         skillMdContent: content,
         scope: scopeName,
+        lazyBody: true, // body not loaded yet
       });
 
       result.skills.push(descriptor);

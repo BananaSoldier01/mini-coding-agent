@@ -82,6 +82,11 @@ function parseFrontmatter(content) {
       const key = kvMatch[1];
       let value = kvMatch[2].trim().replace(/^["']|["']$/g, '');
 
+      // P1-2 fix: convert boolean strings to actual booleans
+      // Claude's disable-model-invocation/user-invocable are YAML booleans
+      if (value === 'true') value = true;
+      if (value === 'false') value = false;
+
       if (value === '' || value === '[]' || value === '{}') {
         // Might be start of array or empty
         currentArray = [];
@@ -378,12 +383,18 @@ function parseSimpleYaml(content) {
  * @param {string} options.scope — 'workspace' | 'user'
  * @returns {object} Normalized Skill Descriptor
  */
-function adaptExternalSkill({ skillDir, skillMdContent, scope = 'workspace' }) {
+function adaptExternalSkill({ skillDir, skillMdContent, scope = 'workspace', lazyBody = false }) {
   const skillRoot = path.resolve(skillDir);
   const sourceFormat = detectFormat(skillRoot);
 
   // Parse SKILL.md frontmatter
   const { frontmatter, body } = parseFrontmatter(skillMdContent);
+
+  // P1-4 fix: Lazy body loading.
+  // When lazyBody is true (discovery phase), the body is NOT stored in the
+  // descriptor. It will be loaded on demand at activation time.
+  // This prevents 100 skills from loading 100 bodies into memory.
+  const instructions = lazyBody ? '' : (body || '');
 
   // Read platform metadata
   let platformMeta = {};
@@ -447,6 +458,27 @@ function scanResources(skillRoot) {
   return resources;
 }
 
+/**
+ * P1-4 fix: Load SKILL.md body on demand at activation time.
+ * Reads the full SKILL.md from disk and returns the body content.
+ * This is called during activation (Progressive Disclosure Level 2),
+ * NOT during discovery.
+ *
+ * @param {string} skillDir — absolute path to skill directory
+ * @returns {string} SKILL.md body content
+ */
+function loadSkillBody(skillDir) {
+  const skillMdPath = path.join(skillDir, 'SKILL.md');
+  try {
+    if (!fs.existsSync(skillMdPath)) return '';
+    const content = fs.readFileSync(skillMdPath, 'utf-8');
+    const { body } = parseFrontmatter(content);
+    return body || '';
+  } catch {
+    return '';
+  }
+}
+
 // ── Exports ─────────────────────────────────────────────────
 
 export {
@@ -456,6 +488,7 @@ export {
   parseSimpleYaml,
   detectFormat,
   scanResources,
+  loadSkillBody,
   createDescriptor,
   adaptCommon,
   adaptClaude,
